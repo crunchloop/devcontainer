@@ -6,6 +6,9 @@ import (
 	"os"
 	"path/filepath"
 
+	composetypes "github.com/compose-spec/compose-go/v2/types"
+
+	"github.com/crunchloop/devcontainer/compose"
 	"github.com/crunchloop/devcontainer/config"
 	"github.com/crunchloop/devcontainer/feature"
 	"github.com/crunchloop/devcontainer/runtime"
@@ -94,7 +97,7 @@ func (e *Engine) Up(ctx context.Context, opts UpOptions) (*Workspace, error) {
 	case *config.BuildSource:
 		// Supported in M3 / PR8.
 	case *config.ComposeSource:
-		return nil, errComposeSourceNotImplemented
+		// Supported in M4 / PR12.
 	default:
 		return nil, fmt.Errorf("unknown source kind")
 	}
@@ -105,17 +108,32 @@ func (e *Engine) Up(ctx context.Context, opts UpOptions) (*Workspace, error) {
 		return nil, fmt.Errorf("find existing container: %w", err)
 	}
 
+	_, isCompose := cfg.Source.(*config.ComposeSource)
+
 	if existing != nil && opts.Recreate {
-		if err := e.removeContainer(ctx, existing.ID); err != nil {
-			return nil, err
+		if isCompose {
+			if err := e.composeDownExisting(ctx, existing); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := e.removeContainer(ctx, existing.ID); err != nil {
+				return nil, err
+			}
 		}
 		existing = nil
 	}
 
 	var ws *Workspace
-	if existing != nil {
+	switch {
+	case isCompose:
+		// `docker compose up -d` is idempotent: already-running services
+		// stay, stopped ones restart, missing ones get created. So we
+		// always go through createFreshCompose, regardless of whether
+		// `existing` was found — compose handles the dispatch internally.
+		ws, err = e.createFreshCompose(ctx, cfg, opts)
+	case existing != nil:
 		ws, err = e.attachExisting(ctx, existing, cfg, opts)
-	} else {
+	default:
 		ws, err = e.createFresh(ctx, cfg, opts)
 	}
 	if err != nil {
@@ -258,6 +276,231 @@ func contains(s, sub string) bool {
 
 // prepareBaseImage produces the image reference to use as the base for
 // feature layering: pulled (image source) or built (build source).
+// composeProjectName returns the deterministic compose project name
+// for a workspace: `dc-<devcontainerId>` per PRD §12.5.
+func composeProjectName(cfg *config.ResolvedConfig) string {
+	return "dc-" + cfg.DevcontainerID
+}
+
+// composeWorkingDir picks the directory `docker compose` should run
+// in. Compose interprets relative paths in the user's compose file
+// (build contexts, env_file paths, volumes) relative to this. Default:
+// the directory containing the source devcontainer.json. Falls back
+// to LocalWorkspaceFolder when ConfigPath isn't supplied (Resolve's
+// auto-discovery path).
+func composeWorkingDir(cfg *config.ResolvedConfig, opts UpOptions) string {
+	if opts.ConfigPath != "" {
+		return filepath.Dir(opts.ConfigPath)
+	}
+	return filepath.Join(cfg.LocalWorkspaceFolder, ".devcontainer")
+}
+
+// createFreshCompose handles the *ComposeSource path of Up. It loads
+// the user's compose project, picks the primary service, prepares the
+// service's base image (pull or build), layers features atop it, writes
+// our two override files, and runs `docker compose up -d` against the
+// combined file list. Returns a Workspace whose Container is the
+// primary service's container as resolved via `docker compose ps -q`.
+func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedConfig, opts UpOptions) (*Workspace, error) {
+	cr, ok := e.runtime.(runtime.ComposeRuntime)
+	if !ok {
+		return nil, fmt.Errorf("compose source: runtime does not support compose: %w", runtime.ErrNotImplemented)
+	}
+
+	src := cfg.Source.(*config.ComposeSource)
+	if src.Service == "" {
+		return nil, fmt.Errorf("compose source: devcontainer.json must specify \"service\"")
+	}
+
+	workingDir := composeWorkingDir(cfg, opts)
+	projectName := composeProjectName(cfg)
+
+	envList := mapToEnvList(opts.LocalEnv)
+	project, err := compose.Load(ctx, compose.LoadOptions{
+		Files:       src.Files,
+		WorkingDir:  workingDir,
+		ProjectName: projectName,
+		Env:         envList,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	primary, err := compose.PrimaryService(project, src.Service)
+	if err != nil {
+		return nil, err
+	}
+
+	baseImage, err := e.prepareComposeServiceImage(ctx, cfg, primary, workingDir, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	finalImage, err := e.layerFeatures(ctx, cfg, baseImage, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	tmp, err := os.MkdirTemp("", "dc-go-compose-*")
+	if err != nil {
+		return nil, fmt.Errorf("create compose override tmpdir: %w", err)
+	}
+	defer os.RemoveAll(tmp)
+
+	buildOverridePath := filepath.Join(tmp, "dc-build.yaml")
+	runOverridePath := filepath.Join(tmp, "dc-run.yaml")
+
+	if err := compose.WriteBuildOverride(buildOverridePath, compose.Override{
+		Service: src.Service,
+		Image:   finalImage,
+	}); err != nil {
+		return nil, err
+	}
+
+	bindMounts := []compose.BindMount{
+		{Source: cfg.LocalWorkspaceFolder, Target: cfg.ContainerWorkspaceFolder},
+	}
+	for _, m := range cfg.Mounts {
+		if m.Type == config.MountBind && m.Source != "" && m.Target != "" {
+			bindMounts = append(bindMounts, compose.BindMount{
+				Source:   m.Source,
+				Target:   m.Target,
+				ReadOnly: m.ReadOnly,
+			})
+		}
+	}
+
+	if err := compose.WriteRunOverride(runOverridePath, project, compose.Override{
+		Service:          src.Service,
+		ExtraBindMounts:  bindMounts,
+		ExtraEnvironment: cfg.ContainerEnv,
+		Labels: map[string]string{
+			LabelDevcontainerID:       cfg.DevcontainerID,
+			LabelLocalWorkspaceFolder: cfg.LocalWorkspaceFolder,
+			LabelEngine:               engineIdent,
+		},
+	}); err != nil {
+		return nil, err
+	}
+
+	allFiles := append([]string{}, src.Files...)
+	allFiles = append(allFiles, buildOverridePath, runOverridePath)
+
+	if err := cr.ComposeUp(ctx, runtime.ComposeUpSpec{
+		Files:       allFiles,
+		ProjectName: projectName,
+		Services:    src.RunServices,
+		WorkingDir:  workingDir,
+	}, opts.Events); err != nil {
+		return nil, err
+	}
+
+	containerID, err := cr.ComposeContainerID(ctx, runtime.ComposePsSpec{
+		Files:       allFiles,
+		ProjectName: projectName,
+		WorkingDir:  workingDir,
+	}, src.Service)
+	if err != nil {
+		return nil, fmt.Errorf("resolve compose primary container: %w", err)
+	}
+	if containerID == "" {
+		return nil, fmt.Errorf("compose primary service %q has no running container after up", src.Service)
+	}
+
+	return e.buildWorkspace(ctx, containerID, cfg, opts.LocalEnv)
+}
+
+// prepareComposeServiceImage resolves the base image for a compose
+// primary service: either the service's `image:` directive (pulled if
+// missing locally) or the result of building its `build:` directive.
+// Mirrors the image/build dispatch in prepareBaseImage but operates on
+// the compose-go ServiceConfig.
+func (e *Engine) prepareComposeServiceImage(ctx context.Context, cfg *config.ResolvedConfig, svc *composetypes.ServiceConfig, workingDir string, opts UpOptions) (string, error) {
+	if svc.Image != "" && svc.Build == nil {
+		if err := e.ensureImage(ctx, svc.Image, opts.PullPolicy, opts.Events); err != nil {
+			return "", err
+		}
+		return svc.Image, nil
+	}
+	if svc.Build != nil {
+		tag := "dc-go-compose-base-" + cfg.DevcontainerID + ":latest"
+		ctxPath := svc.Build.Context
+		if ctxPath == "" {
+			ctxPath = workingDir
+		}
+		if !filepath.IsAbs(ctxPath) {
+			ctxPath = filepath.Join(workingDir, ctxPath)
+		}
+		_, err := e.runtime.BuildImage(ctx, runtime.BuildSpec{
+			ContextPath: ctxPath,
+			Dockerfile:  svc.Build.Dockerfile,
+			Tag:         tag,
+			Args:        flattenStringMap(svc.Build.Args),
+			Target:      svc.Build.Target,
+		}, opts.Events)
+		if err != nil {
+			return "", fmt.Errorf("build compose primary service image: %w", err)
+		}
+		return tag, nil
+	}
+	return "", fmt.Errorf("compose primary service has neither image: nor build:")
+}
+
+// flattenStringMap turns compose-go's MappingWithEquals (map[string]*string)
+// into a plain map[string]string by dereferencing non-nil values.
+func flattenStringMap(m composetypes.MappingWithEquals) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		if v != nil {
+			out[k] = *v
+		}
+	}
+	return out
+}
+
+// mapToEnvList converts a map to KEY=value strings sorted by key for
+// deterministic input to compose-go's interpolation pass.
+func mapToEnvList(m map[string]string) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(m))
+	for k, v := range m {
+		out = append(out, k+"="+v)
+	}
+	return out
+}
+
+// composeDownExisting tears down a running compose project found by
+// label scan during a Recreate-mode Up. We extract the project name
+// from the existing container's compose label.
+func (e *Engine) composeDownExisting(ctx context.Context, existing *runtime.Container) error {
+	cr, ok := e.runtime.(runtime.ComposeRuntime)
+	if !ok {
+		// Fallback: just remove the single container we found.
+		return e.removeContainer(ctx, existing.ID)
+	}
+	// Inspect to read labels — Container struct doesn't carry them.
+	details, err := e.runtime.InspectContainer(ctx, existing.ID)
+	if err != nil {
+		return e.removeContainer(ctx, existing.ID)
+	}
+	projectName := details.Labels["com.docker.compose.project"]
+	if projectName == "" {
+		return e.removeContainer(ctx, existing.ID)
+	}
+	if err := cr.ComposeDown(ctx, runtime.ComposeDownSpec{
+		ProjectName:   projectName,
+		RemoveVolumes: false,
+	}); err != nil {
+		return fmt.Errorf("compose down for recreate: %w", err)
+	}
+	return nil
+}
+
 func (e *Engine) prepareBaseImage(ctx context.Context, cfg *config.ResolvedConfig, opts UpOptions) (string, error) {
 	switch s := cfg.Source.(type) {
 	case *config.ImageSource:

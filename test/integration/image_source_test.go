@@ -6,7 +6,6 @@ package integration
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -240,13 +239,3 @@ func mustRead(t *testing.T, ctx context.Context, eng *devcontainer.Engine, ws *d
 	return res.Stdout
 }
 
-func TestImageSource_ComposeSourceUnsupported(t *testing.T) {
-	eng, rt := newEngine(t)
-	defer rt.Close()
-
-	ws := writeWorkspace(t, `{"dockerComposeFile":"compose.yml","service":"app"}`)
-	_, err := eng.Up(context.Background(), devcontainer.UpOptions{LocalWorkspaceFolder: ws})
-	if !errors.Is(err, runtime.ErrNotImplemented) {
-		t.Errorf("expected ErrNotImplemented for compose source, got %v", err)
-	}
-}
