@@ -156,7 +156,48 @@ func (r *Runtime) StopContainer(ctx context.Context, id string, opts runtime.Sto
 		}
 		return fmt.Errorf("ContainerStop: %w", err)
 	}
-	return nil
+	// ContainerStop returns once the daemon's stop request is accepted,
+	// not after the container has fully transitioned to a stopped state.
+	// On slower runners a subsequent Start can race with the still-in-
+	// flight stop and silently fail to actually run the cmd: the daemon
+	// returns success but the container stays in `exited` with the old
+	// finishedAt. Wait for the daemon to settle into a stable not-running
+	// state before returning.
+	return r.waitForStopped(ctx, id, stopTimeout)
+}
+
+const stopTimeout = 30 * time.Second
+
+func (r *Runtime) waitForStopped(ctx context.Context, id string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	backoff := 50 * time.Millisecond
+	for {
+		details, err := r.InspectContainer(ctx, id)
+		if err != nil {
+			// Container already gone — fine.
+			var nf *runtime.ContainerNotFoundError
+			if errors.As(err, &nf) {
+				return nil
+			}
+			return err
+		}
+		switch details.State {
+		case runtime.StateExited, runtime.StateDead, "":
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("container %s did not reach stopped state within %v (last state=%q)",
+				id, timeout, details.State)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+		if backoff < time.Second {
+			backoff *= 2
+		}
+	}
 }
 
 func (r *Runtime) RemoveContainer(ctx context.Context, id string, opts runtime.RemoveOptions) error {
