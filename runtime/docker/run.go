@@ -70,7 +70,47 @@ func (r *Runtime) StartContainer(ctx context.Context, id string) error {
 		}
 		return fmt.Errorf("ContainerStart: %w", err)
 	}
-	return nil
+	// ContainerStart returns once the daemon has accepted the start
+	// request, not when the container's process is up. On slow runners
+	// the next Inspect / Exec can race and see stale "exited" state or
+	// a non-running container. Block until we observe StateRunning.
+	return r.waitForRunning(ctx, id, startTimeout)
+}
+
+const startTimeout = 30 * time.Second
+
+// waitForRunning polls Inspect until the container's state is running
+// or until timeout. If the state transitions to exited / dead within
+// the window, that's a real failure (the user's command exited
+// immediately or the image's entrypoint crashed) and we surface it
+// rather than hang.
+func (r *Runtime) waitForRunning(ctx context.Context, id string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	backoff := 50 * time.Millisecond
+	for {
+		details, err := r.InspectContainer(ctx, id)
+		if err != nil {
+			return err
+		}
+		switch details.State {
+		case runtime.StateRunning:
+			return nil
+		case runtime.StateExited, runtime.StateDead:
+			return fmt.Errorf("container %s exited immediately after start (state=%q)", id, details.State)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("container %s did not reach running state within %v (last state=%q)",
+				id, timeout, details.State)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+		if backoff < time.Second {
+			backoff *= 2
+		}
+	}
 }
 
 func (r *Runtime) StopContainer(ctx context.Context, id string, opts runtime.StopOptions) error {
