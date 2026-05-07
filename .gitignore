@@ -1,0 +1,28 @@
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Go workspace
+go.work
+go.work.sum
+
+# Local env
+.env
+.env.local
+
+# Internal design docs (not yet public)
+PRD.md
