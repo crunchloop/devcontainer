@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	composetypes "github.com/compose-spec/compose-go/v2/types"
 
@@ -446,6 +447,40 @@ func (e *Engine) prepareComposeServiceImage(ctx context.Context, cfg *config.Res
 	return "", fmt.Errorf("compose primary service has neither image: nor build:")
 }
 
+// inspectStable is buildWorkspace's wrapper around InspectContainer that
+// tolerates Docker's eventually-consistent state field after a recent
+// start. The container's runtime state in Inspect updates asynchronously
+// from the daemon's internal state machine; on slower runners we'd see
+// "exited" briefly even after StartContainer's waitForRunning settled
+// on "running". Retry a few times with backoff to absorb that lag.
+func (e *Engine) inspectStable(ctx context.Context, id string) (*runtime.ContainerDetails, error) {
+	const attempts = 5
+	backoff := 50 * time.Millisecond
+	var details *runtime.ContainerDetails
+	var err error
+	for i := 0; i < attempts; i++ {
+		details, err = e.runtime.InspectContainer(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if details.State == runtime.StateRunning {
+			return details, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
+		if backoff < time.Second {
+			backoff *= 2
+		}
+	}
+	// Last attempt's details are returned even if state isn't running —
+	// caller may still use the workspace for diagnostics, and the
+	// stored State will reflect what we observed.
+	return details, nil
+}
+
 // flattenStringMap turns compose-go's MappingWithEquals (map[string]*string)
 // into a plain map[string]string by dereferencing non-nil values.
 func flattenStringMap(m composetypes.MappingWithEquals) map[string]string {
@@ -671,7 +706,7 @@ func (e *Engine) removeContainer(ctx context.Context, id string) error {
 }
 
 func (e *Engine) buildWorkspace(ctx context.Context, containerID string, cfg *config.ResolvedConfig, localEnv map[string]string) (*Workspace, error) {
-	details, err := e.runtime.InspectContainer(ctx, containerID)
+	details, err := e.inspectStable(ctx, containerID)
 	if err != nil {
 		return nil, fmt.Errorf("inspect container %s: %w", containerID, err)
 	}
