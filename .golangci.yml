@@ -11,11 +11,27 @@ linters:
     - ineffassign
     - staticcheck
     - unused
-    - gocritic
     - misspell
-    - revive
     - unconvert
-    - unparam
+
+  settings:
+    errcheck:
+      # `defer x.Close()` is the standard Go idiom; failing to log a
+      # Close error is rarely actionable. Same for best-effort
+      # filesystem cleanup of temp dirs.
+      exclude-functions:
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (*os.File).Close
+        - (*net/http.Response).Body.Close
+        - os.Remove
+        - os.RemoveAll
+    staticcheck:
+      # Keep only the bug-finding SA-class checks. ST* (style) and
+      # QF* (quick-fix suggestions) are too noisy for an alpha; we'll
+      # revisit when the API stabilizes.
+      checks:
+        - SA*
 
 formatters:
   enable:

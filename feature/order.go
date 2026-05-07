@@ -6,10 +6,10 @@ import (
 
 // Order returns the install order for a slice of features. Per spec:
 //
-//   1. Features whose id matches an entry in overrideOrder lead the
-//      result, in declaration order. (Hard override; not topo-sorted.)
-//   2. The rest are topo-sorted by their installsAfter and dependsOn
-//      edges, with alphabetical tie-breaking.
+//  1. Features whose id matches an entry in overrideOrder lead the
+//     result, in declaration order. (Hard override; not topo-sorted.)
+//  2. The rest are topo-sorted by their installsAfter and dependsOn
+//     edges, with alphabetical tie-breaking.
 //
 // Order is idempotent: calling it twice produces the same slice.
 //

@@ -134,15 +134,10 @@ func TestDecodeForwardPorts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	// "127.0.0.1:8080" — host part isn't a number; we treat it as
+	// invalid and warn. "9090" works. "bogus" warns. Final slice: two
+	// valid entries, two warnings.
 	want := []PortSpec{
-		{Container: 3000},
-		{Host: 0, Container: 0}, // see below
-		{Container: 9090},
-	}
-	// "127.0.0.1:8080" — host part isn't a number; we treat it as invalid and warn.
-	// The simpler "9090" works.
-	// So the slice should have: 3000, 9090 (two valid), with two warnings.
-	want = []PortSpec{
 		{Container: 3000},
 		{Container: 9090},
 	}

@@ -70,8 +70,8 @@ type ImageSource struct {
 	Image string
 }
 
-func (*ImageSource) isSource()         {}
-func (*ImageSource) Kind() SourceKind  { return SourceImage }
+func (*ImageSource) isSource()        {}
+func (*ImageSource) Kind() SourceKind { return SourceImage }
 
 type BuildSource struct {
 	Dockerfile string
@@ -82,8 +82,8 @@ type BuildSource struct {
 	Options    map[string]string
 }
 
-func (*BuildSource) isSource()         {}
-func (*BuildSource) Kind() SourceKind  { return SourceBuild }
+func (*BuildSource) isSource()        {}
+func (*BuildSource) Kind() SourceKind { return SourceBuild }
 
 type ComposeSource struct {
 	Files       []string
@@ -91,8 +91,8 @@ type ComposeSource struct {
 	RunServices []string
 }
 
-func (*ComposeSource) isSource()         {}
-func (*ComposeSource) Kind() SourceKind  { return SourceCompose }
+func (*ComposeSource) isSource()        {}
+func (*ComposeSource) Kind() SourceKind { return SourceCompose }
 
 // LifecyclePhase names the spec lifecycle phases plus initialize.
 type LifecyclePhase string

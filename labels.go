@@ -12,11 +12,12 @@ import (
 // should re-Resolve from the source file.
 //
 // Recovered fields:
-//   LocalWorkspaceFolder      from LabelLocalWorkspaceFolder
-//   ContainerWorkspaceFolder  from container's WorkingDir (Config.WorkingDir)
-//   DevcontainerID            caller fills in
-//   ContainerUser             from inspected User
-//   ContainerEnv              from inspected Env (used by substituter)
+//
+//	LocalWorkspaceFolder      from LabelLocalWorkspaceFolder
+//	ContainerWorkspaceFolder  from container's WorkingDir (Config.WorkingDir)
+//	DevcontainerID            caller fills in
+//	ContainerUser             from inspected User
+//	ContainerEnv              from inspected Env (used by substituter)
 func configFromContainerLabels(details *runtime.ContainerDetails) *config.ResolvedConfig {
 	cfg := &config.ResolvedConfig{
 		LocalWorkspaceFolder: details.Labels[LabelLocalWorkspaceFolder],

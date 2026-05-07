@@ -238,4 +238,3 @@ func mustRead(t *testing.T, ctx context.Context, eng *devcontainer.Engine, ws *d
 	}
 	return res.Stdout
 }
-

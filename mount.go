@@ -42,4 +42,3 @@ func defaultWorkspaceMount(cfg *config.ResolvedConfig) rt.MountSpec {
 func isLinux() bool {
 	return runtime.GOOS == "linux"
 }
-

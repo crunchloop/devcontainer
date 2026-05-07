@@ -43,8 +43,8 @@ func (r *Runtime) PullImage(ctx context.Context, ref string, events chan<- runti
 		return runtime.ImageRef{}, fmt.Errorf("ImageInspect %s: %w", ref, err)
 	}
 	emitBuildEvent(events, runtime.BuildEvent{
-		Kind:    runtime.BuildEventCompleted,
-		Digest:  inspectRes.ID,
+		Kind:   runtime.BuildEventCompleted,
+		Digest: inspectRes.ID,
 	})
 	return runtime.ImageRef{
 		ID:   inspectRes.ID,

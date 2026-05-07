@@ -47,8 +47,8 @@ func (r *Runtime) ExecContainer(ctx context.Context, id string, opts runtime.Exe
 
 	var (
 		outBuf, errBuf bytes.Buffer
-		outDst         io.Writer = opts.Stdout
-		errDst         io.Writer = opts.Stderr
+		outDst         = opts.Stdout
+		errDst         = opts.Stderr
 	)
 	if outDst == nil {
 		outDst = &outBuf

@@ -54,9 +54,9 @@ type rawConfig struct {
 	PostAttachCommand    json.RawMessage `json:"postAttachCommand,omitempty"`
 	WaitFor              string          `json:"waitFor,omitempty"`
 
-	ForwardPorts         json.RawMessage          `json:"forwardPorts,omitempty"`
-	PortsAttributes      map[string]rawPortAttrs  `json:"portsAttributes,omitempty"`
-	OtherPortsAttributes *rawPortAttrs            `json:"otherPortsAttributes,omitempty"`
+	ForwardPorts         json.RawMessage         `json:"forwardPorts,omitempty"`
+	PortsAttributes      map[string]rawPortAttrs `json:"portsAttributes,omitempty"`
+	OtherPortsAttributes *rawPortAttrs           `json:"otherPortsAttributes,omitempty"`
 
 	// AppPort is the deprecated predecessor of forwardPorts. Spec still
 	// accepts it (int | string | array). Surfaced here so merge can warn

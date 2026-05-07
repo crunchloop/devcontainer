@@ -2,6 +2,7 @@ package devcontainer
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -130,15 +131,7 @@ func TestUp_LifecycleErrorsSurfaceAsLifecycleError(t *testing.T) {
 		t.Fatalf("expected *LifecycleError, got %T: %v", err, err)
 	}
 	var le *LifecycleError
-	for e := err; e != nil; {
-		if cast, ok := e.(*LifecycleError); ok {
-			le = cast
-			break
-		}
-		break
-	}
-	if le == nil {
-		// errors.As-equivalent for the test
+	if !errors.As(err, &le) {
 		t.Fatalf("expected *LifecycleError chain, got %v", err)
 	}
 	if le.ExitCode != 17 {

@@ -164,9 +164,9 @@ func TestWriteRunOverride_DeterministicEnvOrder(t *testing.T) {
 	ov := Override{
 		Service: "app",
 		ExtraEnvironment: map[string]string{
-			"Z_LAST": "z",
+			"Z_LAST":  "z",
 			"A_FIRST": "a",
-			"M_MID":  "m",
+			"M_MID":   "m",
 		},
 	}
 	_ = WriteRunOverride(dst1, nil, ov)

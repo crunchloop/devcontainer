@@ -207,10 +207,10 @@ func (e *Engine) execParallel(ctx context.Context, ws *Workspace, parallel map[s
 	wg.Wait()
 
 	var (
-		firstExit             int
-		aggOut, aggErr        string
+		firstExit               int
+		aggOut, aggErr          string
 		firstNonZeroSet, anyErr bool
-		firstErr              error
+		firstErr                error
 	)
 	for _, r := range results {
 		if r.err != nil && !anyErr {

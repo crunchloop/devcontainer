@@ -38,22 +38,22 @@ func parseMetadata(dir string) (config.FeatureMetadata, error) {
 // keep this internal because the public type lives in config; the raw
 // form here only needs to round-trip the on-disk JSON.
 type rawFeatureMetadata struct {
-	ID               string                            `json:"id"`
-	Version          string                            `json:"version,omitempty"`
-	Name             string                            `json:"name,omitempty"`
-	Description      string                            `json:"description,omitempty"`
-	DocumentationURL string                            `json:"documentationURL,omitempty"`
-	LicenseURL       string                            `json:"licenseURL,omitempty"`
-	Options          map[string]rawFeatureOption       `json:"options,omitempty"`
-	ContainerEnv     map[string]string                 `json:"containerEnv,omitempty"`
-	Init             *bool                             `json:"init,omitempty"`
-	Privileged       *bool                             `json:"privileged,omitempty"`
-	CapAdd           []string                          `json:"capAdd,omitempty"`
-	SecurityOpt      []string                          `json:"securityOpt,omitempty"`
-	Entrypoint       string                            `json:"entrypoint,omitempty"`
-	InstallsAfter    []string                          `json:"installsAfter,omitempty"`
-	DependsOn        map[string]map[string]any         `json:"dependsOn,omitempty"`
-	Customizations   map[string]json.RawMessage        `json:"customizations,omitempty"`
+	ID               string                      `json:"id"`
+	Version          string                      `json:"version,omitempty"`
+	Name             string                      `json:"name,omitempty"`
+	Description      string                      `json:"description,omitempty"`
+	DocumentationURL string                      `json:"documentationURL,omitempty"`
+	LicenseURL       string                      `json:"licenseURL,omitempty"`
+	Options          map[string]rawFeatureOption `json:"options,omitempty"`
+	ContainerEnv     map[string]string           `json:"containerEnv,omitempty"`
+	Init             *bool                       `json:"init,omitempty"`
+	Privileged       *bool                       `json:"privileged,omitempty"`
+	CapAdd           []string                    `json:"capAdd,omitempty"`
+	SecurityOpt      []string                    `json:"securityOpt,omitempty"`
+	Entrypoint       string                      `json:"entrypoint,omitempty"`
+	InstallsAfter    []string                    `json:"installsAfter,omitempty"`
+	DependsOn        map[string]map[string]any   `json:"dependsOn,omitempty"`
+	Customizations   map[string]json.RawMessage  `json:"customizations,omitempty"`
 }
 
 type rawFeatureOption struct {

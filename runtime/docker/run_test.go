@@ -88,4 +88,4 @@ func TestIsImageNotFound(t *testing.T) {
 type plainErr string
 
 func (e plainErr) Error() string { return string(e) }
-func simpleErr(s string) error    { return plainErr(s) }
+func simpleErr(s string) error   { return plainErr(s) }

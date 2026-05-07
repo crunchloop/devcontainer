@@ -121,7 +121,7 @@ func SerializeEnvFile(opts map[string]any) []byte {
 // uppercase environment variable name. Per devcontainer convention:
 // non-word chars → "_", leading digit → prefixed with "_", uppercase.
 var (
-	nonWordRegexp     = regexp.MustCompile(`[^\w]`)
+	nonWordRegexp      = regexp.MustCompile(`[^\w]`)
 	leadingDigitRegexp = regexp.MustCompile(`^[\d]`)
 )
 

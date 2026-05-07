@@ -17,18 +17,18 @@ const MetadataLabel = "devcontainer.metadata"
 // label is consumed by ourselves and possibly other devcontainer-aware
 // tools downstream.
 type metadataEntry struct {
-	ID               string                     `json:"id,omitempty"`
-	Version          string                     `json:"version,omitempty"`
-	ResolvedRef      string                     `json:"resolvedRef,omitempty"`
-	ContainerEnv     map[string]string          `json:"containerEnv,omitempty"`
-	Init             *bool                      `json:"init,omitempty"`
-	Privileged       *bool                      `json:"privileged,omitempty"`
-	CapAdd           []string                   `json:"capAdd,omitempty"`
-	SecurityOpt      []string                   `json:"securityOpt,omitempty"`
-	Entrypoint       string                     `json:"entrypoint,omitempty"`
-	RemoteUser       string                     `json:"remoteUser,omitempty"`
-	ContainerUser    string                     `json:"containerUser,omitempty"`
-	Customizations   map[string]json.RawMessage `json:"customizations,omitempty"`
+	ID             string                     `json:"id,omitempty"`
+	Version        string                     `json:"version,omitempty"`
+	ResolvedRef    string                     `json:"resolvedRef,omitempty"`
+	ContainerEnv   map[string]string          `json:"containerEnv,omitempty"`
+	Init           *bool                      `json:"init,omitempty"`
+	Privileged     *bool                      `json:"privileged,omitempty"`
+	CapAdd         []string                   `json:"capAdd,omitempty"`
+	SecurityOpt    []string                   `json:"securityOpt,omitempty"`
+	Entrypoint     string                     `json:"entrypoint,omitempty"`
+	RemoteUser     string                     `json:"remoteUser,omitempty"`
+	ContainerUser  string                     `json:"containerUser,omitempty"`
+	Customizations map[string]json.RawMessage `json:"customizations,omitempty"`
 }
 
 // buildMetadataLabel returns the JSON array for the devcontainer.metadata

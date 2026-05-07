@@ -12,9 +12,9 @@ func TestMergeOptions_DefaultsAndOverrides(t *testing.T) {
 	meta := config.FeatureMetadata{
 		ID: "node",
 		Options: map[string]config.FeatureOption{
-			"version":      {Type: "string", Default: "lts"},
-			"installNvm":   {Type: "boolean", Default: true},
-			"unspecified":  {Type: "string", Default: "x"},
+			"version":     {Type: "string", Default: "lts"},
+			"installNvm":  {Type: "boolean", Default: true},
+			"unspecified": {Type: "string", Default: "x"},
 		},
 	}
 	user := map[string]any{

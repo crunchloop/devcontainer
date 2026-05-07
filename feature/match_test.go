@@ -8,10 +8,10 @@ import (
 
 func TestMatches_Permissive(t *testing.T) {
 	cases := []struct {
-		name           string
+		name            string
 		bakedID, bakedV string
-		reqID, reqV    string
-		want           bool
+		reqID, reqV     string
+		want            bool
 	}{
 		{"id mismatch", "node", "1.5.0", "git", "1.0.0", false},
 		{"empty req version is any", "node", "1.5.0", "node", "", true},

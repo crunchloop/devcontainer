@@ -37,11 +37,14 @@ type Options struct {
 // New constructs a Docker runtime. If the daemon is unreachable the
 // returned error is a *runtime.DaemonUnavailableError.
 func New(ctx context.Context, opts Options) (*Runtime, error) {
-	clientOpts := []client.Opt{client.FromEnv, client.WithAPIVersionNegotiation()}
+	// API-version negotiation is the default since moby/moby/client v0.4
+	// (WithAPIVersionNegotiation is a no-op and was deprecated; do not
+	// re-add it).
+	clientOpts := []client.Opt{client.FromEnv}
 	if opts.Host != "" {
 		clientOpts = append(clientOpts, client.WithHost(opts.Host))
 	}
-	api, err := client.NewClientWithOpts(clientOpts...)
+	api, err := client.New(clientOpts...)
 	if err != nil {
 		return nil, &runtime.DaemonUnavailableError{Err: err}
 	}
