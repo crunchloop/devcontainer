@@ -87,13 +87,19 @@ func (r *Runtime) StartContainer(ctx context.Context, id string) error {
 const startTimeout = 30 * time.Second
 
 // waitForRunning polls Inspect until the container's state is running
-// or until timeout. If the state transitions to exited / dead within
-// the window, that's a real failure (the user's command exited
-// immediately or the image's entrypoint crashed) and we surface it
-// rather than hang.
+// AND remains running for a brief settling period. Returns an error if
+// the state transitions to exited / dead within the window.
+//
+// The settling check guards against a race observed on slower CI
+// runners: the daemon reports state="running" briefly while the
+// process is starting, then transitions to "exited" within a few
+// hundred ms when the cmd dies for a non-obvious reason. A single
+// "is it running?" read isn't sufficient — we also need to confirm
+// it stays running.
 func (r *Runtime) waitForRunning(ctx context.Context, id string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	backoff := 50 * time.Millisecond
+	const settleDelay = 200 * time.Millisecond
 	for {
 		details, err := r.InspectContainer(ctx, id)
 		if err != nil {
@@ -101,9 +107,27 @@ func (r *Runtime) waitForRunning(ctx context.Context, id string, timeout time.Du
 		}
 		switch details.State {
 		case runtime.StateRunning:
-			return nil
+			// Verify stability: re-check after a short settling delay.
+			// If the container exited in that window, surface it now
+			// rather than letting downstream Exec calls fail mysteriously.
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(settleDelay):
+			}
+			details2, err := r.InspectContainer(ctx, id)
+			if err != nil {
+				return err
+			}
+			if details2.State == runtime.StateRunning {
+				return nil
+			}
+			return fmt.Errorf(
+				"container %s reached running but exited within %v (state=%q, started_at=%s)",
+				id, settleDelay, details2.State, details2.StartedAt.Format(time.RFC3339Nano),
+			)
 		case runtime.StateExited, runtime.StateDead:
-			return fmt.Errorf("container %s exited immediately after start (state=%q)", id, details.State)
+			return fmt.Errorf("container %s in state %q after start", id, details.State)
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("container %s did not reach running state within %v (last state=%q)",
