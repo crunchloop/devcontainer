@@ -34,6 +34,19 @@ type UpOptions struct {
 	// Events optionally receives runtime build/pull progress messages.
 	// Drop-on-full; non-blocking.
 	Events chan<- runtime.BuildEvent
+
+	// SkipLifecycle, when true, suppresses automatic invocation of
+	// devcontainer lifecycle phases (onCreate, postCreate, etc.) from
+	// Up. Phases can still be run explicitly via Engine.RunLifecycle.
+	// Default false: Up runs the full configured lifecycle.
+	SkipLifecycle bool
+
+	// RunInitializeCommand, when true, runs the host-side initializeCommand
+	// before container creation. Default false because the spec lets
+	// devcontainer.json execute arbitrary host commands; opt-in only.
+	// Note: v1 initialize execution is a stub that returns an error;
+	// real host execution requires caller-supplied wiring (PRD §11).
+	RunInitializeCommand bool
 }
 
 // PullPolicy controls when images are pulled from a registry.
@@ -97,11 +110,22 @@ func (e *Engine) Up(ctx context.Context, opts UpOptions) (*Workspace, error) {
 		existing = nil
 	}
 
+	var ws *Workspace
 	if existing != nil {
-		return e.attachExisting(ctx, existing, cfg, opts)
+		ws, err = e.attachExisting(ctx, existing, cfg, opts)
+	} else {
+		ws, err = e.createFresh(ctx, cfg, opts)
+	}
+	if err != nil {
+		return nil, err
 	}
 
-	return e.createFresh(ctx, cfg, opts)
+	if !opts.SkipLifecycle {
+		if err := e.runAllLifecycle(ctx, ws, opts.RunInitializeCommand); err != nil {
+			return nil, err
+		}
+	}
+	return ws, nil
 }
 
 func (e *Engine) attachExisting(ctx context.Context, c *runtime.Container, cfg *config.ResolvedConfig, opts UpOptions) (*Workspace, error) {

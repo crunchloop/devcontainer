@@ -162,6 +162,84 @@ func TestImageSource_ReattachStopped(t *testing.T) {
 	}
 }
 
+func TestImageSource_LifecycleAndIdempotency(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+	eng, rt := newEngine(t)
+	defer rt.Close()
+
+	// postCreateCommand creates a marker file and writes to a counter.
+	// Re-running Up should NOT increment the counter (idempotency).
+	// postStartCommand should run on every start.
+	// postAttachCommand should run on every Up.
+	ws := writeWorkspace(t, `{
+		"image": "`+testImage+`",
+		"postCreateCommand": "echo create >> /tmp/dc-counter",
+		"postStartCommand": "echo start >> /tmp/dc-counter",
+		"postAttachCommand": "echo attach >> /tmp/dc-counter"
+	}`)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	wsObj, err := eng.Up(ctx, devcontainer.UpOptions{
+		LocalWorkspaceFolder: ws,
+		Recreate:             true,
+	})
+	if err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	defer func() { _ = eng.Down(context.Background(), wsObj, devcontainer.DownOptions{Remove: true}) }()
+
+	// Read counter after first Up: expect create=1, start=1, attach=1.
+	out := mustRead(t, ctx, eng, wsObj, "/tmp/dc-counter")
+	if got := strings.Count(out, "create"); got != 1 {
+		t.Errorf("after first Up: create count = %d, want 1\n%s", got, out)
+	}
+	if got := strings.Count(out, "start"); got != 1 {
+		t.Errorf("after first Up: start count = %d, want 1\n%s", got, out)
+	}
+	if got := strings.Count(out, "attach"); got != 1 {
+		t.Errorf("after first Up: attach count = %d, want 1\n%s", got, out)
+	}
+
+	// Stop + restart: postStart should re-run, postCreate should NOT.
+	if err := eng.Down(ctx, wsObj, devcontainer.DownOptions{}); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+	wsObj2, err := eng.Up(ctx, devcontainer.UpOptions{LocalWorkspaceFolder: ws})
+	if err != nil {
+		t.Fatalf("second Up: %v", err)
+	}
+	defer func() { _ = eng.Down(context.Background(), wsObj2, devcontainer.DownOptions{Remove: true}) }()
+
+	out = mustRead(t, ctx, eng, wsObj2, "/tmp/dc-counter")
+	if got := strings.Count(out, "create"); got != 1 {
+		t.Errorf("after restart: create count = %d, want 1 (idempotent)\n%s", got, out)
+	}
+	if got := strings.Count(out, "start"); got != 2 {
+		t.Errorf("after restart: start count = %d, want 2\n%s", got, out)
+	}
+	if got := strings.Count(out, "attach"); got != 2 {
+		t.Errorf("after restart: attach count = %d, want 2\n%s", got, out)
+	}
+}
+
+func mustRead(t *testing.T, ctx context.Context, eng *devcontainer.Engine, ws *devcontainer.Workspace, path string) string {
+	t.Helper()
+	res, err := eng.Exec(ctx, ws, devcontainer.ExecOptions{
+		Cmd: []string{"cat", path},
+	})
+	if err != nil {
+		t.Fatalf("Exec cat %s: %v", path, err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("cat %s exit=%d stderr=%q", path, res.ExitCode, res.Stderr)
+	}
+	return res.Stdout
+}
+
 func TestImageSource_BuildSourceUnsupported(t *testing.T) {
 	eng, rt := newEngine(t)
 	defer rt.Close()

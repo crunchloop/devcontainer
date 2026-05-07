@@ -1,0 +1,288 @@
+package devcontainer
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/crunchloop/devcontainer/config"
+	"github.com/crunchloop/devcontainer/runtime"
+)
+
+// scriptedRuntime extends fakeRuntime with controllable Exec behavior:
+// matching cmd substrings to canned ExecResults. Falls back to a default
+// "exit=0, empty output" response.
+type scriptedRuntime struct {
+	*fakeRuntime
+	scripts        map[string]runtime.ExecResult
+	execLog        []runtime.ExecOptions
+	containerStart time.Time
+}
+
+func newScriptedRuntime() *scriptedRuntime {
+	now := time.Now().UTC()
+	r := &scriptedRuntime{
+		fakeRuntime:    newFakeRuntime(),
+		scripts:        map[string]runtime.ExecResult{},
+		containerStart: now,
+	}
+	return r
+}
+
+// override RunContainer to set realistic timestamps so lifecycle marker
+// keying works.
+func (s *scriptedRuntime) RunContainer(ctx context.Context, spec runtime.RunSpec) (*runtime.Container, error) {
+	c, err := s.fakeRuntime.RunContainer(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	d := s.fakeRuntime.containersByID[c.ID]
+	d.Created = s.containerStart
+	d.StartedAt = s.containerStart
+	return c, nil
+}
+
+func (s *scriptedRuntime) ExecContainer(ctx context.Context, id string, opts runtime.ExecOptions) (runtime.ExecResult, error) {
+	s.execLog = append(s.execLog, opts)
+	for fragment, res := range s.scripts {
+		for _, c := range opts.Cmd {
+			if strings.Contains(c, fragment) {
+				return res, nil
+			}
+		}
+	}
+	return runtime.ExecResult{ExitCode: 0}, nil
+}
+
+func TestUp_SkipsLifecycleWhenRequested(t *testing.T) {
+	rt := newScriptedRuntime()
+	eng, _ := New(EngineOptions{Runtime: rt})
+	ws := writeImageDevcontainer(t, `{
+		"image":"alpine:3.20",
+		"postCreateCommand":"echo should-not-run"
+	}`)
+
+	_, err := eng.Up(context.Background(), UpOptions{
+		LocalWorkspaceFolder: ws,
+		SkipLifecycle:        true,
+	})
+	if err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	for _, call := range rt.execLog {
+		for _, c := range call.Cmd {
+			if strings.Contains(c, "should-not-run") {
+				t.Errorf("lifecycle ran despite SkipLifecycle=true: %v", call.Cmd)
+			}
+		}
+	}
+}
+
+func TestUp_RunsLifecycleAndWritesMarker(t *testing.T) {
+	rt := newScriptedRuntime()
+	eng, _ := New(EngineOptions{Runtime: rt})
+	ws := writeImageDevcontainer(t, `{
+		"image":"alpine:3.20",
+		"postCreateCommand":"echo lifecycle-ran"
+	}`)
+
+	_, err := eng.Up(context.Background(), UpOptions{LocalWorkspaceFolder: ws})
+	if err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	var ranUserCmd, wroteMarker bool
+	for _, call := range rt.execLog {
+		joined := strings.Join(call.Cmd, " ")
+		if strings.Contains(joined, "lifecycle-ran") {
+			ranUserCmd = true
+		}
+		if strings.Contains(joined, "mkdir -p "+markerDir) {
+			wroteMarker = true
+		}
+	}
+	if !ranUserCmd {
+		t.Error("expected postCreateCommand to run")
+	}
+	if !wroteMarker {
+		t.Error("expected marker write after successful lifecycle")
+	}
+}
+
+func TestUp_LifecycleErrorsSurfaceAsLifecycleError(t *testing.T) {
+	rt := newScriptedRuntime()
+	rt.scripts["broken-script"] = runtime.ExecResult{
+		ExitCode: 17,
+		Stderr:   "permission denied",
+	}
+	eng, _ := New(EngineOptions{Runtime: rt})
+	ws := writeImageDevcontainer(t, `{
+		"image":"alpine:3.20",
+		"postCreateCommand":"./broken-script"
+	}`)
+
+	_, err := eng.Up(context.Background(), UpOptions{LocalWorkspaceFolder: ws})
+	if err == nil {
+		t.Fatal("expected error from failing lifecycle")
+	}
+	if !IsLifecycleError(err) {
+		t.Fatalf("expected *LifecycleError, got %T: %v", err, err)
+	}
+	var le *LifecycleError
+	for e := err; e != nil; {
+		if cast, ok := e.(*LifecycleError); ok {
+			le = cast
+			break
+		}
+		break
+	}
+	if le == nil {
+		// errors.As-equivalent for the test
+		t.Fatalf("expected *LifecycleError chain, got %v", err)
+	}
+	if le.ExitCode != 17 {
+		t.Errorf("ExitCode = %d, want 17", le.ExitCode)
+	}
+	if le.Phase != config.LifecyclePostCreate {
+		t.Errorf("Phase = %q, want postCreate", le.Phase)
+	}
+}
+
+func TestRunPhase_SkipsWhenMarkerMatches(t *testing.T) {
+	rt := newScriptedRuntime()
+	// Pretend a marker exists matching the container's Created timestamp.
+	// Format that the readMarker code expects.
+	rt.scripts["cat /var/devcontainer-go/markers/postCreate"] = runtime.ExecResult{
+		ExitCode: 0,
+		Stdout: `{
+			"v": 1,
+			"phase": "postCreate",
+			"keyTimestamp": "` + rt.containerStart.UTC().Format(time.RFC3339Nano) + `",
+			"ranAt": "` + rt.containerStart.UTC().Format(time.RFC3339Nano) + `",
+			"durationMs": 0,
+			"exitCode": 0
+		}`,
+	}
+
+	eng, _ := New(EngineOptions{Runtime: rt})
+	ws := writeImageDevcontainer(t, `{
+		"image":"alpine:3.20",
+		"postCreateCommand":"echo should-be-skipped"
+	}`)
+
+	_, err := eng.Up(context.Background(), UpOptions{LocalWorkspaceFolder: ws})
+	if err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	for _, call := range rt.execLog {
+		for _, c := range call.Cmd {
+			if strings.Contains(c, "should-be-skipped") {
+				t.Errorf("postCreate ran despite matching marker: %v", call.Cmd)
+			}
+		}
+	}
+}
+
+func TestRunPhase_RunsWhenMarkerStale(t *testing.T) {
+	rt := newScriptedRuntime()
+	// Marker keyed to a different (older) timestamp.
+	rt.scripts["cat /var/devcontainer-go/markers/postCreate"] = runtime.ExecResult{
+		ExitCode: 0,
+		Stdout: `{
+			"v": 1,
+			"phase": "postCreate",
+			"keyTimestamp": "2020-01-01T00:00:00Z",
+			"ranAt": "2020-01-01T00:00:00Z",
+			"durationMs": 0,
+			"exitCode": 0
+		}`,
+	}
+
+	eng, _ := New(EngineOptions{Runtime: rt})
+	ws := writeImageDevcontainer(t, `{
+		"image":"alpine:3.20",
+		"postCreateCommand":"echo fresh-run"
+	}`)
+	_, err := eng.Up(context.Background(), UpOptions{LocalWorkspaceFolder: ws})
+	if err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	ran := false
+	for _, call := range rt.execLog {
+		joined := strings.Join(call.Cmd, " ")
+		if strings.Contains(joined, "fresh-run") {
+			ran = true
+		}
+	}
+	if !ran {
+		t.Error("expected postCreate to re-run when marker is stale")
+	}
+}
+
+func TestPostAttach_AlwaysRuns(t *testing.T) {
+	rt := newScriptedRuntime()
+	// Even with a "matching" marker present, postAttach must run because
+	// it has no marker semantics.
+	eng, _ := New(EngineOptions{Runtime: rt})
+	ws := writeImageDevcontainer(t, `{
+		"image":"alpine:3.20",
+		"postAttachCommand":"echo attach-ran"
+	}`)
+	_, err := eng.Up(context.Background(), UpOptions{LocalWorkspaceFolder: ws})
+	if err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	ran := false
+	for _, call := range rt.execLog {
+		joined := strings.Join(call.Cmd, " ")
+		if strings.Contains(joined, "attach-ran") {
+			ran = true
+		}
+	}
+	if !ran {
+		t.Error("postAttach should always run")
+	}
+}
+
+func TestRunLifecycle_EmptyPhaseIsNoop(t *testing.T) {
+	rt := newScriptedRuntime()
+	eng, _ := New(EngineOptions{Runtime: rt})
+	ws := writeImageDevcontainer(t, `{"image":"alpine:3.20"}`)
+
+	wsObj, err := eng.Up(context.Background(), UpOptions{
+		LocalWorkspaceFolder: ws,
+		SkipLifecycle:        true, // we'll invoke explicitly
+	})
+	if err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	rt.execLog = nil
+	if err := eng.RunLifecycle(context.Background(), wsObj, config.LifecyclePostCreate); err != nil {
+		t.Fatalf("RunLifecycle: %v", err)
+	}
+	if len(rt.execLog) != 0 {
+		t.Errorf("empty phase should not exec, got %d calls", len(rt.execLog))
+	}
+}
+
+func TestInitializeCommand_NotSupportedInV1(t *testing.T) {
+	rt := newScriptedRuntime()
+	eng, _ := New(EngineOptions{Runtime: rt})
+	ws := writeImageDevcontainer(t, `{
+		"image":"alpine:3.20",
+		"initializeCommand":"echo on-host"
+	}`)
+	_, err := eng.Up(context.Background(), UpOptions{
+		LocalWorkspaceFolder: ws,
+		RunInitializeCommand: true,
+	})
+	if err == nil {
+		t.Fatal("expected error for initializeCommand in v1")
+	}
+	if !IsLifecycleError(err) {
+		t.Errorf("want *LifecycleError, got %T", err)
+	}
+}
