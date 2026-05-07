@@ -1,0 +1,405 @@
+package config
+
+import (
+	"encoding/json"
+	"fmt"
+	"path/filepath"
+)
+
+// ResolveInput is the contextual data needed to produce a ResolvedConfig
+// from a parsed devcontainer.json document.
+type ResolveInput struct {
+	// LocalWorkspaceFolder is the absolute host path containing the project.
+	LocalWorkspaceFolder string
+
+	// ConfigPath is the absolute path of the source devcontainer.json.
+	// Used as Warning.Source and to resolve relative paths in build/compose.
+	ConfigPath string
+
+	// DevcontainerID is the stable workspace id. Callers may use the default
+	// scheme via DevcontainerID(local, config) or supply their own.
+	DevcontainerID string
+
+	// LocalEnv is the host environment for ${localEnv:*} resolution. Callers
+	// typically pass the result of os.Environ() turned into a map.
+	LocalEnv map[string]string
+}
+
+// ResolveBytes parses the supplied devcontainer.json bytes and produces a
+// merged, host-substituted ResolvedConfig. Image-label metadata and feature
+// resolution are stubbed in this milestone; see PRD §13 / status.md for
+// what still lands in M3.
+func ResolveBytes(src []byte, input ResolveInput) (*ResolvedConfig, error) {
+	raw, err := parseRaw(src, input.ConfigPath)
+	if err != nil {
+		return nil, err
+	}
+	return resolveFromRaw(raw, input)
+}
+
+func resolveFromRaw(raw *rawConfig, input ResolveInput) (*ResolvedConfig, error) {
+	configDir := filepath.Dir(input.ConfigPath)
+
+	out := &ResolvedConfig{
+		DevcontainerID:       input.DevcontainerID,
+		Name:                 raw.Name,
+		LocalWorkspaceFolder: input.LocalWorkspaceFolder,
+		ContainerUser:        raw.ContainerUser,
+		RemoteUser:           raw.RemoteUser,
+		ContainerEnv:         raw.ContainerEnv,
+		RemoteEnv:            raw.RemoteEnv,
+		RunArgs:              raw.RunArgs,
+		CapAdd:               raw.CapAdd,
+		SecurityOpt:          raw.SecurityOpt,
+		Customizations:       raw.Customizations,
+	}
+
+	src, srcWarns, err := determineSource(raw, configDir)
+	if err != nil {
+		return nil, &ConfigInvalidError{Path: input.ConfigPath, Message: err.Error()}
+	}
+	out.Source = src
+	out.Warnings = append(out.Warnings, srcWarns...)
+
+	out.UpdateRemoteUserUID = derefBool(raw.UpdateRemoteUserUID, false)
+	out.Init = derefBool(raw.Init, false)
+	out.Privileged = derefBool(raw.Privileged, false)
+	// Spec default for overrideCommand is true.
+	out.OverrideCommand = derefBool(raw.OverrideCommand, true)
+
+	if raw.UserEnvProbe != "" {
+		out.UserEnvProbe = UserEnvProbe(raw.UserEnvProbe)
+	} else {
+		out.UserEnvProbe = UserEnvProbeLoginInteractive
+	}
+	out.ShutdownAction = ShutdownAction(raw.ShutdownAction)
+
+	wsMount, err := decodeWorkspaceMount(raw.WorkspaceMount)
+	if err != nil {
+		return nil, &ConfigInvalidError{Path: input.ConfigPath, Message: err.Error()}
+	}
+	out.WorkspaceMount = wsMount
+
+	mounts, mountWarns, err := decodeMounts(raw.Mounts)
+	if err != nil {
+		return nil, &ConfigInvalidError{Path: input.ConfigPath, Message: err.Error()}
+	}
+	out.Mounts = mounts
+	out.Warnings = append(out.Warnings, addSource(mountWarns, input.ConfigPath)...)
+
+	ports, portWarns, err := decodeForwardPorts(raw.ForwardPorts)
+	if err != nil {
+		return nil, &ConfigInvalidError{Path: input.ConfigPath, Message: err.Error()}
+	}
+	out.ForwardPorts = ports
+	out.Warnings = append(out.Warnings, addSource(portWarns, input.ConfigPath)...)
+
+	if len(raw.AppPort) > 0 {
+		out.Warnings = append(out.Warnings, Warning{
+			Code:    WarnDeprecatedKey,
+			Message: "appPort is deprecated; use forwardPorts",
+			Path:    "/appPort",
+			Source:  input.ConfigPath,
+		})
+	}
+
+	out.PortsAttributes = convertPortsAttributes(raw.PortsAttributes)
+	out.OtherPortsAttributes = convertPortAttributes(raw.OtherPortsAttributes)
+	out.HostRequirements = convertHostRequirements(raw.HostRequirements)
+
+	lifecycle, lcWarns, err := decodeLifecycleCommands(raw)
+	if err != nil {
+		return nil, &ConfigInvalidError{Path: input.ConfigPath, Message: err.Error()}
+	}
+	out.Lifecycle = lifecycle
+	out.Warnings = append(out.Warnings, addSource(lcWarns, input.ConfigPath)...)
+
+	out.WaitFor = computeWaitFor(raw.WaitFor, lifecycle)
+
+	containerFolder := raw.WorkspaceFolder
+	if containerFolder == "" {
+		containerFolder = "/workspaces/" + filepath.Base(input.LocalWorkspaceFolder)
+	}
+	subCtx := SubstitutionContext{
+		LocalWorkspaceFolder: input.LocalWorkspaceFolder,
+		DevcontainerID:       input.DevcontainerID,
+		LocalEnv:             input.LocalEnv,
+	}
+	resolvedFolder, folderWarns := ResolveString(containerFolder, subCtx)
+	out.Warnings = append(out.Warnings, taggedWarnings(folderWarns, input.ConfigPath, "/workspaceFolder")...)
+	subCtx.ContainerWorkspaceFolder = resolvedFolder
+	out.ContainerWorkspaceFolder = resolvedFolder
+
+	substituteAll(out, subCtx, input.ConfigPath)
+
+	if len(raw.Features) > 0 {
+		out.Warnings = append(out.Warnings, Warning{
+			Code:    WarnUnsupportedFeatureField,
+			Message: fmt.Sprintf("features resolution is not implemented in this milestone; %d feature(s) ignored", len(raw.Features)),
+			Path:    "/features",
+			Source:  input.ConfigPath,
+		})
+	}
+
+	return out, nil
+}
+
+func determineSource(raw *rawConfig, configDir string) (Source, []Warning, error) {
+	hasImage := raw.Image != ""
+	hasBuild := raw.Build != nil
+	hasCompose := len(raw.DockerComposeFile) > 0
+
+	count := 0
+	for _, b := range []bool{hasImage, hasBuild, hasCompose} {
+		if b {
+			count++
+		}
+	}
+	if count == 0 {
+		return nil, nil, fmt.Errorf("must specify exactly one of image, build, or dockerComposeFile")
+	}
+	if count > 1 {
+		return nil, nil, fmt.Errorf("must specify exactly one of image, build, or dockerComposeFile")
+	}
+
+	switch {
+	case hasImage:
+		return &ImageSource{Image: raw.Image}, nil, nil
+	case hasBuild:
+		cacheFrom, _ := decodeStringOrStringArray(raw.Build.CacheFrom)
+		ctxPath := raw.Build.Context
+		if ctxPath == "" {
+			ctxPath = "."
+		}
+		if !filepath.IsAbs(ctxPath) {
+			ctxPath = filepath.Join(configDir, ctxPath)
+		}
+		return &BuildSource{
+			Dockerfile: raw.Build.Dockerfile,
+			Context:    ctxPath,
+			Args:       raw.Build.Args,
+			Target:     raw.Build.Target,
+			CacheFrom:  cacheFrom,
+		}, nil, nil
+	case hasCompose:
+		files, err := decodeStringOrStringArray(raw.DockerComposeFile)
+		if err != nil {
+			return nil, nil, fmt.Errorf("dockerComposeFile: %w", err)
+		}
+		abs := make([]string, len(files))
+		for i, f := range files {
+			if filepath.IsAbs(f) {
+				abs[i] = f
+			} else {
+				abs[i] = filepath.Join(configDir, f)
+			}
+		}
+		return &ComposeSource{
+			Files:       abs,
+			Service:     raw.Service,
+			RunServices: raw.RunServices,
+		}, nil, nil
+	}
+	return nil, nil, fmt.Errorf("unreachable")
+}
+
+func decodeLifecycleCommands(raw *rawConfig) (LifecycleCommands, []Warning, error) {
+	out := LifecycleCommands{}
+	pairs := []struct {
+		dst  *LifecycleCommand
+		data json.RawMessage
+		path string
+	}{
+		{&out.Initialize, raw.InitializeCommand, "/initializeCommand"},
+		{&out.OnCreate, raw.OnCreateCommand, "/onCreateCommand"},
+		{&out.UpdateContent, raw.UpdateContentCommand, "/updateContentCommand"},
+		{&out.PostCreate, raw.PostCreateCommand, "/postCreateCommand"},
+		{&out.PostStart, raw.PostStartCommand, "/postStartCommand"},
+		{&out.PostAttach, raw.PostAttachCommand, "/postAttachCommand"},
+	}
+	for _, p := range pairs {
+		cmd, err := decodeLifecycleCommand(p.data)
+		if err != nil {
+			return LifecycleCommands{}, nil, fmt.Errorf("%s: %w", p.path, err)
+		}
+		*p.dst = cmd
+	}
+	return out, nil, nil
+}
+
+func computeWaitFor(rawWaitFor string, lifecycle LifecycleCommands) LifecyclePhase {
+	if rawWaitFor != "" {
+		return LifecyclePhase(rawWaitFor)
+	}
+	if !lifecycle.UpdateContent.IsEmpty() {
+		return LifecycleUpdateContent
+	}
+	return LifecyclePostCreate
+}
+
+func convertPortsAttributes(in map[string]rawPortAttrs) map[string]PortAttributes {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]PortAttributes, len(in))
+	for k, v := range in {
+		out[k] = *convertPortAttributes(&v)
+	}
+	return out
+}
+
+func convertPortAttributes(in *rawPortAttrs) *PortAttributes {
+	if in == nil {
+		return nil
+	}
+	return &PortAttributes{
+		Label:            in.Label,
+		Protocol:         in.Protocol,
+		OnAutoForward:    in.OnAutoForward,
+		ElevateIfNeeded:  derefBool(in.ElevateIfNeeded, false),
+		RequireLocalPort: derefBool(in.RequireLocalPort, false),
+	}
+}
+
+func convertHostRequirements(in *rawHostRequirements) *HostRequirements {
+	if in == nil {
+		return nil
+	}
+	return &HostRequirements{
+		CPUs:    in.CPUs,
+		Memory:  in.Memory,
+		Storage: in.Storage,
+		// GPU is polymorphic (bool | "optional" | object) — defer modeling
+		// until we have a real consumer. Field present but always nil here.
+	}
+}
+
+func derefBool(p *bool, def bool) bool {
+	if p == nil {
+		return def
+	}
+	return *p
+}
+
+func addSource(ws []Warning, src string) []Warning {
+	if len(ws) == 0 {
+		return ws
+	}
+	out := make([]Warning, len(ws))
+	for i, w := range ws {
+		w.Source = src
+		out[i] = w
+	}
+	return out
+}
+
+func taggedWarnings(ws []Warning, src, path string) []Warning {
+	if len(ws) == 0 {
+		return ws
+	}
+	out := make([]Warning, len(ws))
+	for i, w := range ws {
+		w.Source = src
+		w.Path = path
+		out[i] = w
+	}
+	return out
+}
+
+// substituteAll walks string-bearing fields of out and applies host-context
+// substitution in place. Customizations (json.RawMessage) are NOT walked —
+// callers decode their own namespace and run substitution there if they
+// want it. ${containerEnv:*} references survive unchanged for the runtime
+// to resolve later.
+func substituteAll(out *ResolvedConfig, ctx SubstitutionContext, source string) {
+	subStr := func(s, path string) string {
+		v, ws := ResolveString(s, ctx)
+		out.Warnings = append(out.Warnings, taggedWarnings(ws, source, path)...)
+		return v
+	}
+	subSlice := func(in []string, pathPrefix string) []string {
+		for i := range in {
+			in[i] = subStr(in[i], fmt.Sprintf("%s/%d", pathPrefix, i))
+		}
+		return in
+	}
+	subMap := func(in map[string]string, pathPrefix string) {
+		for k, v := range in {
+			in[k] = subStr(v, fmt.Sprintf("%s/%s", pathPrefix, k))
+		}
+	}
+
+	out.Name = subStr(out.Name, "/name")
+	out.ContainerUser = subStr(out.ContainerUser, "/containerUser")
+	out.RemoteUser = subStr(out.RemoteUser, "/remoteUser")
+
+	subMap(out.ContainerEnv, "/containerEnv")
+	subMap(out.RemoteEnv, "/remoteEnv")
+
+	out.RunArgs = subSlice(out.RunArgs, "/runArgs")
+	out.CapAdd = subSlice(out.CapAdd, "/capAdd")
+	out.SecurityOpt = subSlice(out.SecurityOpt, "/securityOpt")
+
+	for i := range out.Mounts {
+		out.Mounts[i].Source = subStr(out.Mounts[i].Source, fmt.Sprintf("/mounts/%d/source", i))
+		out.Mounts[i].Target = subStr(out.Mounts[i].Target, fmt.Sprintf("/mounts/%d/target", i))
+	}
+	if out.WorkspaceMount != nil {
+		out.WorkspaceMount.Source = subStr(out.WorkspaceMount.Source, "/workspaceMount/source")
+		out.WorkspaceMount.Target = subStr(out.WorkspaceMount.Target, "/workspaceMount/target")
+	}
+
+	substituteLifecycle(&out.Lifecycle, subStr)
+
+	switch s := out.Source.(type) {
+	case *ImageSource:
+		s.Image = subStr(s.Image, "/image")
+	case *BuildSource:
+		s.Dockerfile = subStr(s.Dockerfile, "/build/dockerfile")
+		s.Context = subStr(s.Context, "/build/context")
+		s.Target = subStr(s.Target, "/build/target")
+		subMap(s.Args, "/build/args")
+		s.CacheFrom = subSlice(s.CacheFrom, "/build/cacheFrom")
+	case *ComposeSource:
+		s.Files = subSlice(s.Files, "/dockerComposeFile")
+		s.Service = subStr(s.Service, "/service")
+		s.RunServices = subSlice(s.RunServices, "/runServices")
+	}
+}
+
+func substituteLifecycle(lc *LifecycleCommands, sub func(s, path string) string) {
+	pairs := []struct {
+		cmd  *LifecycleCommand
+		path string
+	}{
+		{&lc.Initialize, "/initializeCommand"},
+		{&lc.OnCreate, "/onCreateCommand"},
+		{&lc.UpdateContent, "/updateContentCommand"},
+		{&lc.PostCreate, "/postCreateCommand"},
+		{&lc.PostStart, "/postStartCommand"},
+		{&lc.PostAttach, "/postAttachCommand"},
+	}
+	for _, p := range pairs {
+		substituteCommand(p.cmd, p.path, sub)
+	}
+}
+
+func substituteCommand(cmd *LifecycleCommand, path string, sub func(s, p string) string) {
+	if cmd.Single != nil {
+		if cmd.Single.Shell != "" {
+			cmd.Single.Shell = sub(cmd.Single.Shell, path)
+		}
+		for i := range cmd.Single.Exec {
+			cmd.Single.Exec[i] = sub(cmd.Single.Exec[i], fmt.Sprintf("%s/%d", path, i))
+		}
+	}
+	for name, c := range cmd.Parallel {
+		if c.Shell != "" {
+			c.Shell = sub(c.Shell, fmt.Sprintf("%s/%s", path, name))
+		}
+		for i := range c.Exec {
+			c.Exec[i] = sub(c.Exec[i], fmt.Sprintf("%s/%s/%d", path, name, i))
+		}
+		cmd.Parallel[name] = c
+	}
+}
