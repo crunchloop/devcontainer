@@ -172,6 +172,68 @@ func TestResolveString_EmptyContextLeavesLiterals(t *testing.T) {
 	}
 }
 
+func TestResolveString_ContainerEnvPass(t *testing.T) {
+	// When ContainerEnv is populated (container-pass), ${containerEnv:*}
+	// resolves with the same default-and-warning semantics as localEnv.
+	ctx := SubstitutionContext{
+		ContainerEnv: map[string]string{
+			"HOME": "/home/vscode",
+			"PATH": "/usr/bin",
+		},
+	}
+
+	cases := []struct {
+		name      string
+		in        string
+		want      string
+		wantCodes []WarningCode
+	}{
+		{"present", "${containerEnv:HOME}", "/home/vscode", nil},
+		{"missing with default", "${containerEnv:NOPE:fallback}", "fallback", nil},
+		{
+			name:      "missing no default => empty + warn",
+			in:        "${containerEnv:NOPE}",
+			want:      "",
+			wantCodes: []WarningCode{WarnUnresolvedContainerEnv},
+		},
+		{"localEnv unaffected when ContainerEnv is set", "${localEnv:HOME:fallback}", "fallback", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, warns := ResolveString(tc.in, ctx)
+			if got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+			var codes []WarningCode
+			for _, w := range warns {
+				codes = append(codes, w.Code)
+			}
+			if !reflect.DeepEqual(codes, tc.wantCodes) {
+				t.Errorf("codes = %v, want %v", codes, tc.wantCodes)
+			}
+		})
+	}
+}
+
+func TestResolveString_HostPassPreservesContainerEnv(t *testing.T) {
+	// When ContainerEnv is nil (host pass), ${containerEnv:*} survives
+	// unchanged — even with a default, even with no var name.
+	ctx := SubstitutionContext{LocalWorkspaceFolder: "/x"}
+	cases := []string{
+		"${containerEnv:HOME}",
+		"${containerEnv:HOME:fallback}",
+	}
+	for _, in := range cases {
+		got, warns := ResolveString(in, ctx)
+		if got != in {
+			t.Errorf("ResolveString(%q) = %q, want literal pass-through", in, got)
+		}
+		if len(warns) != 0 {
+			t.Errorf("unexpected warnings: %v", warns)
+		}
+	}
+}
+
 func TestResolveString_WarningMessages(t *testing.T) {
 	// Confirm warning messages reference the offending variable so they're
 	// useful in caller-facing diagnostics.

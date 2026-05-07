@@ -11,14 +11,19 @@ import (
 // support — matches devpod / VS Code / @devcontainers/cli behavior.
 var variableRegexp = regexp.MustCompile(`\$\{([^}]+)\}`)
 
-// SubstitutionContext holds host-side values used to resolve placeholders in
+// SubstitutionContext holds the values used to resolve placeholders in
 // devcontainer.json strings. Fields left empty cause the corresponding
 // variable to be preserved as a literal placeholder.
+//
+// ContainerEnv is populated only after a container has been created and
+// inspected; nil signals "host pass" and leaves ${containerEnv:*}
+// references literal so the runtime layer can resolve them later.
 type SubstitutionContext struct {
 	LocalWorkspaceFolder     string
 	ContainerWorkspaceFolder string
 	DevcontainerID           string
 	LocalEnv                 map[string]string
+	ContainerEnv             map[string]string
 }
 
 // ResolveString substitutes host-context variables in s.
@@ -88,8 +93,12 @@ func lookupVariable(ctx SubstitutionContext, match, name string, args []string) 
 		return lookupLocalEnv(ctx.LocalEnv, args)
 
 	case "containerEnv":
-		// Pass through; resolved at runtime against the live container.
-		return match, nil
+		if ctx.ContainerEnv == nil {
+			// Host pass: leave literal for the runtime layer to resolve
+			// once the container is up.
+			return match, nil
+		}
+		return lookupContainerEnv(ctx.ContainerEnv, args)
 
 	default:
 		return match, &Warning{
@@ -100,10 +109,18 @@ func lookupVariable(ctx SubstitutionContext, match, name string, args []string) 
 }
 
 func lookupLocalEnv(env map[string]string, args []string) (string, *Warning) {
+	return lookupEnvWithDefault(env, args, "localEnv", WarnUnresolvedLocalEnv)
+}
+
+func lookupContainerEnv(env map[string]string, args []string) (string, *Warning) {
+	return lookupEnvWithDefault(env, args, "containerEnv", WarnUnresolvedContainerEnv)
+}
+
+func lookupEnvWithDefault(env map[string]string, args []string, kind string, missingCode WarningCode) (string, *Warning) {
 	if len(args) == 0 || args[0] == "" {
 		return "", &Warning{
-			Code:    WarnUnresolvedLocalEnv,
-			Message: "${localEnv} requires a variable name",
+			Code:    missingCode,
+			Message: fmt.Sprintf("${%s} requires a variable name", kind),
 		}
 	}
 	name := args[0]
@@ -111,13 +128,13 @@ func lookupLocalEnv(env map[string]string, args []string) (string, *Warning) {
 		return v, nil
 	}
 	if len(args) > 1 {
-		// Default value. Spec/devpod use args[1] only; we match for compat.
-		// Multi-colon defaults (e.g. URLs) lose information after the
-		// first colon — known limitation.
+		// Default value. Spec/devpod take args[1] only; multi-colon
+		// defaults (e.g. URLs) lose information after the first colon —
+		// known limitation matching upstream behavior.
 		return args[1], nil
 	}
 	return "", &Warning{
-		Code:    WarnUnresolvedLocalEnv,
-		Message: fmt.Sprintf("${localEnv:%s} not set; substituted empty string", name),
+		Code:    missingCode,
+		Message: fmt.Sprintf("${%s:%s} not set; substituted empty string", kind, name),
 	}
 }

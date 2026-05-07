@@ -300,6 +300,7 @@ const (
 	WarnDeprecatedKey           WarningCode = "deprecated_key"
 	WarnUnsupportedFeatureField WarningCode = "unsupported_feature_field"
 	WarnUnresolvedLocalEnv      WarningCode = "unresolved_local_env"
+	WarnUnresolvedContainerEnv  WarningCode = "unresolved_container_env"
 	WarnUnknownVariable         WarningCode = "unknown_variable"
 )
 
