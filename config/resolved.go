@@ -299,6 +299,8 @@ const (
 	WarnUnknownField            WarningCode = "unknown_field"
 	WarnDeprecatedKey           WarningCode = "deprecated_key"
 	WarnUnsupportedFeatureField WarningCode = "unsupported_feature_field"
+	WarnUnresolvedLocalEnv      WarningCode = "unresolved_local_env"
+	WarnUnknownVariable         WarningCode = "unknown_variable"
 )
 
 // Warning is a non-fatal diagnostic accumulated during parse, merge, or

@@ -58,6 +58,11 @@ type rawConfig struct {
 	PortsAttributes      map[string]rawPortAttrs  `json:"portsAttributes,omitempty"`
 	OtherPortsAttributes *rawPortAttrs            `json:"otherPortsAttributes,omitempty"`
 
+	// AppPort is the deprecated predecessor of forwardPorts. Spec still
+	// accepts it (int | string | array). Surfaced here so merge can warn
+	// and translate where reasonable.
+	AppPort json.RawMessage `json:"appPort,omitempty"`
+
 	HostRequirements *rawHostRequirements       `json:"hostRequirements,omitempty"`
 	Customizations   map[string]json.RawMessage `json:"customizations,omitempty"`
 }
