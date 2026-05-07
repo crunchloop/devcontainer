@@ -9,7 +9,7 @@ with a pointer to the PRD.
 
 Requirements:
 
-- Go 1.23+
+- Go 1.24+
 - Docker (with the Compose v2 plugin if you touch compose code)
 - `golangci-lint` v1.64+ (`brew install golangci-lint` or see
   https://golangci-lint.run/welcome/install/)
