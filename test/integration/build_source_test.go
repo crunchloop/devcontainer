@@ -12,6 +12,8 @@ import (
 	"time"
 
 	devcontainer "github.com/crunchloop/devcontainer"
+	"github.com/crunchloop/devcontainer/config"
+	"github.com/crunchloop/devcontainer/feature"
 )
 
 // writeBuildSourceWorkspace creates a workspace with a Dockerfile-source
@@ -127,6 +129,123 @@ func TestBuildSource_WithLocalFeature(t *testing.T) {
 	if !strings.Contains(res.Stdout, "yes") {
 		t.Errorf("FEATURE_INSTALLED not applied: stdout=%q", res.Stdout)
 	}
+}
+
+func TestPrebakedImage_SkipsFeatureRebuild(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+
+	eng, rt := newEngine(t)
+	defer rt.Close()
+
+	// Step 1: build a "pre-baked" image by running Up against a
+	// workspace with one feature. The resulting dc-go-final-* image
+	// carries a devcontainer.metadata label declaring the feature is
+	// installed.
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, ".devcontainer", "devcontainer.json"), fmt.Sprintf(`{
+		"image": "%s",
+		"features": { "ghcr.io/x/baked-marker:1": {} }
+	}`, testImage))
+
+	// Local feature reused below; we tag it as if it were OCI by
+	// matching the same id in devcontainer-feature.json.
+	featureDir := filepath.Join(dir, ".devcontainer", "ghcr.io_x_baked-marker_1")
+	mustWrite(t, filepath.Join(featureDir, "devcontainer-feature.json"), `{
+		"id": "baked-marker",
+		"version": "1.0.0"
+	}`)
+	mustWrite(t, filepath.Join(featureDir, "install.sh"), `#!/bin/sh
+set -e
+echo first-build > /etc/baked-marker
+`)
+	if err := os.Chmod(filepath.Join(featureDir, "install.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Tweak: this test substitutes the feature store so the OCI ref
+	// resolves locally. PR7 will exercise real OCI; here we just want
+	// to validate the metadata-label fast path.
+	prebakedDevcontainer := fmt.Sprintf(`{
+		"image": "%s",
+		"features": { "./ghcr.io_x_baked-marker_1": {} }
+	}`, testImage)
+	mustWrite(t, filepath.Join(dir, ".devcontainer", "devcontainer.json"), prebakedDevcontainer)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	first, err := eng.Up(ctx, devcontainer.UpOptions{
+		LocalWorkspaceFolder: dir,
+		Recreate:             true,
+		SkipLifecycle:        true,
+	})
+	if err != nil {
+		t.Fatalf("first Up: %v", err)
+	}
+	defer func() { _ = eng.Down(context.Background(), first, devcontainer.DownOptions{Remove: true}) }()
+
+	prebakedImage := first.Container.Image
+	if prebakedImage == testImage {
+		t.Fatalf("first Up should produce a feature-extended image, got base %s", prebakedImage)
+	}
+	t.Logf("pre-baked image: %s", prebakedImage)
+
+	// Step 2: a second workspace uses the dc-go-final image as its
+	// base. Same feature is requested, but its bare id matches the
+	// label entry — Up must skip feature installation entirely.
+	dir2 := t.TempDir()
+	mustWrite(t, filepath.Join(dir2, ".devcontainer", "devcontainer.json"), fmt.Sprintf(`{
+		"image": "%s",
+		"features": { "ghcr.io/x/baked-marker:1": {} }
+	}`, prebakedImage))
+
+	// Sabotage the feature store so any real fetch attempt fails the
+	// test loudly. If the hot path works, the store is never called.
+	sabotaged, _ := devcontainer.New(devcontainer.EngineOptions{
+		Runtime:      rt,
+		FeatureStore: failingFeatureStore{t: t},
+	})
+
+	second, err := sabotaged.Up(ctx, devcontainer.UpOptions{
+		LocalWorkspaceFolder: dir2,
+		Recreate:             true,
+		SkipLifecycle:        true,
+	})
+	if err != nil {
+		t.Fatalf("second Up: %v", err)
+	}
+	defer func() { _ = sabotaged.Down(context.Background(), second, devcontainer.DownOptions{Remove: true}) }()
+
+	if second.Container.Image != prebakedImage {
+		t.Errorf("second Up should reuse pre-baked image, got %q (want %q)", second.Container.Image, prebakedImage)
+	}
+	if len(second.Config.Features) != 1 {
+		t.Fatalf("Features count = %d", len(second.Config.Features))
+	}
+	if !second.Config.Features[0].AlreadyInstalled {
+		t.Error("feature should be marked AlreadyInstalled from base image label")
+	}
+
+	// Marker file from the first build still readable in the second
+	// workspace's container — proves we're running the same image content.
+	res, err := sabotaged.Exec(ctx, second, devcontainer.ExecOptions{Cmd: []string{"cat", "/etc/baked-marker"}})
+	if err != nil || res.ExitCode != 0 {
+		t.Errorf("baked-marker missing in second workspace: err=%v exit=%d stderr=%q", err, res.ExitCode, res.Stderr)
+	}
+	if !strings.Contains(res.Stdout, "first-build") {
+		t.Errorf("baked-marker contents = %q", res.Stdout)
+	}
+}
+
+// failingFeatureStore makes any Fetch call fail the test. Used by the
+// pre-baked-image test to assert no fetch happens.
+type failingFeatureStore struct{ t *testing.T }
+
+func (f failingFeatureStore) Fetch(ctx context.Context, ref string, kind config.FeatureSourceKind) (feature.Fetched, error) {
+	f.t.Errorf("unexpected feature fetch in pre-baked path: ref=%q kind=%s", ref, kind)
+	return feature.Fetched{}, fmt.Errorf("fetch should not have been called")
 }
 
 func TestImageSource_WithLocalFeature(t *testing.T) {

@@ -13,6 +13,25 @@ import (
 	"github.com/crunchloop/devcontainer/runtime"
 )
 
+func (r *Runtime) InspectImage(ctx context.Context, ref string) (*runtime.ImageDetails, error) {
+	res, err := r.api.ImageInspect(ctx, ref)
+	if err != nil {
+		if isImageNotFound(err) {
+			return nil, &runtime.ImageNotFoundError{Ref: ref, Err: err}
+		}
+		return nil, fmt.Errorf("ImageInspect: %w", err)
+	}
+	out := &runtime.ImageDetails{
+		ID:   res.ID,
+		Tags: res.RepoTags,
+	}
+	if res.Config != nil {
+		out.Labels = copyLabels(res.Config.Labels)
+		out.Env = append([]string(nil), res.Config.Env...)
+	}
+	return out, nil
+}
+
 func (r *Runtime) InspectContainer(ctx context.Context, id string) (*runtime.ContainerDetails, error) {
 	res, err := r.api.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 	if err != nil {

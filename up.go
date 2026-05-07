@@ -164,6 +164,98 @@ func (e *Engine) createFresh(ctx context.Context, cfg *config.ResolvedConfig, op
 	return e.buildWorkspace(ctx, c.ID, cfg, opts.LocalEnv)
 }
 
+// markAlreadyInstalled flips AlreadyInstalled on each cfg.Features
+// entry whose request is satisfied by an entry in the base image's
+// devcontainer.metadata label. The match strategy (permissive vs
+// strict) follows EngineOptions.StrictFeatureVersionMatch.
+//
+// Pre-baked-image matching only applies to OCI features: the bare id
+// comparison requires extracting a basename from the request ref,
+// which is reliable for OCI (e.g. ghcr.io/x/foo:1 → "foo") but not for
+// HTTPS URLs or local paths whose disk-side id may differ from the
+// ref's last path component. Local / HTTPS features always go through
+// fetch (cheap for local; HTTPS fetch is what gives us the id anyway).
+func (e *Engine) markAlreadyInstalled(cfg *config.ResolvedConfig, baked []config.FeatureMetadata) {
+	mode := feature.MatchPermissive
+	if e.opts.StrictFeatureVersionMatch {
+		mode = feature.MatchStrict
+	}
+	for i := range cfg.Features {
+		f := &cfg.Features[i]
+		if f.AlreadyInstalled {
+			continue
+		}
+		if f.SourceKind != config.FeatureSourceOCI {
+			continue
+		}
+		req := config.FeatureMetadata{
+			ID:      ociRefBareID(f.Ref),
+			Version: optionVersionString(f.Options),
+		}
+		if req.ID == "" {
+			continue
+		}
+		for _, b := range baked {
+			if feature.Matches(b, req, mode) {
+				f.AlreadyInstalled = true
+				// Preserve baked metadata so the regenerated label can
+				// include it without re-fetching.
+				f.Metadata = b
+				break
+			}
+		}
+	}
+}
+
+// ociRefBareID extracts the bare feature id from an OCI ref:
+//
+//	ghcr.io/devcontainers/features/git:1   → git
+//	ghcr.io/owner/feature@sha256:...       → feature
+//	ghcr.io/owner/feature                  → feature
+//
+// Returns "" for malformed inputs.
+func ociRefBareID(ref string) string {
+	// Strip @digest and :tag.
+	if i := lastIndex(ref, "@"); i >= 0 {
+		ref = ref[:i]
+	}
+	if i := lastIndex(ref, ":"); i >= 0 {
+		if !contains(ref[:i], "://") || lastIndex(ref, "/") > i {
+			ref = ref[:i]
+		}
+	}
+	// Take the segment after the last "/".
+	if i := lastIndex(ref, "/"); i >= 0 {
+		return ref[i+1:]
+	}
+	return ref
+}
+
+func optionVersionString(opts map[string]any) string {
+	if v, ok := opts["version"].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func lastIndex(s, sub string) int {
+	for i := len(s) - len(sub); i >= 0; i-- {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
+
 // prepareBaseImage produces the image reference to use as the base for
 // feature layering: pulled (image source) or built (build source).
 func (e *Engine) prepareBaseImage(ctx context.Context, cfg *config.ResolvedConfig, opts UpOptions) (string, error) {
@@ -205,6 +297,21 @@ func (e *Engine) prepareBaseImage(ctx context.Context, cfg *config.ResolvedConfi
 func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, baseImage string, opts UpOptions) (string, error) {
 	if len(cfg.Features) == 0 {
 		return baseImage, nil
+	}
+
+	// Pre-baked-image hot path: read the base image's
+	// devcontainer.metadata label and mark already-installed features.
+	// Failures (missing label, parse error, image not found) are
+	// non-fatal — we just don't get the optimization.
+	var baseMeta []config.FeatureMetadata
+	if details, err := e.runtime.InspectImage(ctx, baseImage); err == nil && details != nil {
+		if label := details.Labels[feature.MetadataLabel]; label != "" {
+			parsed, err := feature.ParseMetadataLabel(label)
+			if err == nil {
+				baseMeta = parsed
+				e.markAlreadyInstalled(cfg, parsed)
+			}
+		}
 	}
 
 	configDir := ""
@@ -255,10 +362,11 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 	cfg.Warnings = append(cfg.Warnings, oWarns...)
 
 	plan := feature.BuildPlan{
-		BaseImage:     baseImage,
-		Features:      cfg.Features,
-		RemoteUser:    cfg.RemoteUser,
-		ContainerUser: cfg.ContainerUser,
+		BaseImage:         baseImage,
+		Features:          cfg.Features,
+		RemoteUser:        cfg.RemoteUser,
+		ContainerUser:     cfg.ContainerUser,
+		BaseImageMetadata: baseMeta,
 	}
 	if !plan.HasWork() {
 		return baseImage, nil
@@ -299,11 +407,13 @@ func (e *Engine) ensureImage(ctx context.Context, ref string, policy PullPolicy,
 		// return ImageNotFoundError if not.
 		return nil
 	default:
-		// IfNotPresent: try inspect via pull-on-miss. The Docker daemon
-		// short-circuits ImagePull when the image already exists locally
-		// and immediately reports a "Pull complete" status, so this is
-		// effectively a no-op for cached images. Any error during pull
-		// surfaces here cleanly rather than at create time.
+		// IfNotPresent: inspect first; only pull on miss. This avoids
+		// hitting a registry for locally-built images (sha256:... and
+		// dc-go-* tags from previous Ups) which would otherwise fail
+		// since they don't exist remotely.
+		if _, err := e.runtime.InspectImage(ctx, ref); err == nil {
+			return nil
+		}
 		_, err := e.runtime.PullImage(ctx, ref, events)
 		return err
 	}

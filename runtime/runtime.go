@@ -43,6 +43,11 @@ type Runtime interface {
 	// the live env (used for ${containerEnv:*} substitution).
 	InspectContainer(ctx context.Context, id string) (*ContainerDetails, error)
 
+	// InspectImage returns the image's labels, env, and other config.
+	// Used by the engine to read the devcontainer.metadata label off
+	// pre-baked images and skip already-installed features.
+	InspectImage(ctx context.Context, ref string) (*ImageDetails, error)
+
 	// ContainerLogs streams the container's stdout+stderr to w. If follow
 	// is true, the call blocks until ctx is cancelled or the container exits.
 	ContainerLogs(ctx context.Context, id string, w io.Writer, follow bool) error
@@ -89,6 +94,16 @@ type ContainerDetails struct {
 	Env       []string // KEY=VALUE pairs from the running container
 	Mounts    []MountInspect
 	Labels    map[string]string
+}
+
+// ImageDetails is the inspected state of a local image. Labels are
+// the source of truth for the devcontainer.metadata pre-baked-image
+// fast path.
+type ImageDetails struct {
+	ID     string
+	Tags   []string
+	Labels map[string]string
+	Env    []string
 }
 
 // MountInspect describes a mount as reported by the runtime, not what

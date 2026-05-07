@@ -29,6 +29,13 @@ type BuildPlan struct {
 	// arg so the final image's USER matches the spec's intent.
 	RemoteUser    string
 	ContainerUser string
+
+	// BaseImageMetadata carries the parsed contents of the base image's
+	// existing devcontainer.metadata label. The generated final image's
+	// label includes these entries as a prefix so metadata accumulates
+	// across rebuilds — a feature installed two builds ago stays
+	// recorded even if today's build only layers a new one.
+	BaseImageMetadata []config.FeatureMetadata
 }
 
 // HasWork reports whether plan has any features that still need

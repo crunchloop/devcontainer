@@ -24,6 +24,7 @@ type fakeRuntime struct {
 
 	containersByID    map[string]*runtime.ContainerDetails
 	containersByLabel map[string]*runtime.Container
+	imagesByRef       map[string]*runtime.ImageDetails
 
 	createSeq    int
 	pulled       []string
@@ -44,6 +45,7 @@ func newFakeRuntime() *fakeRuntime {
 	return &fakeRuntime{
 		containersByID:    map[string]*runtime.ContainerDetails{},
 		containersByLabel: map[string]*runtime.Container{},
+		imagesByRef:       map[string]*runtime.ImageDetails{},
 	}
 }
 
@@ -157,6 +159,15 @@ func (f *fakeRuntime) InspectContainer(ctx context.Context, id string) (*runtime
 
 func (f *fakeRuntime) ContainerLogs(ctx context.Context, id string, w io.Writer, follow bool) error {
 	return nil
+}
+
+func (f *fakeRuntime) InspectImage(ctx context.Context, ref string) (*runtime.ImageDetails, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if d, ok := f.imagesByRef[ref]; ok {
+		return d, nil
+	}
+	return nil, &runtime.ImageNotFoundError{Ref: ref}
 }
 
 func (f *fakeRuntime) FindContainerByLabel(ctx context.Context, key, value string) (*runtime.Container, error) {
@@ -390,6 +401,83 @@ func TestEnvListToMap(t *testing.T) {
 	want := map[string]string{"A": "1", "B": "2", "C": "hello=world"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestUp_PrebakedImageSkipsFeatureFetch(t *testing.T) {
+	// Set up a fake runtime where the base image has a
+	// devcontainer.metadata label declaring 'pre-baked-feature' is
+	// already installed. Up should NOT call BuildImage for features.
+	rt := newFakeRuntime()
+	rt.imagesByRef["alpine:3.20"] = &runtime.ImageDetails{
+		ID:   "sha256:base",
+		Tags: []string{"alpine:3.20"},
+		Labels: map[string]string{
+			"devcontainer.metadata": `[{"id":"pre-baked-feature","version":"1.5.0"}]`,
+		},
+	}
+	eng, _ := New(EngineOptions{Runtime: rt})
+
+	// devcontainer.json requests pre-baked-feature@1 (compatible).
+	ws := writeImageDevcontainer(t, `{
+		"image":"alpine:3.20",
+		"features": {
+			"ghcr.io/x/pre-baked-feature:1": {"version":"1.0.0"}
+		}
+	}`)
+
+	wsObj, err := eng.Up(context.Background(), UpOptions{
+		LocalWorkspaceFolder: ws,
+		SkipLifecycle:        true,
+	})
+	if err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	if len(wsObj.Config.Features) != 1 {
+		t.Fatalf("Features count = %d", len(wsObj.Config.Features))
+	}
+	if !wsObj.Config.Features[0].AlreadyInstalled {
+		t.Error("expected feature to be marked AlreadyInstalled from base label")
+	}
+	// Container should run from the base image directly — no
+	// dc-go-final-* tag created. fakeRuntime would have errored on
+	// BuildImage (returns ErrNotImplemented) if we'd tried.
+	if wsObj.Container.Image != "alpine:3.20" {
+		t.Errorf("container image = %q, want alpine:3.20 (no rebuild needed)", wsObj.Container.Image)
+	}
+}
+
+func TestUp_PrebakedImage_StrictModeRejectsLooseMatch(t *testing.T) {
+	// In strict mode, version 1.5.0 in the label does NOT satisfy a
+	// request for 1.0.0 (which permissive mode would accept).
+	rt := newFakeRuntime()
+	rt.imagesByRef["alpine:3.20"] = &runtime.ImageDetails{
+		ID:   "sha256:base",
+		Tags: []string{"alpine:3.20"},
+		Labels: map[string]string{
+			"devcontainer.metadata": `[{"id":"foo","version":"1.5.0"}]`,
+		},
+	}
+	eng, _ := New(EngineOptions{
+		Runtime:                   rt,
+		StrictFeatureVersionMatch: true,
+	})
+
+	ws := writeImageDevcontainer(t, `{
+		"image":"alpine:3.20",
+		"features": { "ghcr.io/x/foo:1": {"version":"1.0.0"} }
+	}`)
+
+	_, err := eng.Up(context.Background(), UpOptions{
+		LocalWorkspaceFolder: ws,
+		SkipLifecycle:        true,
+	})
+	// In strict mode, the feature is NOT marked installed → fetch
+	// kicks in → fakeRuntime returns ErrNotImplemented from build.
+	// We expect an error.
+	if err == nil {
+		t.Fatal("expected error: feature should not be skipped in strict mode")
 	}
 }
 

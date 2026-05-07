@@ -32,12 +32,31 @@ type metadataEntry struct {
 }
 
 // buildMetadataLabel returns the JSON array for the devcontainer.metadata
-// image label given a build plan. Order: one entry per feature
-// (in install order) followed by a final entry for the resolved
-// devcontainer config. PR9 will prepend the base image's prior label
-// entries; PR8 starts from an empty base.
+// image label given a build plan. Order: prior label entries from the
+// base image (carried through), one entry per newly-installed feature
+// in install order, followed by a final entry for the resolved
+// devcontainer config.
+//
+// AlreadyInstalled features are not duplicated — their entries are
+// already present in plan.BaseImageMetadata.
 func buildMetadataLabel(plan BuildPlan) ([]byte, error) {
-	entries := make([]metadataEntry, 0, len(plan.Features)+1)
+	entries := make([]metadataEntry, 0, len(plan.BaseImageMetadata)+len(plan.Features)+1)
+
+	// Base image label entries first, so they remain in their original
+	// install order even after rebuilds layer more features on top.
+	for _, b := range plan.BaseImageMetadata {
+		entries = append(entries, metadataEntry{
+			ID:           b.ID,
+			Version:      b.Version,
+			ContainerEnv: b.ContainerEnv,
+			Init:         b.Init,
+			Privileged:   b.Privileged,
+			CapAdd:       b.CapAdd,
+			SecurityOpt:  b.SecurityOpt,
+			Entrypoint:   b.Entrypoint,
+		})
+	}
+
 	for _, f := range plan.Features {
 		if f.AlreadyInstalled {
 			// Already in the base image's label — don't duplicate.

@@ -51,6 +51,14 @@ type EngineOptions struct {
 	// feature fetches. Tests use this to drive httptest servers.
 	// Ignored if FeatureStore is set explicitly.
 	FeatureHTTPSClient *http.Client
+
+	// StrictFeatureVersionMatch controls how the engine decides whether
+	// a feature recorded in a base image's devcontainer.metadata label
+	// satisfies the request. Default false (permissive: id match plus
+	// baked semver >= requested). True requires byte-level equality on
+	// the resolved digest — for reproducible builds. See
+	// design/features.md §10.3.
+	StrictFeatureVersionMatch bool
 }
 
 // New constructs an Engine. Returns an error if Runtime is nil or the
