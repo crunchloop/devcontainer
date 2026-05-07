@@ -49,9 +49,11 @@ func (r *Runtime) InspectContainer(ctx context.Context, id string) (*runtime.Con
 			Image: c.Image,
 			State: stateFrom(c.State),
 		},
-		Created:   parseTime(c.Created),
-		StartedAt: stateStartedAt(c.State),
-		Mounts:    convertMounts(c.Mounts),
+		Created:    parseTime(c.Created),
+		StartedAt:  stateStartedAt(c.State),
+		FinishedAt: stateFinishedAt(c.State),
+		ExitCode:   stateExitCode(c.State),
+		Mounts:     convertMounts(c.Mounts),
 	}
 	if c.Config != nil {
 		out.User = c.Config.User
@@ -107,6 +109,20 @@ func stateStartedAt(s *container.State) time.Time {
 		return time.Time{}
 	}
 	return parseTime(s.StartedAt)
+}
+
+func stateFinishedAt(s *container.State) time.Time {
+	if s == nil {
+		return time.Time{}
+	}
+	return parseTime(s.FinishedAt)
+}
+
+func stateExitCode(s *container.State) int {
+	if s == nil {
+		return 0
+	}
+	return s.ExitCode
 }
 
 func parseTime(s string) time.Time {

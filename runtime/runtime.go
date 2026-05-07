@@ -165,6 +165,15 @@ type ContainerDetails struct {
 	Env       []string // KEY=VALUE pairs from the running container
 	Mounts    []MountInspect
 	Labels    map[string]string
+
+	// ExitCode is the container's last exit code. Zero is ambiguous:
+	// either "process is still running" or "process exited cleanly".
+	// Use State to disambiguate (running vs exited).
+	ExitCode int
+
+	// FinishedAt is when the container's main process last exited. Zero
+	// for never-exited containers.
+	FinishedAt time.Time
 }
 
 // ImageDetails is the inspected state of a local image. Labels are

@@ -157,8 +157,23 @@ func TestImageSource_ReattachStopped(t *testing.T) {
 			first.Container.ID, second.Container.ID)
 	}
 	if second.Container.State != runtime.StateRunning {
-		t.Errorf("container state after re-attach = %q", second.Container.State)
+		t.Errorf("container state after re-attach = %q (exit=%d, finishedAt=%s)",
+			second.Container.State, second.Container.ExitCode, second.Container.FinishedAt.Format(time.RFC3339Nano))
+		dumpContainerLogs(t, rt, second.Container.ID)
 	}
+}
+
+// dumpContainerLogs streams the container's stdout+stderr to t.Logf
+// for diagnostics. Used by failing tests to surface what the container
+// actually printed before exiting.
+func dumpContainerLogs(t *testing.T, rt *docker.Runtime, id string) {
+	t.Helper()
+	var buf strings.Builder
+	if err := rt.ContainerLogs(context.Background(), id, &buf, false); err != nil {
+		t.Logf("could not fetch container logs: %v", err)
+		return
+	}
+	t.Logf("=== container logs (%s) ===\n%s\n=== end logs ===", id, buf.String())
 }
 
 func TestImageSource_LifecycleAndIdempotency(t *testing.T) {
