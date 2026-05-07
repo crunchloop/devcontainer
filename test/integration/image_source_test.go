@@ -240,13 +240,13 @@ func mustRead(t *testing.T, ctx context.Context, eng *devcontainer.Engine, ws *d
 	return res.Stdout
 }
 
-func TestImageSource_BuildSourceUnsupported(t *testing.T) {
+func TestImageSource_ComposeSourceUnsupported(t *testing.T) {
 	eng, rt := newEngine(t)
 	defer rt.Close()
 
-	ws := writeWorkspace(t, `{"build":{"dockerfile":"Dockerfile"}}`)
+	ws := writeWorkspace(t, `{"dockerComposeFile":"compose.yml","service":"app"}`)
 	_, err := eng.Up(context.Background(), devcontainer.UpOptions{LocalWorkspaceFolder: ws})
 	if !errors.Is(err, runtime.ErrNotImplemented) {
-		t.Errorf("expected ErrNotImplemented for build source, got %v", err)
+		t.Errorf("expected ErrNotImplemented for compose source, got %v", err)
 	}
 }

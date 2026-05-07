@@ -94,12 +94,9 @@ func containerName(id WorkspaceID) string {
 	return "devcontainer-" + string(id)
 }
 
-// errBuildSourceNotImplemented and errComposeSourceNotImplemented are returned
-// by Engine.Up for source kinds whose runtime path lands in later milestones.
-var (
-	errBuildSourceNotImplemented   = fmt.Errorf("build source: %w", runtime.ErrNotImplemented)
-	errComposeSourceNotImplemented = fmt.Errorf("compose source: %w", runtime.ErrNotImplemented)
-)
+// errComposeSourceNotImplemented is returned by Engine.Up for compose source
+// configs whose runtime path lands in M4.
+var errComposeSourceNotImplemented = fmt.Errorf("compose source: %w", runtime.ErrNotImplemented)
 
 // ctxIfDone returns ctx.Err() if ctx is cancelled, nil otherwise. Used at
 // the entry of every public Engine method so that a cancelled ctx never

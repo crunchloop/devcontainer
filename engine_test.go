@@ -220,14 +220,17 @@ func TestUp_ImageSource_FreshCreate(t *testing.T) {
 	}
 }
 
-func TestUp_BuildSourceErrors(t *testing.T) {
+func TestUp_BuildSourceInvokesBuildImage(t *testing.T) {
+	// fakeRuntime returns runtime.ErrNotImplemented from BuildImage; this
+	// asserts that Up actually reaches the build path for *BuildSource
+	// (rather than short-circuiting with a "not implemented" of its own).
 	rt := newFakeRuntime()
 	eng, _ := New(EngineOptions{Runtime: rt})
 	ws := writeImageDevcontainer(t, `{"build":{"dockerfile":"Dockerfile"}}`)
 
 	_, err := eng.Up(context.Background(), UpOptions{LocalWorkspaceFolder: ws})
 	if !errors.Is(err, runtime.ErrNotImplemented) {
-		t.Fatalf("expected ErrNotImplemented, got %v", err)
+		t.Fatalf("expected ErrNotImplemented (from fake BuildImage), got %v", err)
 	}
 }
 

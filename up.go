@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/crunchloop/devcontainer/config"
+	"github.com/crunchloop/devcontainer/feature"
 	"github.com/crunchloop/devcontainer/runtime"
 )
 
@@ -90,7 +92,7 @@ func (e *Engine) Up(ctx context.Context, opts UpOptions) (*Workspace, error) {
 	case *config.ImageSource:
 		// Supported in M2.
 	case *config.BuildSource:
-		return nil, errBuildSourceNotImplemented
+		// Supported in M3 / PR8.
 	case *config.ComposeSource:
 		return nil, errComposeSourceNotImplemented
 	default:
@@ -138,13 +140,17 @@ func (e *Engine) attachExisting(ctx context.Context, c *runtime.Container, cfg *
 }
 
 func (e *Engine) createFresh(ctx context.Context, cfg *config.ResolvedConfig, opts UpOptions) (*Workspace, error) {
-	imgSrc := cfg.Source.(*config.ImageSource)
-
-	if err := e.ensureImage(ctx, imgSrc.Image, opts.PullPolicy, opts.Events); err != nil {
+	baseImage, err := e.prepareBaseImage(ctx, cfg, opts)
+	if err != nil {
 		return nil, err
 	}
 
-	spec := buildRunSpec(cfg, imgSrc.Image)
+	finalImage, err := e.layerFeatures(ctx, cfg, baseImage, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	spec := buildRunSpec(cfg, finalImage)
 	c, err := e.runtime.RunContainer(ctx, spec)
 	if err != nil {
 		return nil, fmt.Errorf("create container: %w", err)
@@ -156,6 +162,131 @@ func (e *Engine) createFresh(ctx context.Context, cfg *config.ResolvedConfig, op
 		return nil, fmt.Errorf("start container %s: %w", c.ID, err)
 	}
 	return e.buildWorkspace(ctx, c.ID, cfg, opts.LocalEnv)
+}
+
+// prepareBaseImage produces the image reference to use as the base for
+// feature layering: pulled (image source) or built (build source).
+func (e *Engine) prepareBaseImage(ctx context.Context, cfg *config.ResolvedConfig, opts UpOptions) (string, error) {
+	switch s := cfg.Source.(type) {
+	case *config.ImageSource:
+		if err := e.ensureImage(ctx, s.Image, opts.PullPolicy, opts.Events); err != nil {
+			return "", err
+		}
+		return s.Image, nil
+
+	case *config.BuildSource:
+		tag := "dc-go-base-" + cfg.DevcontainerID + ":latest"
+		_, err := e.runtime.BuildImage(ctx, runtime.BuildSpec{
+			ContextPath: s.Context,
+			Dockerfile:  s.Dockerfile,
+			Tag:         tag,
+			Args:        s.Args,
+			Target:      s.Target,
+			CacheFrom:   s.CacheFrom,
+		}, opts.Events)
+		if err != nil {
+			return "", fmt.Errorf("build base image from %s: %w", s.Context, err)
+		}
+		return tag, nil
+
+	default:
+		return "", fmt.Errorf("unsupported source kind for base image: %T", cfg.Source)
+	}
+}
+
+// layerFeatures fetches each feature in cfg.Features (where not already
+// flagged AlreadyInstalled), re-orders by full DAG, generates a
+// feature-extending Dockerfile, and builds it. Returns the tag of the
+// final image. If no features need installing, returns baseImage as-is.
+//
+// Side effect: cfg.Features entries are mutated in place to populate
+// Dir, Metadata, ResolvedRef on fetch. Caller's Workspace.Config sees
+// the post-fetch state.
+func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, baseImage string, opts UpOptions) (string, error) {
+	if len(cfg.Features) == 0 {
+		return baseImage, nil
+	}
+
+	configDir := ""
+	// LocalWorkspaceFolder is always populated by Resolve; ConfigPath
+	// (where local features are relative to) lives only on the
+	// ResolveOptions. We re-derive configDir from what the user
+	// supplied via UpOptions; if neither is supplied use
+	// LocalWorkspaceFolder/.devcontainer as a sensible fallback.
+	if opts.ConfigPath != "" {
+		configDir = filepath.Dir(opts.ConfigPath)
+	} else {
+		configDir = filepath.Join(cfg.LocalWorkspaceFolder, ".devcontainer")
+	}
+
+	// Fetch each not-yet-installed feature. Resolve refs in place.
+	for i := range cfg.Features {
+		f := &cfg.Features[i]
+		if f.AlreadyInstalled || f.Dir != "" {
+			continue
+		}
+		ref := f.Ref
+		if f.SourceKind == config.FeatureSourceLocal {
+			ref = feature.ResolveLocalRef(configDir, f.Ref)
+		}
+		fetched, err := e.featureStore.Fetch(ctx, ref, f.SourceKind)
+		if err != nil {
+			return "", fmt.Errorf("fetch feature %s: %w", f.Ref, err)
+		}
+		f.Dir = fetched.Dir
+		f.ResolvedRef = fetched.ResolvedRef
+		f.Metadata = fetched.Metadata
+
+		// Apply spec defaults + validate against the now-known options.
+		merged, mwarns, err := feature.MergeOptions(f.Metadata, f.Options)
+		if err != nil {
+			return "", fmt.Errorf("feature %s: %w", f.Ref, err)
+		}
+		f.Options = merged
+		cfg.Warnings = append(cfg.Warnings, mwarns...)
+	}
+
+	// Re-order with fully-populated metadata so installsAfter / dependsOn apply.
+	ordered, oWarns, err := feature.Order(cfg.Features, nil)
+	if err != nil {
+		return "", err
+	}
+	cfg.Features = ordered
+	cfg.Warnings = append(cfg.Warnings, oWarns...)
+
+	plan := feature.BuildPlan{
+		BaseImage:     baseImage,
+		Features:      cfg.Features,
+		RemoteUser:    cfg.RemoteUser,
+		ContainerUser: cfg.ContainerUser,
+	}
+	if !plan.HasWork() {
+		return baseImage, nil
+	}
+
+	tmp, err := os.MkdirTemp("", "dc-go-build-*")
+	if err != nil {
+		return "", fmt.Errorf("create build context tmpdir: %w", err)
+	}
+	defer os.RemoveAll(tmp)
+
+	if err := feature.GenerateBuildContext(plan, tmp); err != nil {
+		return "", fmt.Errorf("generate feature build context: %w", err)
+	}
+
+	finalTag := "dc-go-final-" + cfg.DevcontainerID + ":latest"
+	_, err = e.runtime.BuildImage(ctx, runtime.BuildSpec{
+		ContextPath: tmp,
+		Dockerfile:  "Dockerfile",
+		Tag:         finalTag,
+		Args: map[string]string{
+			"_DEV_CONTAINERS_BASE_IMAGE": baseImage,
+		},
+	}, opts.Events)
+	if err != nil {
+		return "", fmt.Errorf("build feature-extended image: %w", err)
+	}
+	return finalTag, nil
 }
 
 func (e *Engine) ensureImage(ctx context.Context, ref string, policy PullPolicy, events chan<- runtime.BuildEvent) error {
