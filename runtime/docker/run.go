@@ -16,7 +16,14 @@ import (
 
 // keepAliveCmd is what we set on a container created with
 // OverrideCommand=true so it stays running for exec-based interaction.
-var keepAliveCmd = []string{"/bin/sh", "-c", "while sleep 1000; do :; done"}
+//
+// Uses `tail -f /dev/null` (no shell, no loop) — tail blocks reading
+// /dev/null forever and survives stop+start cycles cleanly. The
+// previous `sh -c "while sleep 1000; do :; done"` form occasionally
+// failed to come back up after a stop on slower runners, with the
+// container reporting "exited" state shortly after the daemon
+// reported it as running.
+var keepAliveCmd = []string{"tail", "-f", "/dev/null"}
 
 func (r *Runtime) RunContainer(ctx context.Context, spec runtime.RunSpec) (*runtime.Container, error) {
 	cfg := &container.Config{
