@@ -21,7 +21,7 @@ type DiskStoreOptions struct {
 
 	// OCIKeychain provides credentials for OCI feature pulls. Nil falls
 	// back to authn.DefaultKeychain (ambient docker config / env vars /
-	// credential helpers). DAP-style callers with short-lived tokens
+	// credential helpers). Callers with short-lived registry tokens
 	// supply a custom Keychain that returns fresh credentials per call.
 	OCIKeychain authn.Keychain
 

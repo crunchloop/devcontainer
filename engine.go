@@ -38,9 +38,10 @@ type EngineOptions struct {
 
 	// OCIKeychain provides credentials for OCI feature pulls. Nil falls
 	// back to authn.DefaultKeychain (ambient docker config / env vars /
-	// credential helpers). DAP-style callers with short-lived tokens
-	// supply a custom Keychain; see design/features.md §10.1. Ignored
-	// if FeatureStore is set explicitly.
+	// credential helpers). Callers with short-lived registry tokens
+	// (e.g. ECR via STS, GCR via metadata-server) supply a custom
+	// Keychain that returns fresh credentials per call. Ignored if
+	// FeatureStore is set explicitly.
 	OCIKeychain authn.Keychain
 
 	// FeatureDownloadHeaders are additional headers to send on HTTPS

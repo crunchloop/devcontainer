@@ -263,25 +263,29 @@ func TestResolveBytes_OverrideFeatureInstallOrder(t *testing.T) {
 }
 
 func TestResolveBytes_Customizations(t *testing.T) {
+	// Tool-namespaced customizations are passed through as
+	// json.RawMessage. Each consumer decodes its own namespace; the
+	// engine itself never interprets these. We use "acme" here as a
+	// placeholder for any caller-defined namespace.
 	cfg := resolveJSON(t, `{
 		"image":"alpine",
 		"customizations": {
-			"dap": {"postCacheBuild":["./script.sh"]},
+			"acme": {"hooks":["./script.sh"]},
 			"vscode": {"extensions":["golang.go"]}
 		}
 	}`, ResolveInput{})
 	if len(cfg.Customizations) != 2 {
 		t.Fatalf("Customizations count = %d", len(cfg.Customizations))
 	}
-	dap := cfg.Customizations["dap"]
-	var dapDecoded struct {
-		PostCacheBuild []string `json:"postCacheBuild"`
+	acme := cfg.Customizations["acme"]
+	var acmeDecoded struct {
+		Hooks []string `json:"hooks"`
 	}
-	if err := json.Unmarshal(dap, &dapDecoded); err != nil {
-		t.Fatalf("dap decode: %v", err)
+	if err := json.Unmarshal(acme, &acmeDecoded); err != nil {
+		t.Fatalf("acme decode: %v", err)
 	}
-	if !reflect.DeepEqual(dapDecoded.PostCacheBuild, []string{"./script.sh"}) {
-		t.Errorf("PostCacheBuild = %+v", dapDecoded.PostCacheBuild)
+	if !reflect.DeepEqual(acmeDecoded.Hooks, []string{"./script.sh"}) {
+		t.Errorf("Hooks = %+v", acmeDecoded.Hooks)
 	}
 }
 
