@@ -9,15 +9,21 @@ import (
 	"github.com/crunchloop/devcontainer/runtime"
 )
 
-// Runtime is the Docker Engine implementation of runtime.Runtime.
+// Runtime is the Docker Engine implementation of runtime.Runtime
+// (and runtime.ComposeRuntime).
 type Runtime struct {
 	api *client.Client
+
+	composeState composeState
 }
 
-// Compile-time assertion that *Runtime satisfies the runtime.Runtime
-// interface. If a method is missing or has the wrong signature this
-// fails the build.
-var _ runtime.Runtime = (*Runtime)(nil)
+// Compile-time assertions: *Runtime satisfies the core Runtime
+// interface and the optional ComposeRuntime sub-interface. Missing or
+// mismatched signatures fail the build.
+var (
+	_ runtime.Runtime        = (*Runtime)(nil)
+	_ runtime.ComposeRuntime = (*Runtime)(nil)
+)
 
 // Options configure New. The zero value is valid: it builds a client
 // that reads DOCKER_HOST/DOCKER_API_VERSION/etc. from the environment

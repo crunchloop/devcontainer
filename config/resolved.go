@@ -317,6 +317,7 @@ const (
 	WarnUnknownVariable         WarningCode = "unknown_variable"
 	WarnDeepFeatureChain        WarningCode = "deep_feature_chain"
 	WarnUnknownFeatureOption    WarningCode = "unknown_feature_option"
+	WarnComposePortsIgnored     WarningCode = "compose_ports_ignored"
 )
 
 // Warning is a non-fatal diagnostic accumulated during parse, merge, or

@@ -6,6 +6,77 @@ import (
 	"time"
 )
 
+// ComposeRuntime is the optional sub-interface a Runtime implements
+// when it can drive a Docker Compose project. Engine.Up type-asserts
+// this when handling *config.ComposeSource and returns
+// runtime.ErrNotImplemented if the active runtime doesn't satisfy it.
+//
+// All compose orchestration goes through these three calls plus a
+// version probe (handled internally by the implementation). Container
+// interaction (Exec, Inspect, Logs, lifecycle markers) stays on the
+// regular Runtime methods, against the container id resolved by
+// ComposeContainerID.
+type ComposeRuntime interface {
+	// ComposeUp brings the project up in the background (-d).
+	// Compose decides what to (re)build via its own logic; we feed it
+	// override files that pin the primary service's image to a tag we
+	// already built, so it does not rebuild that one.
+	ComposeUp(ctx context.Context, spec ComposeUpSpec, events chan<- BuildEvent) error
+
+	// ComposeDown stops and (optionally) removes the project's
+	// containers, networks, and volumes.
+	ComposeDown(ctx context.Context, spec ComposeDownSpec) error
+
+	// ComposeContainerID returns the container id for a service in a
+	// running project. Used by Engine.Up to pick out the primary
+	// service's container after `compose up -d` settles. Returns
+	// empty string if the service isn't running.
+	ComposeContainerID(ctx context.Context, spec ComposePsSpec, service string) (string, error)
+}
+
+// ComposeUpSpec configures ComposeUp.
+type ComposeUpSpec struct {
+	// Files lists compose files in declaration order — user files
+	// first, then our generated overrides (build, run). Each becomes
+	// a `-f <path>` flag.
+	Files []string
+
+	// ProjectName is passed via -p / --project-name. Engine derives
+	// it from the workspace id (`dc-<devcontainerId>` per PRD §12.5).
+	ProjectName string
+
+	// Services optionally restricts which services to start. Empty =
+	// all services in the project (compose default).
+	Services []string
+
+	// WorkingDir is the directory `docker compose` runs in. Used as
+	// the base for compose's relative-path resolution. Engine sets
+	// this to the workspace folder.
+	WorkingDir string
+}
+
+// ComposeDownSpec configures ComposeDown.
+type ComposeDownSpec struct {
+	Files       []string
+	ProjectName string
+	WorkingDir  string
+
+	// RemoveImages, when true, passes --rmi local (removes images
+	// the project built locally; spares pulled images).
+	RemoveImages bool
+
+	// RemoveVolumes, when true, passes --volumes (removes named
+	// volumes declared by the project plus anonymous volumes).
+	RemoveVolumes bool
+}
+
+// ComposePsSpec configures ComposeContainerID.
+type ComposePsSpec struct {
+	Files       []string
+	ProjectName string
+	WorkingDir  string
+}
+
 // Runtime is the container backend. Implementations must be safe for
 // concurrent use; the engine may issue concurrent Inspect / Exec calls
 // against the same container.

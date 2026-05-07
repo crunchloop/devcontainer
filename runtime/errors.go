@@ -53,6 +53,33 @@ func (e *ExecFailedError) Error() string {
 	return fmt.Sprintf("exec failed (exit=%d): %s", e.ExitCode, e.Stderr)
 }
 
+// ComposeUnavailableError indicates the `docker compose` v2 plugin is
+// not installed / not on PATH. Returned by ComposeRuntime methods on
+// first attempted use; cached on the runtime so subsequent calls
+// short-circuit with the same error.
+type ComposeUnavailableError struct {
+	Err error
+}
+
+func (e *ComposeUnavailableError) Error() string {
+	return fmt.Sprintf("docker compose v2 unavailable (install Docker Compose v2): %v", e.Err)
+}
+
+func (e *ComposeUnavailableError) Unwrap() error { return e.Err }
+
+// ComposeFailedError wraps a non-zero exit from `docker compose`,
+// preserving the captured stderr for diagnostics. Distinct from
+// ComposeUnavailableError, which means the binary itself isn't there.
+type ComposeFailedError struct {
+	Args     []string
+	ExitCode int
+	Stderr   string
+}
+
+func (e *ComposeFailedError) Error() string {
+	return fmt.Sprintf("docker compose failed (exit=%d): %s", e.ExitCode, e.Stderr)
+}
+
 // DaemonUnavailableError indicates the container engine daemon is
 // unreachable (socket missing, permission denied, etc.).
 type DaemonUnavailableError struct {
