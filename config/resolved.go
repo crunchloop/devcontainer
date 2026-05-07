@@ -139,11 +139,24 @@ func (c Command) IsEmpty() bool {
 	return c.Shell == "" && len(c.Exec) == 0
 }
 
-// ResolvedFeature is a feature after registry resolution and option merging.
-// Position in ResolvedConfig.Features reflects install order.
+// ResolvedFeature is a feature reference plus user-supplied options. It
+// is progressively populated through the pipeline:
+//
+//   - After config.Resolve: Ref, Options (raw user input), SourceKind
+//     are populated. ResolvedRef, Dir, Metadata are empty;
+//     AlreadyInstalled is false.
+//   - After feature.Order on the partial set: position in the slice
+//     reflects overrideFeatureInstallOrder if the user supplied it.
+//   - After Engine.Up reads the base image's devcontainer.metadata
+//     label: AlreadyInstalled may flip true; in that case fetch is
+//     skipped and Dir/Metadata stay empty.
+//   - After feature.Store.Fetch: Dir, ResolvedRef, Metadata populated.
+//   - After feature.Order on the full set: position reflects the
+//     dependsOn / installsAfter DAG.
 type ResolvedFeature struct {
 	Ref              string
 	ResolvedRef      string
+	Dir              string
 	Metadata         FeatureMetadata
 	Options          map[string]any
 	SourceKind       FeatureSourceKind
@@ -302,6 +315,8 @@ const (
 	WarnUnresolvedLocalEnv      WarningCode = "unresolved_local_env"
 	WarnUnresolvedContainerEnv  WarningCode = "unresolved_container_env"
 	WarnUnknownVariable         WarningCode = "unknown_variable"
+	WarnDeepFeatureChain        WarningCode = "deep_feature_chain"
+	WarnUnknownFeatureOption    WarningCode = "unknown_feature_option"
 )
 
 // Warning is a non-fatal diagnostic accumulated during parse, merge, or

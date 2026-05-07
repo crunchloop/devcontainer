@@ -182,25 +182,83 @@ func TestResolveBytes_Substitution(t *testing.T) {
 	}
 }
 
-func TestResolveBytes_FeaturesWarning(t *testing.T) {
+func TestResolveBytes_FeaturesPartial(t *testing.T) {
+	// Resolve populates Features partially: Ref, Options, SourceKind set;
+	// fetched fields (Dir, Metadata, ResolvedRef) empty until the engine
+	// build path runs. AlreadyInstalled is false until the metadata label
+	// read in the engine flips it.
 	cfg := resolveJSON(t, `{
 		"image":"alpine",
 		"features": {
-			"ghcr.io/devcontainers/features/node:1": {}
+			"ghcr.io/devcontainers/features/node:1": {"version": "lts"},
+			"ghcr.io/devcontainers/features/git:1": "2.40.0",
+			"./local-feature": {}
 		}
 	}`, ResolveInput{})
-	if len(cfg.Features) != 0 {
-		t.Errorf("Features should be empty in this milestone, got %+v", cfg.Features)
+
+	if len(cfg.Features) != 3 {
+		t.Fatalf("Features count = %d, want 3", len(cfg.Features))
 	}
-	found := false
+
+	byRef := make(map[string]ResolvedFeature, len(cfg.Features))
+	for _, f := range cfg.Features {
+		byRef[f.Ref] = f
+	}
+
+	node := byRef["ghcr.io/devcontainers/features/node:1"]
+	if node.SourceKind != FeatureSourceOCI {
+		t.Errorf("node SourceKind = %q", node.SourceKind)
+	}
+	if node.Options["version"] != "lts" {
+		t.Errorf("node options = %+v", node.Options)
+	}
+	if node.Dir != "" || node.Metadata.ID != "" {
+		t.Errorf("node should have empty fetched fields, got Dir=%q Metadata=%+v", node.Dir, node.Metadata)
+	}
+
+	git := byRef["ghcr.io/devcontainers/features/git:1"]
+	if git.Options["version"] != "2.40.0" {
+		t.Errorf("git shorthand-version not parsed: %+v", git.Options)
+	}
+
+	local := byRef["./local-feature"]
+	if local.SourceKind != FeatureSourceLocal {
+		t.Errorf("local SourceKind = %q", local.SourceKind)
+	}
+
 	for _, w := range cfg.Warnings {
 		if w.Code == WarnUnsupportedFeatureField {
-			found = true
-			break
+			t.Errorf("WarnUnsupportedFeatureField should no longer appear: %v", w)
 		}
 	}
-	if !found {
-		t.Errorf("expected WarnUnsupportedFeatureField, got warnings: %v", cfg.Warnings)
+}
+
+func TestResolveBytes_OverrideFeatureInstallOrder(t *testing.T) {
+	cfg := resolveJSON(t, `{
+		"image":"alpine",
+		"features": {
+			"ghcr.io/devcontainers/features/node:1": {},
+			"ghcr.io/devcontainers/features/git:1": {},
+			"ghcr.io/devcontainers/features/python:3": {}
+		},
+		"overrideFeatureInstallOrder": [
+			"ghcr.io/devcontainers/features/git",
+			"ghcr.io/devcontainers/features/node"
+		]
+	}`, ResolveInput{})
+
+	if len(cfg.Features) != 3 {
+		t.Fatalf("Features count = %d", len(cfg.Features))
+	}
+	wantOrder := []string{
+		"ghcr.io/devcontainers/features/git:1",
+		"ghcr.io/devcontainers/features/node:1",
+		"ghcr.io/devcontainers/features/python:3",
+	}
+	for i, want := range wantOrder {
+		if cfg.Features[i].Ref != want {
+			t.Errorf("Features[%d].Ref = %q, want %q", i, cfg.Features[i].Ref, want)
+		}
 	}
 }
 

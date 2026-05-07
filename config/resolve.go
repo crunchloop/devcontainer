@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
+	"strings"
 )
 
 // ResolveInput is the contextual data needed to produce a ResolvedConfig
@@ -133,15 +135,143 @@ func resolveFromRaw(raw *rawConfig, input ResolveInput) (*ResolvedConfig, error)
 	substituteAll(out, subCtx, input.ConfigPath)
 
 	if len(raw.Features) > 0 {
-		out.Warnings = append(out.Warnings, Warning{
-			Code:    WarnUnsupportedFeatureField,
-			Message: fmt.Sprintf("features resolution is not implemented in this milestone; %d feature(s) ignored", len(raw.Features)),
-			Path:    "/features",
-			Source:  input.ConfigPath,
-		})
+		feats, fwarns := buildPartialFeatures(raw.Features, raw.OverrideFeatureInstallOrder, input.ConfigPath)
+		out.Features = feats
+		out.Warnings = append(out.Warnings, fwarns...)
 	}
 
 	return out, nil
+}
+
+// buildPartialFeatures parses the features map into ResolvedFeature
+// entries with Ref, Options, and SourceKind populated. Metadata, Dir,
+// ResolvedRef, and AlreadyInstalled remain empty until the engine fetches
+// each feature in the build path.
+//
+// overrideOrder applies overrideFeatureInstallOrder per spec: matching
+// entries (by id, ignoring tag/digest) lead the slice in declaration
+// order; remaining features follow alphabetically by ref for determinism.
+// Full DAG ordering with dependsOn/installsAfter happens after fetch.
+func buildPartialFeatures(rawFeatures map[string]json.RawMessage, overrideOrder []string, source string) ([]ResolvedFeature, []Warning) {
+	if len(rawFeatures) == 0 {
+		return nil, nil
+	}
+
+	type entry struct {
+		ref     string
+		feature ResolvedFeature
+	}
+	all := make([]entry, 0, len(rawFeatures))
+	var warnings []Warning
+
+	for ref, rawOpts := range rawFeatures {
+		opts, w := parseFeatureOptions(rawOpts, ref, source)
+		warnings = append(warnings, w...)
+		all = append(all, entry{
+			ref: ref,
+			feature: ResolvedFeature{
+				Ref:        ref,
+				Options:    opts,
+				SourceKind: classifyFeatureRef(ref),
+			},
+		})
+	}
+
+	// Sort baseline alphabetically for determinism.
+	sort.Slice(all, func(i, j int) bool { return all[i].ref < all[j].ref })
+
+	// Apply overrideFeatureInstallOrder: matching ids first in declaration order.
+	out := make([]ResolvedFeature, 0, len(all))
+	taken := make(map[string]bool, len(all))
+	for _, ord := range overrideOrder {
+		for _, e := range all {
+			if !taken[e.ref] && featureIDMatch(e.ref, ord) {
+				out = append(out, e.feature)
+				taken[e.ref] = true
+			}
+		}
+	}
+	for _, e := range all {
+		if !taken[e.ref] {
+			out = append(out, e.feature)
+		}
+	}
+	return out, warnings
+}
+
+// parseFeatureOptions decodes the value of a features map entry. Spec
+// allows three forms:
+//   - object: {"version": "1.2.3", "extras": "all"}
+//   - string: "1.2.3" → applied as the "version" option (resolved when
+//     metadata is fetched and confirms a version option exists)
+//   - empty object / null: no user options
+//
+// Defaults are applied later (after fetching the feature's metadata).
+func parseFeatureOptions(raw json.RawMessage, ref, source string) (map[string]any, []Warning) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	// Try object first.
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err == nil {
+		return obj, nil
+	}
+	// Then string (shorthand).
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return map[string]any{"version": s}, nil
+	}
+	// Then null / empty.
+	var n any
+	if err := json.Unmarshal(raw, &n); err == nil && n == nil {
+		return nil, nil
+	}
+	return nil, []Warning{{
+		Code:    WarnUnknownField,
+		Message: fmt.Sprintf("features[%q]: value must be an object, string, or null", ref),
+		Path:    "/features/" + ref,
+		Source:  source,
+	}}
+}
+
+// classifyFeatureRef maps a features-map key to its source kind based
+// on the ref shape. Matches the spec's rules:
+//   - "./..." or "../..." or absolute path → Local
+//   - "https://..." → HTTPS
+//   - everything else → OCI (the canonical "ghcr.io/..." form)
+func classifyFeatureRef(ref string) FeatureSourceKind {
+	switch {
+	case strings.HasPrefix(ref, "./") || strings.HasPrefix(ref, "../") || strings.HasPrefix(ref, "/"):
+		return FeatureSourceLocal
+	case strings.HasPrefix(ref, "https://") || strings.HasPrefix(ref, "http://"):
+		return FeatureSourceHTTPS
+	default:
+		return FeatureSourceOCI
+	}
+}
+
+// featureIDMatch reports whether a feature ref matches an
+// overrideFeatureInstallOrder entry. The spec compares "the Feature id
+// (without the semantic version)". For OCI refs we strip everything
+// after the last colon (tag) and after any '@' (digest).
+func featureIDMatch(ref, override string) bool {
+	return featureID(ref) == featureID(override)
+}
+
+func featureID(ref string) string {
+	// Strip @digest first, then trailing :tag.
+	if i := strings.LastIndex(ref, "@"); i >= 0 {
+		ref = ref[:i]
+	}
+	// For OCI refs, the last ':' separates the tag. Local paths and
+	// HTTPS URLs typically don't have trailing :tag, so this is safe.
+	if i := strings.LastIndex(ref, ":"); i >= 0 {
+		// Don't strip the scheme of an HTTPS ref.
+		if !strings.Contains(ref[:i], "://") || strings.LastIndex(ref, "/") > i {
+			ref = ref[:i]
+		}
+	}
+	return ref
 }
 
 func determineSource(raw *rawConfig, configDir string) (Source, []Warning, error) {
