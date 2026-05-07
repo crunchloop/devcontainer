@@ -2,7 +2,6 @@ package feature
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -89,13 +88,11 @@ func TestDiskStore_FetchLocal_RejectsRelativePath(t *testing.T) {
 	}
 }
 
-func TestDiskStore_OCIAndHTTPSAreNotImplemented(t *testing.T) {
+func TestDiskStore_UnknownSourceKindErrors(t *testing.T) {
 	store, _ := NewDiskStore(DiskStoreOptions{CacheDir: t.TempDir()})
-	for _, kind := range []config.FeatureSourceKind{config.FeatureSourceOCI, config.FeatureSourceHTTPS} {
-		_, err := store.Fetch(context.Background(), "irrelevant", kind)
-		if !errors.Is(err, ErrNotImplemented) {
-			t.Errorf("kind=%s: want ErrNotImplemented, got %v", kind, err)
-		}
+	_, err := store.Fetch(context.Background(), "ref", config.FeatureSourceKind("bogus"))
+	if err == nil {
+		t.Fatal("expected error for unknown source kind")
 	}
 }
 

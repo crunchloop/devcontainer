@@ -3,8 +3,11 @@ package feature
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
+
+	"github.com/google/go-containerregistry/pkg/authn"
 
 	"github.com/crunchloop/devcontainer/config"
 )
@@ -15,12 +18,31 @@ type DiskStoreOptions struct {
 	// artifacts. Default: os.UserCacheDir()/devcontainer-go/features.
 	// Local-source features are not cached (the source path IS the cache).
 	CacheDir string
+
+	// OCIKeychain provides credentials for OCI feature pulls. Nil falls
+	// back to authn.DefaultKeychain (ambient docker config / env vars /
+	// credential helpers). DAP-style callers with short-lived tokens
+	// supply a custom Keychain that returns fresh credentials per call.
+	OCIKeychain authn.Keychain
+
+	// HTTPSHeaders are additional headers to send on HTTPS feature
+	// fetches. Useful for Authorization on private servers.
+	HTTPSHeaders map[string]string
+
+	// HTTPSClient overrides the default *http.Client used for HTTPS
+	// fetches. If nil, the package's default client (5-minute timeout)
+	// is used. Tests substitute this to drive httptest servers.
+	HTTPSClient *http.Client
 }
 
-// DiskStore is the production Store implementation. PR6 supports only
-// FeatureSourceLocal; OCI and HTTPS arrive in PR7.
+// DiskStore is the production Store implementation. Supports
+// FeatureSourceLocal (PR6), FeatureSourceOCI (PR7), and
+// FeatureSourceHTTPS (PR7).
 type DiskStore struct {
-	cacheDir string
+	cacheDir     string
+	ociKeychain  authn.Keychain
+	httpsHeaders map[string]string
+	httpsClient  *http.Client
 }
 
 // NewDiskStore constructs a DiskStore. The cache directory is created if
@@ -37,7 +59,16 @@ func NewDiskStore(opts DiskStoreOptions) (*DiskStore, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create cache dir %s: %w", dir, err)
 	}
-	return &DiskStore{cacheDir: dir}, nil
+	kc := opts.OCIKeychain
+	if kc == nil {
+		kc = authn.DefaultKeychain
+	}
+	return &DiskStore{
+		cacheDir:     dir,
+		ociKeychain:  kc,
+		httpsHeaders: opts.HTTPSHeaders,
+		httpsClient:  opts.HTTPSClient,
+	}, nil
 }
 
 // CacheDir returns the on-disk cache root. Useful for debugging and
@@ -50,9 +81,9 @@ func (s *DiskStore) Fetch(ctx context.Context, ref string, kind config.FeatureSo
 	case config.FeatureSourceLocal:
 		return fetchLocal(ref)
 	case config.FeatureSourceOCI:
-		return Fetched{}, fmt.Errorf("OCI feature %q: %w", ref, ErrNotImplemented)
+		return s.fetchOCI(ctx, ref)
 	case config.FeatureSourceHTTPS:
-		return Fetched{}, fmt.Errorf("HTTPS feature %q: %w", ref, ErrNotImplemented)
+		return s.fetchHTTPS(ctx, ref)
 	default:
 		return Fetched{}, fmt.Errorf("unknown source kind: %s", kind)
 	}

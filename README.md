@@ -26,7 +26,7 @@ implementation of the spec, designed to be embedded.
 go get github.com/crunchloop/devcontainer
 ```
 
-Requires Go 1.24+ and Docker (with the Compose v2 plugin if you use compose
+Requires Go 1.25+ and Docker (with the Compose v2 plugin if you use compose
 sources).
 
 ## Quick start
