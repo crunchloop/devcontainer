@@ -105,6 +105,15 @@ func resolveFromRaw(raw *rawConfig, input ResolveInput) (*ResolvedConfig, error)
 		})
 	}
 
+	if _, isCompose := out.Source.(*ComposeSource); isCompose && len(out.ForwardPorts) > 0 {
+		out.Warnings = append(out.Warnings, Warning{
+			Code:    WarnComposePortsIgnored,
+			Message: "forwardPorts is informational on compose source; declare ports in your compose file's ports: directive",
+			Path:    "/forwardPorts",
+			Source:  input.ConfigPath,
+		})
+	}
+
 	out.PortsAttributes = convertPortsAttributes(raw.PortsAttributes)
 	out.OtherPortsAttributes = convertPortAttributes(raw.OtherPortsAttributes)
 	out.HostRequirements = convertHostRequirements(raw.HostRequirements)

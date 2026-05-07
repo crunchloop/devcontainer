@@ -285,6 +285,50 @@ func TestResolveBytes_Customizations(t *testing.T) {
 	}
 }
 
+func TestResolveBytes_ComposePortsIgnored(t *testing.T) {
+	cfg := resolveJSON(t, `{
+		"dockerComposeFile": "compose.yml",
+		"service": "app",
+		"forwardPorts": [3000, 8080]
+	}`, ResolveInput{})
+	found := false
+	for _, w := range cfg.Warnings {
+		if w.Code == WarnComposePortsIgnored && w.Path == "/forwardPorts" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected WarnComposePortsIgnored on compose source with forwardPorts, got %v", cfg.Warnings)
+	}
+}
+
+func TestResolveBytes_ComposeWithoutPortsNoWarning(t *testing.T) {
+	cfg := resolveJSON(t, `{
+		"dockerComposeFile": "compose.yml",
+		"service": "app"
+	}`, ResolveInput{})
+	for _, w := range cfg.Warnings {
+		if w.Code == WarnComposePortsIgnored {
+			t.Errorf("unexpected WarnComposePortsIgnored: %v", w)
+		}
+	}
+}
+
+func TestResolveBytes_ImageWithPortsNoWarning(t *testing.T) {
+	// Image source with forwardPorts is fine — we'd actuate them in
+	// a future PR (currently informational on all source kinds, but
+	// only compose explicitly warns about it).
+	cfg := resolveJSON(t, `{
+		"image":"alpine",
+		"forwardPorts":[3000]
+	}`, ResolveInput{})
+	for _, w := range cfg.Warnings {
+		if w.Code == WarnComposePortsIgnored {
+			t.Errorf("ComposePortsIgnored should not fire on image source: %v", w)
+		}
+	}
+}
+
 func TestResolveBytes_DeprecatedAppPort(t *testing.T) {
 	cfg := resolveJSON(t, `{"image":"alpine","appPort":3000}`, ResolveInput{})
 	found := false
