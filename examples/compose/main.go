@@ -67,7 +67,7 @@ services:
 	if err != nil {
 		log.Fatalf("docker daemon: %v", err)
 	}
-	defer rt.Close()
+	defer func() { _ = rt.Close() }()
 
 	eng, err := devcontainer.New(devcontainer.EngineOptions{Runtime: rt})
 	if err != nil {
@@ -82,10 +82,14 @@ services:
 	if err != nil {
 		log.Fatalf("up: %v", err)
 	}
-	defer eng.Down(context.Background(), ws, devcontainer.DownOptions{
-		Remove:        true,
-		RemoveVolumes: true,
-	})
+	defer func() {
+		if err := eng.Down(context.Background(), ws, devcontainer.DownOptions{
+			Remove:        true,
+			RemoveVolumes: true,
+		}); err != nil {
+			log.Printf("down: %v", err)
+		}
+	}()
 
 	fmt.Printf("workspace: %s\nprimary container: %s\n", ws.ID, ws.Container.ID)
 	fmt.Printf("compose project: %s\n", ws.Container.Labels["com.docker.compose.project"])

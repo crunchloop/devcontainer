@@ -47,7 +47,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("docker daemon: %v", err)
 	}
-	defer rt.Close()
+	defer func() { _ = rt.Close() }()
 
 	eng, err := devcontainer.New(devcontainer.EngineOptions{Runtime: rt})
 	if err != nil {
@@ -63,7 +63,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("up: %v", err)
 	}
-	defer eng.Down(context.Background(), ws, devcontainer.DownOptions{Remove: true})
+	defer func() {
+		if err := eng.Down(context.Background(), ws, devcontainer.DownOptions{Remove: true}); err != nil {
+			log.Printf("down: %v", err)
+		}
+	}()
 
 	fmt.Printf("workspace id: %s\ncontainer id: %s\n", ws.ID, ws.Container.ID)
 

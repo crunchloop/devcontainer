@@ -25,7 +25,7 @@ func extractTarball(r io.Reader, dst string) error {
 	if err != nil {
 		return fmt.Errorf("gzip: %w", err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 	return extractTar(gz, dst)
 }
 

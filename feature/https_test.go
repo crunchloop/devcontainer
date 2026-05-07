@@ -24,7 +24,7 @@ func TestFetchHTTPS_HappyPath(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		w.Write(body)
+		_, _ = w.Write(body)
 	}))
 	defer srv.Close()
 

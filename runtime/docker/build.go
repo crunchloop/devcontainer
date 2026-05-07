@@ -137,7 +137,7 @@ func streamBuildOutput(ctx context.Context, body io.ReadCloser, events chan<- ru
 // error rather than silently dropped.
 func tarDirectory(dir string, w io.Writer) error {
 	tw := tar.NewWriter(w)
-	defer tw.Close()
+	defer func() { _ = tw.Close() }()
 
 	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
