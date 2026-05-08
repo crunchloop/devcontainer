@@ -53,6 +53,23 @@ type UpOptions struct {
 	// Note: v1 initialize execution is a stub that returns an error;
 	// real host execution requires caller-supplied wiring (PRD §11).
 	RunInitializeCommand bool
+
+	// ExtraMounts are appended to the mounts derived from devcontainer.json.
+	// They layer on top of cfg.WorkspaceMount and cfg.Mounts and are
+	// preserved across reattach (they only apply on fresh container
+	// creation, since reattach inherits the original container's mounts).
+	// For compose sources, only Type == runtime.MountBind entries are
+	// honored — other mount types are silently dropped to match the
+	// devcontainer.json `mounts` semantics.
+	ExtraMounts []runtime.MountSpec
+
+	// ExtraContainerEnv is merged into the container's environment, layered
+	// on top of cfg.ContainerEnv. Entries here are baked into the container
+	// at start time, so every subsequent exec — including lifecycle scripts
+	// and feature install — inherits them. Use this for callers that need
+	// to inject host-derived env (PATH overrides, proxy vars, short-lived
+	// auth tokens) without mutating devcontainer.json.
+	ExtraContainerEnv map[string]string
 }
 
 // PullPolicy controls when images are pulled from a registry.
@@ -169,7 +186,7 @@ func (e *Engine) createFresh(ctx context.Context, cfg *config.ResolvedConfig, op
 		return nil, err
 	}
 
-	spec := buildRunSpec(cfg, finalImage)
+	spec := buildRunSpec(cfg, finalImage, opts.ExtraMounts, opts.ExtraContainerEnv)
 	c, err := e.runtime.RunContainer(ctx, spec)
 	if err != nil {
 		return nil, fmt.Errorf("create container: %w", err)
@@ -370,11 +387,23 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 			})
 		}
 	}
+	// Extra mounts: only bind types are expressible in compose overrides.
+	// Other types (volume, tmpfs) are silently dropped, mirroring how
+	// devcontainer.json `mounts` are filtered above.
+	for _, m := range opts.ExtraMounts {
+		if m.Type == runtime.MountBind && m.Source != "" && m.Target != "" {
+			bindMounts = append(bindMounts, compose.BindMount{
+				Source:   m.Source,
+				Target:   m.Target,
+				ReadOnly: m.ReadOnly,
+			})
+		}
+	}
 
 	if err := compose.WriteRunOverride(runOverridePath, project, compose.Override{
 		Service:          src.Service,
 		ExtraBindMounts:  bindMounts,
-		ExtraEnvironment: cfg.ContainerEnv,
+		ExtraEnvironment: mergeEnv(cfg.ContainerEnv, opts.ExtraContainerEnv),
 		Labels: map[string]string{
 			LabelDevcontainerID:       cfg.DevcontainerID,
 			LabelLocalWorkspaceFolder: cfg.LocalWorkspaceFolder,
@@ -723,9 +752,10 @@ func (e *Engine) buildWorkspace(ctx context.Context, containerID string, cfg *co
 
 // buildRunSpec converts a ResolvedConfig (image source) into a runtime.RunSpec.
 // Mounts include the workspace bind (default or user-overridden) and any
-// additional mounts from devcontainer.json. Labels are populated for
-// label-based lookup.
-func buildRunSpec(cfg *config.ResolvedConfig, image string) runtime.RunSpec {
+// additional mounts from devcontainer.json. extraMounts are appended after
+// the cfg-derived mounts; extraEnv is merged into cfg.ContainerEnv (extras
+// win on key collision). Labels are populated for label-based lookup.
+func buildRunSpec(cfg *config.ResolvedConfig, image string, extraMounts []runtime.MountSpec, extraEnv map[string]string) runtime.RunSpec {
 	labels := map[string]string{
 		LabelDevcontainerID:       cfg.DevcontainerID,
 		LabelLocalWorkspaceFolder: cfg.LocalWorkspaceFolder,
@@ -737,13 +767,16 @@ func buildRunSpec(cfg *config.ResolvedConfig, image string) runtime.RunSpec {
 	// container, so it stays in the (host-side) ResolvedConfig instead.
 
 	mounts := buildMounts(cfg)
+	mounts = append(mounts, extraMounts...)
+
+	env := mergeEnv(cfg.ContainerEnv, extraEnv)
 
 	return runtime.RunSpec{
 		Image:           image,
 		Name:            containerName(WorkspaceID(cfg.DevcontainerID)),
 		User:            cfg.ContainerUser,
 		WorkingDir:      cfg.ContainerWorkspaceFolder,
-		Env:             cfg.ContainerEnv,
+		Env:             env,
 		Labels:          labels,
 		Mounts:          mounts,
 		RunArgs:         cfg.RunArgs,
@@ -753,6 +786,23 @@ func buildRunSpec(cfg *config.ResolvedConfig, image string) runtime.RunSpec {
 		SecurityOpt:     cfg.SecurityOpt,
 		OverrideCommand: cfg.OverrideCommand,
 	}
+}
+
+// mergeEnv returns a fresh map containing every entry in base, with extras
+// applied on top. Returns nil if both inputs are empty so we don't allocate
+// for the common no-extras path.
+func mergeEnv(base, extras map[string]string) map[string]string {
+	if len(base) == 0 && len(extras) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(base)+len(extras))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range extras {
+		out[k] = v
+	}
+	return out
 }
 
 // buildMounts assembles the workspace bind plus any additional mounts. The
