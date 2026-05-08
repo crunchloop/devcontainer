@@ -308,6 +308,64 @@ func TestUp_RecreateForcesFresh(t *testing.T) {
 	}
 }
 
+func TestUp_ExtraMountsAndContainerEnv(t *testing.T) {
+	rt := newFakeRuntime()
+	eng, _ := New(EngineOptions{Runtime: rt})
+	ws := writeImageDevcontainer(t, `{
+		"image": "alpine:3.20",
+		"containerEnv": { "FROM_CONFIG": "config", "OVERRIDE_ME": "config" },
+		"mounts": [ "type=bind,source=/cfg-src,target=/cfg-tgt" ]
+	}`)
+
+	if _, err := eng.Up(context.Background(), UpOptions{
+		LocalWorkspaceFolder: ws,
+		ExtraMounts: []runtime.MountSpec{
+			{Type: runtime.MountBind, Source: "/host/dap", Target: "/dap"},
+		},
+		ExtraContainerEnv: map[string]string{
+			"FROM_EXTRA":  "extra",
+			"OVERRIDE_ME": "extra",
+		},
+	}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	if rt.createdSpec == nil {
+		t.Fatal("createdSpec is nil")
+	}
+
+	// Mounts: workspace bind + cfg.Mounts entry + extra. Order:
+	// workspace, then cfg.Mounts, then extras (we don't pin the
+	// workspace target, just assert the cfg + extra entries are present).
+	var sawCfg, sawExtra bool
+	for _, m := range rt.createdSpec.Mounts {
+		if m.Source == "/cfg-src" && m.Target == "/cfg-tgt" {
+			sawCfg = true
+		}
+		if m.Source == "/host/dap" && m.Target == "/dap" {
+			sawExtra = true
+		}
+	}
+	if !sawCfg {
+		t.Errorf("cfg.Mounts entry missing from RunSpec: %+v", rt.createdSpec.Mounts)
+	}
+	if !sawExtra {
+		t.Errorf("ExtraMounts entry missing from RunSpec: %+v", rt.createdSpec.Mounts)
+	}
+
+	// Env: cfg entries preserved, extras merged on top, conflicts resolved
+	// in favor of extras.
+	if got := rt.createdSpec.Env["FROM_CONFIG"]; got != "config" {
+		t.Errorf("FROM_CONFIG = %q, want %q", got, "config")
+	}
+	if got := rt.createdSpec.Env["FROM_EXTRA"]; got != "extra" {
+		t.Errorf("FROM_EXTRA = %q, want %q", got, "extra")
+	}
+	if got := rt.createdSpec.Env["OVERRIDE_ME"]; got != "extra" {
+		t.Errorf("OVERRIDE_ME = %q, want extras to win, got %q", got, "extra")
+	}
+}
+
 func TestExec_SubstitutesContainerEnv(t *testing.T) {
 	rt := newFakeRuntime()
 	eng, _ := New(EngineOptions{Runtime: rt})
