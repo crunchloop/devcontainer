@@ -23,6 +23,15 @@ type Workspace struct {
 	Container *runtime.ContainerDetails
 
 	subst *Substituter
+
+	// probedEnv holds the environment captured by running a login/
+	// interactive shell inside the container (per cfg.UserEnvProbe).
+	// Engine.Exec merges it under opts.Env so callers see PATH, NVM,
+	// asdf-style additions injected by the user's rc files. Populated
+	// after Up's lifecycle phase (so probes reflect any rc-modifying
+	// postCreate scripts) and on Attach. nil means the probe hasn't
+	// run yet or userEnvProbe was "none".
+	probedEnv map[string]string
 }
 
 // Substituter resolves devcontainer.json substitution placeholders against

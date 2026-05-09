@@ -20,6 +20,21 @@ type ExecOptions struct {
 	Stdin      io.Reader
 	Stdout     io.Writer
 	Stderr     io.Writer
+
+	// SkipUserEnvProbe, when true, suppresses injection of the
+	// workspace's probed shell environment and devcontainer.json
+	// remoteEnv into this exec. Default false: every Exec inherits
+	// PATH and other vars set by the user's rc files (so callers
+	// see nvm/asdf/feature-installed tools without shell-wrapping
+	// per-call).
+	//
+	// Set this for callers that want a clean, deterministic
+	// environment — internal probes, low-level fs operations,
+	// callers reading raw container env. Lifecycle scripts run
+	// before the probe, so for them the field is functionally a
+	// no-op (probedEnv is empty); RemoteEnv still merges, which
+	// matches devcontainer.json semantics.
+	SkipUserEnvProbe bool
 }
 
 // ExecResult is the outcome of Engine.Exec.
@@ -47,6 +62,11 @@ func (e *Engine) Exec(ctx context.Context, ws *Workspace, opts ExecOptions) (Exe
 	env, _ := ws.subst.Map(opts.Env)
 	user, _ := ws.subst.String(opts.User)
 	wd, _ := ws.subst.String(opts.WorkingDir)
+
+	if !opts.SkipUserEnvProbe {
+		remoteEnv, _ := ws.subst.Map(ws.Config.RemoteEnv)
+		env = mergeProbedEnv(ws.probedEnv, remoteEnv, env, effectiveUser(ws.Config))
+	}
 
 	res, err := e.runtime.ExecContainer(ctx, ws.Container.ID, runtime.ExecOptions{
 		Cmd:        cmd,

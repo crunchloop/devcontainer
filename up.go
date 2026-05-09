@@ -163,6 +163,16 @@ func (e *Engine) Up(ctx context.Context, opts UpOptions) (*Workspace, error) {
 			return nil, err
 		}
 	}
+
+	// Probe the user's interactive shell environment AFTER lifecycle —
+	// postCreateCommand and friends typically install rc-modifying tools
+	// (nvm, asdf, etc.) and we want their effects reflected in subsequent
+	// Exec calls. Failures are non-fatal: we log via warnings and proceed
+	// without probed env (matches devpod's behavior).
+	probed, err := e.probeUserEnv(ctx, ws, ws.Config.UserEnvProbe)
+	if err == nil {
+		ws.probedEnv = probed
+	}
 	return ws, nil
 }
 

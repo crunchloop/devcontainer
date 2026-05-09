@@ -376,6 +376,9 @@ func TestExec_SubstitutesContainerEnv(t *testing.T) {
 		t.Fatalf("Up: %v", err)
 	}
 
+	// Up performs a userEnvProbe exec; clear the recorded calls so this
+	// test only asserts on the user-driven Exec.
+	rt.execCalls = nil
 	rt.execResult = runtime.ExecResult{ExitCode: 0, Stdout: "ok"}
 	_, err = eng.Exec(context.Background(), wsObj, ExecOptions{
 		Cmd: []string{"echo", "${containerEnv:HOME}"},
