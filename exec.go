@@ -20,6 +20,21 @@ type ExecOptions struct {
 	Stdin      io.Reader
 	Stdout     io.Writer
 	Stderr     io.Writer
+
+	// SkipUserEnvProbe, when true, makes Exec bypass the merge of
+	// probedEnv AND cfg.RemoteEnv into the process environment.
+	// Only opts.Env (after substitution) plus whatever the runtime
+	// inherits from the container reaches the exec'd process.
+	//
+	// Default false: every Exec inherits both probedEnv (so PATH and
+	// other vars set by the user's rc files are visible — nvm/asdf/
+	// feature-installed tools just work) and RemoteEnv (the
+	// devcontainer.json author's declared env).
+	//
+	// Set this for callers that need a clean, deterministic
+	// environment — internal probes, low-level fs operations,
+	// DiscoverPath-style helpers that read raw container env.
+	SkipUserEnvProbe bool
 }
 
 // ExecResult is the outcome of Engine.Exec.
@@ -47,6 +62,11 @@ func (e *Engine) Exec(ctx context.Context, ws *Workspace, opts ExecOptions) (Exe
 	env, _ := ws.subst.Map(opts.Env)
 	user, _ := ws.subst.String(opts.User)
 	wd, _ := ws.subst.String(opts.WorkingDir)
+
+	if !opts.SkipUserEnvProbe {
+		remoteEnv, _ := ws.subst.Map(ws.Config.RemoteEnv)
+		env = mergeProbedEnv(ws.probedEnv, remoteEnv, env, effectiveUser(ws.Config))
+	}
 
 	res, err := e.runtime.ExecContainer(ctx, ws.Container.ID, runtime.ExecOptions{
 		Cmd:        cmd,

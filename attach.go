@@ -63,10 +63,18 @@ func (e *Engine) AttachWith(ctx context.Context, id WorkspaceID, opts AttachOpti
 		localEnv = environAsMap(os.Environ())
 	}
 
-	return &Workspace{
+	ws := &Workspace{
 		ID:        id,
 		Config:    cfg,
 		Container: details,
 		subst:     newSubstituter(cfg, details, localEnv),
-	}, nil
+	}
+
+	// Re-probe on attach so subsequent Exec calls see PATH additions
+	// from the user's rc files. The original Up populated probedEnv,
+	// but a fresh Attach doesn't share that workspace value.
+	if probed, err := e.probeUserEnv(ctx, ws, cfg.UserEnvProbe); err == nil {
+		ws.probedEnv = probed
+	}
+	return ws, nil
 }
