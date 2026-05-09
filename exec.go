@@ -21,19 +21,19 @@ type ExecOptions struct {
 	Stdout     io.Writer
 	Stderr     io.Writer
 
-	// SkipUserEnvProbe, when true, suppresses injection of the
-	// workspace's probed shell environment and devcontainer.json
-	// remoteEnv into this exec. Default false: every Exec inherits
-	// PATH and other vars set by the user's rc files (so callers
-	// see nvm/asdf/feature-installed tools without shell-wrapping
-	// per-call).
+	// SkipUserEnvProbe, when true, makes Exec bypass the merge of
+	// probedEnv AND cfg.RemoteEnv into the process environment.
+	// Only opts.Env (after substitution) plus whatever the runtime
+	// inherits from the container reaches the exec'd process.
 	//
-	// Set this for callers that want a clean, deterministic
+	// Default false: every Exec inherits both probedEnv (so PATH and
+	// other vars set by the user's rc files are visible — nvm/asdf/
+	// feature-installed tools just work) and RemoteEnv (the
+	// devcontainer.json author's declared env).
+	//
+	// Set this for callers that need a clean, deterministic
 	// environment — internal probes, low-level fs operations,
-	// callers reading raw container env. Lifecycle scripts run
-	// before the probe, so for them the field is functionally a
-	// no-op (probedEnv is empty); RemoteEnv still merges, which
-	// matches devcontainer.json semantics.
+	// DiscoverPath-style helpers that read raw container env.
 	SkipUserEnvProbe bool
 }
 

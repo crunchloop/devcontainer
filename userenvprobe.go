@@ -86,7 +86,7 @@ func parseEnvironBytes(s string, sep byte) map[string]string {
 	start := 0
 	for i := 0; i <= len(s); i++ {
 		if i == len(s) || s[i] == sep {
-			line := strings.TrimSpace(s[start:i])
+			line := s[start:i]
 			start = i + 1
 			if line == "" {
 				continue
@@ -95,6 +95,9 @@ func parseEnvironBytes(s string, sep byte) map[string]string {
 			if eq <= 0 {
 				continue
 			}
+			// Don't trim: env values can legitimately contain leading
+			// or trailing whitespace, and /proc/self/environ entries
+			// have no separator framing to strip.
 			out[line[:eq]] = line[eq+1:]
 		}
 	}
