@@ -157,13 +157,23 @@ func mergeProbedEnv(probed, remoteEnv, callerEnv map[string]string, remoteUser s
 
 var sbinSegment = regexp.MustCompile(`/sbin(/|$)`)
 
+// isRootUser reports whether u names the root user. Accepts the
+// canonical "root", the numeric uid "0", and "" (image default —
+// many minimal images, including alpine and bash:*-alpine, run as
+// root by default; misclassifying that as non-root would strip
+// /sbin entries the user actually has access to).
+func isRootUser(u string) bool {
+	return u == "root" || u == "0" || u == ""
+}
+
 func mergePath(probed, remote, remoteUser string) string {
 	probedTokens := strings.Split(probed, ":")
 	insertAt := 0
+	root := isRootUser(remoteUser)
 	for _, e := range strings.Split(remote, ":") {
 		i := slices.Index(probedTokens, e)
 		if i == -1 {
-			if remoteUser == "root" || !sbinSegment.MatchString(e) {
+			if root || !sbinSegment.MatchString(e) {
 				probedTokens = slices.Insert(probedTokens, insertAt, e)
 				insertAt++
 			}
