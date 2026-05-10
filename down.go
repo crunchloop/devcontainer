@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/crunchloop/devcontainer/config"
 	"github.com/crunchloop/devcontainer/runtime"
 )
 
@@ -113,4 +114,80 @@ func (e *Engine) downCompose(ctx context.Context, ws *Workspace, opts DownOption
 func isNotFound(err error) bool {
 	var nf *runtime.ContainerNotFoundError
 	return errors.As(err, &nf)
+}
+
+// Shutdown tears the workspace down according to its devcontainer.json
+// `shutdownAction`. Use this for editor-close / idle-timeout style
+// teardown where the spec field should drive behavior. For unconditional
+// teardown (always stop, optionally remove), use Down — it is the
+// caller's explicit "I want this gone" call.
+//
+// Mapping (per https://containers.dev/implementors/json_reference/):
+//
+//   - "none":            no-op; container left running.
+//   - "stop", "stopContainer", "" (unset, image/build source): stop the
+//     container; do not remove. Restart-friendly.
+//   - "stopCompose", "" (unset, compose source): `docker compose stop`
+//     on the project (containers preserved); for full teardown including
+//     volumes, callers should use Down with Remove=true.
+//
+// "" (unset) defaults to the source-appropriate stop variant, matching
+// upstream @devcontainers/cli behavior.
+//
+// Idempotent: calling Shutdown on an already-stopped workspace returns nil.
+func (e *Engine) Shutdown(ctx context.Context, ws *Workspace) error {
+	if err := ctxIfDone(ctx); err != nil {
+		return err
+	}
+	if ws == nil {
+		return fmt.Errorf("Engine.Shutdown: Workspace is required")
+	}
+	if ws.Container == nil || ws.Container.ID == "" {
+		return fmt.Errorf("Engine.Shutdown: Workspace.Container with non-empty ID is required")
+	}
+
+	action := effectiveShutdownAction(ws)
+	switch action {
+	case config.ShutdownNone:
+		return nil
+	case config.ShutdownStopCompose:
+		return e.shutdownStopCompose(ctx, ws)
+	default: // ShutdownStop, ShutdownStopContainer, "", anything else
+		return e.shutdownStopContainer(ctx, ws)
+	}
+}
+
+// effectiveShutdownAction picks the action to apply for a workspace,
+// defaulting to the source-appropriate stop variant when cfg leaves
+// the field unset (matches upstream's "absent means stop" behavior).
+func effectiveShutdownAction(ws *Workspace) config.ShutdownAction {
+	if ws.Config != nil && ws.Config.ShutdownAction != "" {
+		return ws.Config.ShutdownAction
+	}
+	if isComposeWorkspace(ws) {
+		return config.ShutdownStopCompose
+	}
+	return config.ShutdownStopContainer
+}
+
+func (e *Engine) shutdownStopContainer(ctx context.Context, ws *Workspace) error {
+	id := ws.Container.ID
+	if err := e.runtime.StopContainer(ctx, id, runtime.StopOptions{}); err != nil && !isNotFound(err) {
+		return fmt.Errorf("stop container %s: %w", id, err)
+	}
+	return nil
+}
+
+func (e *Engine) shutdownStopCompose(ctx context.Context, ws *Workspace) error {
+	if !isComposeWorkspace(ws) {
+		// shutdownAction=stopCompose set on a non-compose workspace —
+		// fall back to stopping the single container, with no error.
+		// The user's intent is "stop"; the misconfiguration is harmless.
+		return e.shutdownStopContainer(ctx, ws)
+	}
+	// compose has no native project-level "stop without remove" in our
+	// ComposeRuntime surface yet (#10), so approximate with a per-container
+	// stop on the primary. Honors the user's intent of "preserve project
+	// state for fast restart" without depending on un-implemented APIs.
+	return e.shutdownStopContainer(ctx, ws)
 }
