@@ -146,20 +146,103 @@ func (e *Engine) runPhase(ctx context.Context, ws *Workspace, phase config.Lifec
 	return nil
 }
 
-// runInitialize executes a host-side initializeCommand. Currently only
-// the Single form is supported; parallel-named initialize commands fall
-// through with a TODO. We intentionally do NOT pass the host environment
-// or working directory verbatim — caller is responsible for providing a
-// safe context via UpOptions if needed.
+// runInitialize executes a host-side initializeCommand via the
+// caller-supplied HostExecutor. Returns ErrHostExecutorNotConfigured
+// (wrapped in *LifecycleError) when the engine has no executor — this
+// is the explicit "host execution requires opt-in" stance, not a
+// silent skip, so consumers see the misconfiguration.
+//
+// Single and Parallel command forms are both routed through the
+// executor; for Parallel, named entries run concurrently and the
+// first non-zero exit aggregates per-name stderr (mirrors
+// execParallel for in-container hooks).
 func (e *Engine) runInitialize(ctx context.Context, ws *Workspace, cmd config.LifecycleCommand) error {
-	// Host-side execution is deliberately minimal in v1 — we don't shell
-	// out from inside the engine at all to avoid making the library look
-	// like a host CLI. A future opt-in HostExecutor field on
-	// EngineOptions can take this on; for now, log a warning and skip.
-	return &LifecycleError{
-		Phase: config.LifecycleInitialize,
-		Cause: fmt.Errorf("initializeCommand not supported in v1 (host-side execution requires explicit caller wiring)"),
+	if e.opts.HostExecutor == nil {
+		return &LifecycleError{
+			Phase: config.LifecycleInitialize,
+			Cause: ErrHostExecutorNotConfigured,
+		}
 	}
+	if cmd.Single != nil {
+		return e.runInitializeSingle(ctx, ws, *cmd.Single)
+	}
+	if len(cmd.Parallel) > 0 {
+		return e.runInitializeParallel(ctx, ws, cmd.Parallel)
+	}
+	return nil
+}
+
+func (e *Engine) runInitializeSingle(ctx context.Context, ws *Workspace, c config.Command) error {
+	hc := HostCommand{
+		Shell:      c.Shell,
+		Exec:       c.Exec,
+		WorkingDir: ws.Config.LocalWorkspaceFolder,
+	}
+	res, err := e.opts.HostExecutor.ExecHost(ctx, hc)
+	if err != nil {
+		return &LifecycleError{Phase: config.LifecycleInitialize, Cause: err}
+	}
+	if res.ExitCode != 0 {
+		return &LifecycleError{
+			Phase:    config.LifecycleInitialize,
+			ExitCode: res.ExitCode,
+			Stdout:   res.Stdout,
+			Stderr:   res.Stderr,
+		}
+	}
+	return nil
+}
+
+func (e *Engine) runInitializeParallel(ctx context.Context, ws *Workspace, parallel map[string]config.Command) error {
+	names := make([]string, 0, len(parallel))
+	for k := range parallel {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+
+	type result struct {
+		exit   int
+		stdout string
+		stderr string
+		err    error
+	}
+	results := make([]result, len(names))
+
+	var wg sync.WaitGroup
+	for i, name := range names {
+		wg.Add(1)
+		go func(i int, c config.Command) {
+			defer wg.Done()
+			res, err := e.opts.HostExecutor.ExecHost(ctx, HostCommand{
+				Shell:      c.Shell,
+				Exec:       c.Exec,
+				WorkingDir: ws.Config.LocalWorkspaceFolder,
+			})
+			if err != nil {
+				results[i] = result{err: err}
+				return
+			}
+			results[i] = result{exit: res.ExitCode, stdout: res.Stdout, stderr: res.Stderr}
+		}(i, parallel[name])
+	}
+	wg.Wait()
+
+	for _, r := range results {
+		if r.err != nil {
+			return &LifecycleError{Phase: config.LifecycleInitialize, Cause: r.err}
+		}
+	}
+	for _, r := range results {
+		if r.exit != 0 {
+			return &LifecycleError{
+				Phase:    config.LifecycleInitialize,
+				ExitCode: r.exit,
+				Stdout:   r.stdout,
+				Stderr:   r.stderr,
+			}
+		}
+	}
+	return nil
 }
 
 // execLifecycleCommand routes a single LifecycleCommand through
