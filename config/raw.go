@@ -47,6 +47,7 @@ type rawConfig struct {
 	OverrideFeatureInstallOrder []string                   `json:"overrideFeatureInstallOrder,omitempty"`
 
 	InitializeCommand    json.RawMessage `json:"initializeCommand,omitempty"`
+	SecretsCommand       json.RawMessage `json:"secretsCommand,omitempty"`
 	OnCreateCommand      json.RawMessage `json:"onCreateCommand,omitempty"`
 	UpdateContentCommand json.RawMessage `json:"updateContentCommand,omitempty"`
 	PostCreateCommand    json.RawMessage `json:"postCreateCommand,omitempty"`

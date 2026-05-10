@@ -54,6 +54,20 @@ type UpOptions struct {
 	// real host execution requires caller-supplied wiring (PRD §11).
 	RunInitializeCommand bool
 
+	// RunSecretsCommand, when true, runs the host-side secretsCommand
+	// before container creation and merges its stdout (parsed as
+	// key=value lines) into the container's environment. Default false
+	// for the same reason as RunInitializeCommand: arbitrary host
+	// execution is opt-in. Requires EngineOptions.HostExecutor to be
+	// set; otherwise a *LifecycleError wrapping
+	// ErrHostExecutorNotConfigured is returned.
+	//
+	// Only applied on fresh container creation. On reattach the
+	// existing container's env is already baked, so re-running
+	// secretsCommand would have no effect and we skip it; callers
+	// wanting a refresh should pass Recreate=true.
+	RunSecretsCommand bool
+
 	// ExtraMounts are appended to the mounts derived from devcontainer.json.
 	// They layer on top of cfg.WorkspaceMount and cfg.Mounts and are
 	// preserved across reattach (they only apply on fresh container
@@ -215,7 +229,12 @@ func (e *Engine) createFresh(ctx context.Context, cfg *config.ResolvedConfig, op
 		return nil, err
 	}
 
-	spec := buildRunSpec(cfg, finalImage, opts.ExtraMounts, opts.ExtraContainerEnv)
+	extraEnv, err := e.collectSecretsEnv(ctx, cfg, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	spec := buildRunSpec(cfg, finalImage, opts.ExtraMounts, extraEnv)
 	c, err := e.runtime.RunContainer(ctx, spec)
 	if err != nil {
 		return nil, fmt.Errorf("create container: %w", err)
@@ -394,6 +413,11 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 		return nil, err
 	}
 
+	extraEnv, err := e.collectSecretsEnv(ctx, cfg, opts)
+	if err != nil {
+		return nil, err
+	}
+
 	tmp, err := os.MkdirTemp("", "dc-go-compose-*")
 	if err != nil {
 		return nil, fmt.Errorf("create compose override tmpdir: %w", err)
@@ -438,7 +462,7 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 	if err := compose.WriteRunOverride(runOverridePath, project, compose.Override{
 		Service:          src.Service,
 		ExtraBindMounts:  bindMounts,
-		ExtraEnvironment: mergeEnv(cfg.ContainerEnv, opts.ExtraContainerEnv),
+		ExtraEnvironment: mergeEnv(cfg.ContainerEnv, extraEnv),
 		Labels: map[string]string{
 			LabelDevcontainerID:       cfg.DevcontainerID,
 			LabelLocalWorkspaceFolder: cfg.LocalWorkspaceFolder,
