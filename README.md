@@ -87,7 +87,7 @@ field/behavior the library covers. Legend: ✅ acted on · ⚠️ parsed but not
 | --- | --- | --- |
 | `forwardPorts` | ⚠️ parsed | Not actuated; [#7](https://github.com/crunchloop/devcontainer/issues/7) |
 | `portsAttributes`, `otherPortsAttributes` | ⚠️ parsed | Surfaced on `ResolvedConfig`; not enforced |
-| `appPort` (deprecated) | ⚠️ parsed | Warned but not translated to `forwardPorts`; [#24](https://github.com/crunchloop/devcontainer/issues/24) |
+| `appPort` (deprecated) | ✅ translated | Folded into `forwardPorts` (skipping container ports already declared); deprecation warning still emitted |
 
 **Other**
 

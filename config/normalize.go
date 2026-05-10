@@ -219,6 +219,52 @@ func decodeForwardPorts(data json.RawMessage) ([]PortSpec, []Warning, error) {
 	return out, warnings, nil
 }
 
+// decodeAppPort handles the legacy `appPort` shape, which is more
+// permissive than `forwardPorts`: a single int, a single string, or
+// an array whose items are either. Per spec, callers should treat
+// `appPort` as if the user wrote `forwardPorts` instead — this helper
+// produces the same []PortSpec shape so the merge step can fold them
+// in.
+//
+// Errors only on truly unparseable input (non-int / non-string item,
+// or a malformed `host:container` string). Per-item parse failures
+// surface as warnings — matches decodeForwardPorts' behavior.
+func decodeAppPort(data json.RawMessage) ([]PortSpec, []Warning, error) {
+	if len(data) == 0 {
+		return nil, nil, nil
+	}
+	// Scalar int.
+	var n int
+	if err := json.Unmarshal(data, &n); err == nil {
+		return []PortSpec{{Container: n}}, nil, nil
+	}
+	// Scalar string.
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		ps, err := parsePortString(s)
+		if err != nil {
+			return nil, []Warning{{
+				Code:    WarnUnknownField,
+				Message: fmt.Sprintf("appPort: %v; skipped", err),
+				Path:    "/appPort",
+			}}, nil
+		}
+		return []PortSpec{ps}, nil, nil
+	}
+	// Array of int|string — same item shape as forwardPorts, so reuse.
+	specs, warns, err := decodeForwardPorts(data)
+	if err != nil {
+		return nil, nil, fmt.Errorf("appPort must be a number, string, or array")
+	}
+	// Re-tag warning paths so they report `/appPort/N` rather than
+	// `/forwardPorts/N` (the user wrote appPort, not forwardPorts).
+	for i := range warns {
+		warns[i].Path = strings.Replace(warns[i].Path, "/forwardPorts", "/appPort", 1)
+		warns[i].Message = strings.Replace(warns[i].Message, "forwardPorts", "appPort", 1)
+	}
+	return specs, warns, nil
+}
+
 func parsePortString(s string) (PortSpec, error) {
 	host, container, hasColon := strings.Cut(s, ":")
 	if hasColon {

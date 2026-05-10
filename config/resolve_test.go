@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -357,6 +358,99 @@ func TestResolveBytes_DeprecatedAppPort(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected WarnDeprecatedKey for /appPort, got %v", cfg.Warnings)
+	}
+}
+
+func TestResolveBytes_AppPortTranslatesIntoForwardPorts(t *testing.T) {
+	cases := []struct {
+		name string
+		json string
+		want []PortSpec
+	}{
+		{
+			name: "scalar int",
+			json: `{"image":"alpine","appPort":3000}`,
+			want: []PortSpec{{Container: 3000}},
+		},
+		{
+			name: "scalar host:container string",
+			json: `{"image":"alpine","appPort":"8080:80"}`,
+			want: []PortSpec{{Host: 8080, Container: 80}},
+		},
+		{
+			name: "array of mixed forms",
+			json: `{"image":"alpine","appPort":[3000,"4000","5000:5000"]}`,
+			want: []PortSpec{
+				{Container: 3000},
+				{Container: 4000},
+				{Host: 5000, Container: 5000},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := resolveJSON(t, tc.json, ResolveInput{})
+			if len(cfg.ForwardPorts) != len(tc.want) {
+				t.Fatalf("ForwardPorts = %+v, want %+v", cfg.ForwardPorts, tc.want)
+			}
+			for i, w := range tc.want {
+				if cfg.ForwardPorts[i] != w {
+					t.Errorf("ForwardPorts[%d] = %+v, want %+v", i, cfg.ForwardPorts[i], w)
+				}
+			}
+			// Deprecation warning should mention translation.
+			var dep *Warning
+			for i := range cfg.Warnings {
+				if cfg.Warnings[i].Code == WarnDeprecatedKey && cfg.Warnings[i].Path == "/appPort" {
+					dep = &cfg.Warnings[i]
+				}
+			}
+			if dep == nil {
+				t.Fatalf("missing /appPort deprecation warning")
+			}
+			if !strings.Contains(dep.Message, "translated") {
+				t.Errorf("warning should note translation, got %q", dep.Message)
+			}
+		})
+	}
+}
+
+func TestResolveBytes_AppPortDoesNotOverrideForwardPorts(t *testing.T) {
+	// When the same container port is already in forwardPorts (with an
+	// explicit host binding), appPort must not duplicate or override it.
+	cfg := resolveJSON(t, `{
+		"image":"alpine",
+		"forwardPorts":["9000:3000"],
+		"appPort":[3000,4000]
+	}`, ResolveInput{})
+
+	want := []PortSpec{
+		{Host: 9000, Container: 3000}, // from forwardPorts, preserved
+		{Container: 4000},             // from appPort, newly added
+	}
+	if len(cfg.ForwardPorts) != len(want) {
+		t.Fatalf("ForwardPorts = %+v, want %+v", cfg.ForwardPorts, want)
+	}
+	for i, w := range want {
+		if cfg.ForwardPorts[i] != w {
+			t.Errorf("ForwardPorts[%d] = %+v, want %+v", i, cfg.ForwardPorts[i], w)
+		}
+	}
+}
+
+func TestResolveBytes_AppPortInvalidItemWarns(t *testing.T) {
+	cfg := resolveJSON(t, `{"image":"alpine","appPort":["not-a-port"]}`, ResolveInput{})
+	var hasItemWarn bool
+	for _, w := range cfg.Warnings {
+		if w.Path == "/appPort/0" {
+			hasItemWarn = true
+		}
+	}
+	if !hasItemWarn {
+		t.Errorf("expected per-item warning at /appPort/0, got %v", cfg.Warnings)
+	}
+	if len(cfg.ForwardPorts) != 0 {
+		t.Errorf("expected no translated entries on parse failure, got %+v", cfg.ForwardPorts)
 	}
 }
 
