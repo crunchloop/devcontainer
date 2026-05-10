@@ -81,6 +81,9 @@ func (e *Engine) reconcileRemoteUserUID(ctx context.Context, cfg *config.Resolve
 	}
 	defer os.RemoveAll(tmp)
 
+	if err := os.WriteFile(filepath.Join(tmp, "uid-fix.sh"), []byte(uidReconcileScript), 0o755); err != nil {
+		return "", err
+	}
 	df := generateUIDDockerfile(finalImage, user, hostUID, hostGID)
 	if err := os.WriteFile(filepath.Join(tmp, "Dockerfile"), []byte(df), 0o644); err != nil {
 		return "", err
@@ -131,10 +134,11 @@ func statOwner(path string) (uid, gid int, ok bool) {
 	return int(st.Uid), int(st.Gid), true
 }
 
-// generateUIDDockerfile produces a single-stage Dockerfile that
-// reconciles `user`'s UID/GID to (hostUID, hostGID) when they differ
-// in the base image. The conditional keeps the resulting layer a near
-// no-op when UIDs already match (idempotent rebuilds).
+// generateUIDDockerfile produces a single-stage Dockerfile that runs
+// uidReconcileScript against the base image. The script writes
+// /etc/passwd and /etc/group directly via awk + sed so it works on
+// Debian (shadow tools) and Alpine/BusyBox (no shadow tools) alike —
+// no `usermod`/`groupmod`/`getent` runtime dependency.
 func generateUIDDockerfile(baseImage, user string, hostUID, hostGID int) string {
 	return "# syntax=docker/dockerfile:1.4\n" +
 		"ARG _DEV_CONTAINERS_BASE_IMAGE=" + baseImage + "\n" +
@@ -143,31 +147,58 @@ func generateUIDDockerfile(baseImage, user string, hostUID, hostGID int) string 
 		"ARG _REMOTE_USER=" + user + "\n" +
 		"ARG _REMOTE_USER_UID=" + strconv.Itoa(hostUID) + "\n" +
 		"ARG _REMOTE_USER_GID=" + strconv.Itoa(hostGID) + "\n" +
-		"RUN set -e; \\\n" +
-		"    if ! id -u \"$_REMOTE_USER\" >/dev/null 2>&1; then \\\n" +
-		"        echo \"updateRemoteUserUID: user $_REMOTE_USER not found in image; skipping\" >&2; \\\n" +
-		"        exit 0; \\\n" +
-		"    fi; \\\n" +
-		"    if ! command -v usermod >/dev/null 2>&1; then \\\n" +
-		"        echo \"updateRemoteUserUID: usermod not available (Alpine/BusyBox?); skipping — see crunchloop/devcontainer#29\" >&2; \\\n" +
-		"        exit 0; \\\n" +
-		"    fi; \\\n" +
-		"    CUR_UID=$(id -u \"$_REMOTE_USER\"); \\\n" +
-		"    CUR_GID=$(id -g \"$_REMOTE_USER\"); \\\n" +
-		"    if [ \"$CUR_UID\" = \"$_REMOTE_USER_UID\" ] && [ \"$CUR_GID\" = \"$_REMOTE_USER_GID\" ]; then \\\n" +
-		"        exit 0; \\\n" +
-		"    fi; \\\n" +
-		"    OLD_GROUP=$(id -gn \"$_REMOTE_USER\"); \\\n" +
-		"    HOME_DIR=$(getent passwd \"$_REMOTE_USER\" | cut -d: -f6); \\\n" +
-		"    if [ \"$CUR_GID\" != \"$_REMOTE_USER_GID\" ]; then \\\n" +
-		"        if getent group \"$_REMOTE_USER_GID\" >/dev/null; then \\\n" +
-		"            usermod --gid \"$_REMOTE_USER_GID\" \"$_REMOTE_USER\"; \\\n" +
-		"        else \\\n" +
-		"            groupmod --gid \"$_REMOTE_USER_GID\" \"$OLD_GROUP\"; \\\n" +
-		"        fi; \\\n" +
-		"    fi; \\\n" +
-		"    usermod --uid \"$_REMOTE_USER_UID\" \"$_REMOTE_USER\"; \\\n" +
-		"    if [ -n \"$HOME_DIR\" ] && [ -d \"$HOME_DIR\" ]; then \\\n" +
-		"        chown -R \"$_REMOTE_USER_UID:$_REMOTE_USER_GID\" \"$HOME_DIR\"; \\\n" +
-		"    fi\n"
+		"COPY uid-fix.sh /tmp/uid-fix.sh\n" +
+		"RUN chmod +x /tmp/uid-fix.sh && /bin/sh /tmp/uid-fix.sh && rm /tmp/uid-fix.sh\n"
 }
+
+// uidReconcileScript rewrites the configured user's UID/GID in
+// /etc/passwd and /etc/group to (hostUID, hostGID), then chowns the
+// home directory. Uses POSIX awk/sed/chmod so it works on both Debian
+// shadow-utils and Alpine BusyBox without conditional branching.
+//
+// Skips quietly (exit 0) when:
+//   - the configured user doesn't exist in /etc/passwd (caller intent
+//     unclear; chasing it would risk creating wrong-named users);
+//   - UIDs already match (idempotent rebuild stays a near no-op).
+//
+// Limitations: doesn't touch /etc/shadow or /etc/gshadow. Those files
+// key by username, not UID, so password-based login keeps working —
+// but `su <user>` semantics that rely on shadow records may be
+// affected on hardened images. No real-world devcontainer flow
+// depends on this; document and move on. Tracked under #29 if a
+// consumer ever hits it.
+const uidReconcileScript = `#!/bin/sh
+set -eu
+
+USER_LINE=$(awk -F: -v u="$_REMOTE_USER" '$1==u {print; exit}' /etc/passwd)
+if [ -z "$USER_LINE" ]; then
+    echo "updateRemoteUserUID: user $_REMOTE_USER not found in /etc/passwd; skipping" >&2
+    exit 0
+fi
+CUR_UID=$(echo "$USER_LINE" | awk -F: '{print $3}')
+CUR_GID=$(echo "$USER_LINE" | awk -F: '{print $4}')
+HOME_DIR=$(echo "$USER_LINE" | awk -F: '{print $6}')
+
+if [ "$CUR_UID" = "$_REMOTE_USER_UID" ] && [ "$CUR_GID" = "$_REMOTE_USER_GID" ]; then
+    exit 0
+fi
+
+# Re-map the user's primary group to the target GID, but only if no
+# other group already owns that GID (avoid duplicate-GID conflicts;
+# fall through to just re-pointing the user instead).
+if [ "$CUR_GID" != "$_REMOTE_USER_GID" ]; then
+    if ! awk -F: -v g="$_REMOTE_USER_GID" '$3==g {found=1} END {exit !found+0}' /etc/group; then
+        OLD_GROUP_NAME=$(awk -F: -v g="$CUR_GID" '$3==g {print $1; exit}' /etc/group)
+        if [ -n "$OLD_GROUP_NAME" ]; then
+            sed -i "s/^\(${OLD_GROUP_NAME}:[^:]*:\)$CUR_GID:/\1$_REMOTE_USER_GID:/" /etc/group
+        fi
+    fi
+fi
+
+# Rewrite the user's row in /etc/passwd, swapping just UID and GID.
+sed -i "s/^\(${_REMOTE_USER}:[^:]*:\)$CUR_UID:$CUR_GID:/\1$_REMOTE_USER_UID:$_REMOTE_USER_GID:/" /etc/passwd
+
+if [ -n "$HOME_DIR" ] && [ -d "$HOME_DIR" ]; then
+    chown -R "$_REMOTE_USER_UID:$_REMOTE_USER_GID" "$HOME_DIR"
+fi
+`

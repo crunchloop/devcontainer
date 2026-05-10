@@ -50,12 +50,28 @@ func TestGenerateUIDDockerfile_ContainsKeyDirectives(t *testing.T) {
 		"ARG _REMOTE_USER=vscode",
 		"ARG _REMOTE_USER_UID=1001",
 		"ARG _REMOTE_USER_GID=65534",
-		"usermod --uid",
-		"groupmod --gid",
-		"chown -R",
+		"COPY uid-fix.sh",
+		"/bin/sh /tmp/uid-fix.sh",
 	} {
 		if !strings.Contains(df, want) {
 			t.Errorf("dockerfile missing %q\n--\n%s", want, df)
+		}
+	}
+}
+
+func TestUIDReconcileScript_PortableShape(t *testing.T) {
+	// Sanity-check that the embedded script doesn't depend on shadow-utils
+	// commands. Catches regressions if someone reintroduces usermod /
+	// groupmod / getent — those break Alpine.
+	for _, banned := range []string{"usermod", "groupmod", "getent"} {
+		if strings.Contains(uidReconcileScript, banned) {
+			t.Errorf("uidReconcileScript references %q; would break BusyBox/Alpine images", banned)
+		}
+	}
+	// Required portable primitives.
+	for _, want := range []string{"awk -F:", "sed -i", "/etc/passwd", "/etc/group"} {
+		if !strings.Contains(uidReconcileScript, want) {
+			t.Errorf("uidReconcileScript missing %q", want)
 		}
 	}
 }
