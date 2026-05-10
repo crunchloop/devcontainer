@@ -142,6 +142,9 @@ func (e *Engine) Shutdown(ctx context.Context, ws *Workspace) error {
 	if ws == nil {
 		return fmt.Errorf("Engine.Shutdown: Workspace is required")
 	}
+	if ws.Container == nil || ws.Container.ID == "" {
+		return fmt.Errorf("Engine.Shutdown: Workspace.Container with non-empty ID is required")
+	}
 
 	action := effectiveShutdownAction(ws)
 	switch action {

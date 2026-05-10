@@ -118,3 +118,22 @@ func TestShutdown_NilWorkspaceRejected(t *testing.T) {
 		t.Error("expected error on nil workspace")
 	}
 }
+
+func TestShutdown_NilContainerRejected(t *testing.T) {
+	eng := &Engine{runtime: newFakeRuntime()}
+	ws := &Workspace{Config: &config.ResolvedConfig{ShutdownAction: config.ShutdownStopContainer}}
+	if err := eng.Shutdown(context.Background(), ws); err == nil {
+		t.Error("expected error on workspace with nil Container")
+	}
+}
+
+func TestShutdown_EmptyContainerIDRejected(t *testing.T) {
+	eng := &Engine{runtime: newFakeRuntime()}
+	ws := &Workspace{
+		Config:    &config.ResolvedConfig{ShutdownAction: config.ShutdownStopContainer},
+		Container: &runtime.ContainerDetails{},
+	}
+	if err := eng.Shutdown(context.Background(), ws); err == nil {
+		t.Error("expected error on workspace with empty Container.ID")
+	}
+}
