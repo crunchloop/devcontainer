@@ -38,14 +38,25 @@ func TestResolveBytes_ImageMinimal(t *testing.T) {
 	if cfg.ContainerWorkspaceFolder != "/workspaces/proj" {
 		t.Errorf("ContainerWorkspaceFolder = %q", cfg.ContainerWorkspaceFolder)
 	}
-	if !cfg.OverrideCommand {
-		t.Error("OverrideCommand should default to true")
+	// Pre-Finalize: optional fields stay unset.
+	if cfg.OverrideCommand != nil {
+		t.Errorf("OverrideCommand should be nil pre-Finalize, got %+v", cfg.OverrideCommand)
+	}
+	if cfg.UserEnvProbe != "" {
+		t.Errorf("UserEnvProbe should be empty pre-Finalize, got %q", cfg.UserEnvProbe)
+	}
+	if cfg.WaitFor != "" {
+		t.Errorf("WaitFor should be empty pre-Finalize, got %q", cfg.WaitFor)
+	}
+	cfg.Finalize()
+	if !BoolOr(cfg.OverrideCommand, false) {
+		t.Error("OverrideCommand should default to true after Finalize")
 	}
 	if cfg.UserEnvProbe != UserEnvProbeLoginInteractive {
-		t.Errorf("UserEnvProbe = %q, want loginInteractiveShell", cfg.UserEnvProbe)
+		t.Errorf("UserEnvProbe = %q, want loginInteractiveShell after Finalize", cfg.UserEnvProbe)
 	}
 	if cfg.WaitFor != LifecyclePostCreate {
-		t.Errorf("WaitFor = %q, want postCreate (no updateContent set)", cfg.WaitFor)
+		t.Errorf("WaitFor = %q, want postCreate after Finalize (no updateContent set)", cfg.WaitFor)
 	}
 }
 
@@ -127,16 +138,19 @@ func TestResolveBytes_LifecycleAndWaitFor(t *testing.T) {
 		"updateContentCommand": "git submodule update --init",
 		"postCreateCommand": ["bash","-c","setup.sh"]
 	}`, ResolveInput{})
-	if cfg.Lifecycle.UpdateContent.Single == nil ||
-		cfg.Lifecycle.UpdateContent.Single.Shell != "git submodule update --init" {
+	if len(cfg.Lifecycle.UpdateContent) != 1 ||
+		cfg.Lifecycle.UpdateContent[0].Single == nil ||
+		cfg.Lifecycle.UpdateContent[0].Single.Shell != "git submodule update --init" {
 		t.Errorf("UpdateContent = %+v", cfg.Lifecycle.UpdateContent)
 	}
-	if cfg.Lifecycle.PostCreate.Single == nil ||
-		!reflect.DeepEqual(cfg.Lifecycle.PostCreate.Single.Exec, []string{"bash", "-c", "setup.sh"}) {
+	if len(cfg.Lifecycle.PostCreate) != 1 ||
+		cfg.Lifecycle.PostCreate[0].Single == nil ||
+		!reflect.DeepEqual(cfg.Lifecycle.PostCreate[0].Single.Exec, []string{"bash", "-c", "setup.sh"}) {
 		t.Errorf("PostCreate = %+v", cfg.Lifecycle.PostCreate)
 	}
+	cfg.Finalize()
 	if cfg.WaitFor != LifecycleUpdateContent {
-		t.Errorf("WaitFor = %q, want updateContent (set => default switches)", cfg.WaitFor)
+		t.Errorf("WaitFor = %q, want updateContent after Finalize (updateContent set => default switches)", cfg.WaitFor)
 	}
 }
 
@@ -348,7 +362,8 @@ func TestResolveBytes_DeprecatedAppPort(t *testing.T) {
 
 func TestResolveBytes_OverrideCommandFalse(t *testing.T) {
 	cfg := resolveJSON(t, `{"image":"alpine","overrideCommand":false}`, ResolveInput{})
-	if cfg.OverrideCommand {
-		t.Error("OverrideCommand=false should be honored")
+	cfg.Finalize()
+	if BoolOr(cfg.OverrideCommand, true) {
+		t.Error("OverrideCommand=false should be honored even after Finalize")
 	}
 }

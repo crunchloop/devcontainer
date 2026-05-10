@@ -182,6 +182,19 @@ func (e *Engine) attachExisting(ctx context.Context, c *runtime.Container, cfg *
 			return nil, fmt.Errorf("start existing container %s: %w", c.ID, err)
 		}
 	}
+	// The container's image carries the merged-config metadata label
+	// from the prior build; re-running the merge here keeps cfg's
+	// remoteUser / lifecycle hooks / env consistent across reattach,
+	// not just on fresh creation.
+	var baseLayers []config.FeatureMetadata
+	if details, err := e.runtime.InspectImage(ctx, c.Image); err == nil && details != nil {
+		if label := details.Labels[feature.MetadataLabel]; label != "" {
+			if parsed, err := feature.ParseMetadataLabel(label); err == nil {
+				baseLayers = parsed
+			}
+		}
+	}
+	applyMetadataMerge(cfg, baseLayers)
 	return e.buildWorkspace(ctx, c.ID, cfg, opts.LocalEnv)
 }
 
@@ -191,10 +204,11 @@ func (e *Engine) createFresh(ctx context.Context, cfg *config.ResolvedConfig, op
 		return nil, err
 	}
 
-	finalImage, err := e.layerFeatures(ctx, cfg, baseImage, opts)
+	finalImage, baseLayers, err := e.layerFeatures(ctx, cfg, baseImage, opts)
 	if err != nil {
 		return nil, err
 	}
+	applyMetadataMerge(cfg, baseLayers)
 
 	spec := buildRunSpec(cfg, finalImage, opts.ExtraMounts, opts.ExtraContainerEnv)
 	c, err := e.runtime.RunContainer(ctx, spec)
@@ -364,10 +378,11 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 		return nil, err
 	}
 
-	finalImage, err := e.layerFeatures(ctx, cfg, baseImage, opts)
+	finalImage, baseLayers, err := e.layerFeatures(ctx, cfg, baseImage, opts)
 	if err != nil {
 		return nil, err
 	}
+	applyMetadataMerge(cfg, baseLayers)
 
 	tmp, err := os.MkdirTemp("", "dc-go-compose-*")
 	if err != nil {
@@ -605,21 +620,23 @@ func (e *Engine) prepareBaseImage(ctx context.Context, cfg *config.ResolvedConfi
 
 // layerFeatures fetches each feature in cfg.Features (where not already
 // flagged AlreadyInstalled), re-orders by full DAG, generates a
-// feature-extending Dockerfile, and builds it. Returns the tag of the
-// final image. If no features need installing, returns baseImage as-is.
+// feature-extending Dockerfile, and builds it. Returns (finalImage,
+// baseLayers) — baseLayers is the parsed devcontainer.metadata label
+// from the base image (nil if the image carries no label or is
+// unreadable), surfaced for the caller's metadata-merge pass.
+//
+// Even with no features to layer, the base image's label is still read:
+// remoteUser / lifecycle hooks / etc. baked into the image must reach
+// the merge step. Inspect failures are non-fatal — the caller proceeds
+// without baseLayers, matching prior behavior.
 //
 // Side effect: cfg.Features entries are mutated in place to populate
 // Dir, Metadata, ResolvedRef on fetch. Caller's Workspace.Config sees
 // the post-fetch state.
-func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, baseImage string, opts UpOptions) (string, error) {
-	if len(cfg.Features) == 0 {
-		return baseImage, nil
-	}
-
-	// Pre-baked-image hot path: read the base image's
-	// devcontainer.metadata label and mark already-installed features.
-	// Failures (missing label, parse error, image not found) are
-	// non-fatal — we just don't get the optimization.
+func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, baseImage string, opts UpOptions) (string, []config.FeatureMetadata, error) {
+	// Read the base image's devcontainer.metadata label unconditionally —
+	// it carries baked-in config (remoteUser, lifecycle hooks, env, ...)
+	// that the merge pipeline must see even when no features are layered.
 	var baseMeta []config.FeatureMetadata
 	if details, err := e.runtime.InspectImage(ctx, baseImage); err == nil && details != nil {
 		if label := details.Labels[feature.MetadataLabel]; label != "" {
@@ -629,6 +646,10 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 				e.markAlreadyInstalled(cfg, parsed)
 			}
 		}
+	}
+
+	if len(cfg.Features) == 0 {
+		return baseImage, baseMeta, nil
 	}
 
 	configDir := ""
@@ -655,7 +676,7 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 		}
 		fetched, err := e.featureStore.Fetch(ctx, ref, f.SourceKind)
 		if err != nil {
-			return "", fmt.Errorf("fetch feature %s: %w", f.Ref, err)
+			return "", nil, fmt.Errorf("fetch feature %s: %w", f.Ref, err)
 		}
 		f.Dir = fetched.Dir
 		f.ResolvedRef = fetched.ResolvedRef
@@ -664,7 +685,7 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 		// Apply spec defaults + validate against the now-known options.
 		merged, mwarns, err := feature.MergeOptions(f.Metadata, f.Options)
 		if err != nil {
-			return "", fmt.Errorf("feature %s: %w", f.Ref, err)
+			return "", nil, fmt.Errorf("feature %s: %w", f.Ref, err)
 		}
 		f.Options = merged
 		cfg.Warnings = append(cfg.Warnings, mwarns...)
@@ -673,7 +694,7 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 	// Re-order with fully-populated metadata so installsAfter / dependsOn apply.
 	ordered, oWarns, err := feature.Order(cfg.Features, nil)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	cfg.Features = ordered
 	cfg.Warnings = append(cfg.Warnings, oWarns...)
@@ -686,17 +707,17 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 		BaseImageMetadata: baseMeta,
 	}
 	if !plan.HasWork() {
-		return baseImage, nil
+		return baseImage, baseMeta, nil
 	}
 
 	tmp, err := os.MkdirTemp("", "dc-go-build-*")
 	if err != nil {
-		return "", fmt.Errorf("create build context tmpdir: %w", err)
+		return "", nil, fmt.Errorf("create build context tmpdir: %w", err)
 	}
 	defer os.RemoveAll(tmp)
 
 	if err := feature.GenerateBuildContext(plan, tmp); err != nil {
-		return "", fmt.Errorf("generate feature build context: %w", err)
+		return "", nil, fmt.Errorf("generate feature build context: %w", err)
 	}
 
 	finalTag := "dc-go-final-" + cfg.DevcontainerID + ":latest"
@@ -709,9 +730,32 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 		},
 	}, opts.Events)
 	if err != nil {
-		return "", fmt.Errorf("build feature-extended image: %w", err)
+		return "", nil, fmt.Errorf("build feature-extended image: %w", err)
 	}
-	return finalTag, nil
+	return finalTag, baseMeta, nil
+}
+
+// applyMetadataMerge folds the base-image label and per-feature
+// devcontainer-feature.json metadata into cfg, then applies spec
+// defaults via Finalize. Layers go in spec order: base image first,
+// each fetched feature next; the user's devcontainer.json (already in
+// cfg) wins on conflicts.
+//
+// AlreadyInstalled features are NOT re-added — their metadata is
+// already part of baseLayers as a prior label entry. (Re-adding is
+// harmless for idempotent fields but produces duplicate hooks for
+// lifecycle phases.)
+func applyMetadataMerge(cfg *config.ResolvedConfig, baseLayers []config.FeatureMetadata) {
+	chain := make([]config.FeatureMetadata, 0, len(baseLayers)+len(cfg.Features))
+	chain = append(chain, baseLayers...)
+	for _, f := range cfg.Features {
+		if f.AlreadyInstalled {
+			continue
+		}
+		chain = append(chain, f.Metadata)
+	}
+	config.MergeMetadata(cfg, chain)
+	cfg.Finalize()
 }
 
 func (e *Engine) ensureImage(ctx context.Context, ref string, policy PullPolicy, events chan<- runtime.BuildEvent) error {
@@ -790,11 +834,11 @@ func buildRunSpec(cfg *config.ResolvedConfig, image string, extraMounts []runtim
 		Labels:          labels,
 		Mounts:          mounts,
 		RunArgs:         cfg.RunArgs,
-		Init:            cfg.Init,
-		Privileged:      cfg.Privileged,
+		Init:            config.BoolOr(cfg.Init, false),
+		Privileged:      config.BoolOr(cfg.Privileged, false),
 		CapAdd:          cfg.CapAdd,
 		SecurityOpt:     cfg.SecurityOpt,
-		OverrideCommand: cfg.OverrideCommand,
+		OverrideCommand: config.BoolOr(cfg.OverrideCommand, true),
 	}
 }
 

@@ -20,7 +20,7 @@ type ResolvedConfig struct {
 
 	ContainerUser       string
 	RemoteUser          string
-	UpdateRemoteUserUID bool
+	UpdateRemoteUserUID *bool
 	UserEnvProbe        UserEnvProbe
 
 	ContainerEnv map[string]string
@@ -28,11 +28,11 @@ type ResolvedConfig struct {
 
 	Mounts          []Mount
 	RunArgs         []string
-	Init            bool
-	Privileged      bool
+	Init            *bool
+	Privileged      *bool
 	CapAdd          []string
 	SecurityOpt     []string
-	OverrideCommand bool
+	OverrideCommand *bool
 	ShutdownAction  ShutdownAction
 
 	Features []ResolvedFeature
@@ -49,6 +49,48 @@ type ResolvedConfig struct {
 	Customizations map[string]json.RawMessage
 
 	Warnings []Warning
+}
+
+// Finalize applies spec defaults to optional fields that the user (and
+// any merged metadata layer) left unset. Call after Resolve and after
+// the metadata-merge pipeline so that base-image / feature metadata can
+// still contribute values before defaults kick in.
+//
+// Defaults applied:
+//   - OverrideCommand: true
+//   - UserEnvProbe: loginInteractiveShell
+//   - WaitFor: updateContent if any updateContentCommand is configured,
+//     otherwise postCreate.
+//
+// Init / Privileged / UpdateRemoteUserUID / ShutdownAction stay nil/""
+// when unset; the runtime treats nil / zero-value as "no override". This
+// matches the spec — there is no positive default to apply.
+//
+// Idempotent: safe to call multiple times.
+func (c *ResolvedConfig) Finalize() {
+	if c.OverrideCommand == nil {
+		t := true
+		c.OverrideCommand = &t
+	}
+	if c.UserEnvProbe == "" {
+		c.UserEnvProbe = UserEnvProbeLoginInteractive
+	}
+	if c.WaitFor == "" {
+		if len(c.Lifecycle.UpdateContent) > 0 {
+			c.WaitFor = LifecycleUpdateContent
+		} else {
+			c.WaitFor = LifecyclePostCreate
+		}
+	}
+}
+
+// BoolOr returns *p when non-nil, else def. Helper for ResolvedConfig
+// optional-bool field consumers.
+func BoolOr(p *bool, def bool) bool {
+	if p == nil {
+		return def
+	}
+	return *p
 }
 
 // Source identifies where the container comes from. Implementations are
@@ -106,14 +148,20 @@ const (
 	LifecyclePostAttach    LifecyclePhase = "postAttach"
 )
 
-// LifecycleCommands holds the resolved command for each phase.
+// LifecycleCommands holds the resolved command(s) for each phase. Each
+// phase is a list because the metadata-merge pipeline (base image label →
+// each feature → user devcontainer.json) can contribute hooks that all
+// run in sequence per-phase, per spec.
+//
+// Initialize is host-side and only ever populated from the user's
+// devcontainer.json today, but is shaped as a slice for symmetry.
 type LifecycleCommands struct {
-	Initialize    LifecycleCommand
-	OnCreate      LifecycleCommand
-	UpdateContent LifecycleCommand
-	PostCreate    LifecycleCommand
-	PostStart     LifecycleCommand
-	PostAttach    LifecycleCommand
+	Initialize    []LifecycleCommand
+	OnCreate      []LifecycleCommand
+	UpdateContent []LifecycleCommand
+	PostCreate    []LifecycleCommand
+	PostStart     []LifecycleCommand
+	PostAttach    []LifecycleCommand
 }
 
 // LifecycleCommand is one phase's command, in either single or parallel-named
@@ -171,8 +219,19 @@ const (
 	FeatureSourceLocal FeatureSourceKind = "local"
 )
 
-// FeatureMetadata is the parsed devcontainer-feature.json contributed by a
-// feature. Only fields we either consume or surface are modeled.
+// FeatureMetadata is one layer of the devcontainer.metadata chain. It
+// represents either the parsed devcontainer-feature.json contributed by a
+// feature, OR a single entry in the image's devcontainer.metadata label
+// (which may be a base image's prior layer, a feature's contribution, or
+// the resolved-config "final" entry written by a previous build).
+//
+// Every field is optional; the merge stage (MergeMetadata) treats empty
+// strings, nil pointers, and zero-length slices/maps as "this layer did
+// not contribute a value".
+//
+// ID/Version/Name/Description/DocumentationURL/LicenseURL/Options/
+// InstallsAfter/DependsOn are feature-only — they have no merge semantics
+// and are ignored when the layer originates from a label entry.
 type FeatureMetadata struct {
 	ID               string
 	Version          string
@@ -183,13 +242,25 @@ type FeatureMetadata struct {
 
 	Options map[string]FeatureOption
 
+	// Mergeable surface (devpod parity). Empty / nil means "unset".
+	RemoteUser          string
+	ContainerUser       string
+	UserEnvProbe        UserEnvProbe
+	WaitFor             LifecyclePhase
+	ShutdownAction      ShutdownAction
+	UpdateRemoteUserUID *bool
+
 	ContainerEnv map[string]string
+	RemoteEnv    map[string]string
 	Mounts       []Mount
 	Init         *bool
 	Privileged   *bool
+	OverrideCommand *bool
 	CapAdd       []string
 	SecurityOpt  []string
 	Entrypoint   string
+
+	HostRequirements *HostRequirements
 
 	InstallsAfter []string
 	DependsOn     map[string]map[string]any

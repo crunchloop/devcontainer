@@ -63,17 +63,17 @@ func resolveFromRaw(raw *rawConfig, input ResolveInput) (*ResolvedConfig, error)
 	out.Source = src
 	out.Warnings = append(out.Warnings, srcWarns...)
 
-	out.UpdateRemoteUserUID = derefBool(raw.UpdateRemoteUserUID, false)
-	out.Init = derefBool(raw.Init, false)
-	out.Privileged = derefBool(raw.Privileged, false)
-	// Spec default for overrideCommand is true.
-	out.OverrideCommand = derefBool(raw.OverrideCommand, true)
-
-	if raw.UserEnvProbe != "" {
-		out.UserEnvProbe = UserEnvProbe(raw.UserEnvProbe)
-	} else {
-		out.UserEnvProbe = UserEnvProbeLoginInteractive
-	}
+	// Optional bools and probe are passed through verbatim. Spec defaults
+	// (Init=false, Privileged=false, OverrideCommand=true,
+	// UpdateRemoteUserUID=false, UserEnvProbe=loginInteractiveShell) are
+	// applied by ResolvedConfig.Finalize, which runs after the
+	// metadata-merge pipeline so feature/base-image metadata can still
+	// contribute values when the user devcontainer.json does not.
+	out.UpdateRemoteUserUID = raw.UpdateRemoteUserUID
+	out.Init = raw.Init
+	out.Privileged = raw.Privileged
+	out.OverrideCommand = raw.OverrideCommand
+	out.UserEnvProbe = UserEnvProbe(raw.UserEnvProbe)
 	out.ShutdownAction = ShutdownAction(raw.ShutdownAction)
 
 	wsMount, err := decodeWorkspaceMount(raw.WorkspaceMount)
@@ -125,7 +125,10 @@ func resolveFromRaw(raw *rawConfig, input ResolveInput) (*ResolvedConfig, error)
 	out.Lifecycle = lifecycle
 	out.Warnings = append(out.Warnings, addSource(lcWarns, input.ConfigPath)...)
 
-	out.WaitFor = computeWaitFor(raw.WaitFor, lifecycle)
+	// WaitFor passes through verbatim; the spec default (postCreate, or
+	// updateContent if any layer contributes one) is applied by Finalize
+	// after the metadata-merge pipeline.
+	out.WaitFor = LifecyclePhase(raw.WaitFor)
 
 	containerFolder := raw.WorkspaceFolder
 	if containerFolder == "" {
@@ -345,7 +348,7 @@ func determineSource(raw *rawConfig, configDir string) (Source, []Warning, error
 func decodeLifecycleCommands(raw *rawConfig) (LifecycleCommands, []Warning, error) {
 	out := LifecycleCommands{}
 	pairs := []struct {
-		dst  *LifecycleCommand
+		dst  *[]LifecycleCommand
 		data json.RawMessage
 		path string
 	}{
@@ -361,16 +364,23 @@ func decodeLifecycleCommands(raw *rawConfig) (LifecycleCommands, []Warning, erro
 		if err != nil {
 			return LifecycleCommands{}, nil, fmt.Errorf("%s: %w", p.path, err)
 		}
-		*p.dst = cmd
+		if cmd.IsEmpty() {
+			continue
+		}
+		*p.dst = []LifecycleCommand{cmd}
 	}
 	return out, nil, nil
 }
 
+// computeWaitFor selects the spec default when waitFor is not user-set.
+// Called from Finalize so it sees the post-merge lifecycle (i.e. an
+// updateContentCommand contributed by a feature's metadata still triggers
+// the updateContent default).
 func computeWaitFor(rawWaitFor string, lifecycle LifecycleCommands) LifecyclePhase {
 	if rawWaitFor != "" {
 		return LifecyclePhase(rawWaitFor)
 	}
-	if !lifecycle.UpdateContent.IsEmpty() {
+	if len(lifecycle.UpdateContent) > 0 {
 		return LifecycleUpdateContent
 	}
 	return LifecyclePostCreate
@@ -508,7 +518,7 @@ func substituteAll(out *ResolvedConfig, ctx SubstitutionContext, source string) 
 
 func substituteLifecycle(lc *LifecycleCommands, sub func(s, path string) string) {
 	pairs := []struct {
-		cmd  *LifecycleCommand
+		cmds *[]LifecycleCommand
 		path string
 	}{
 		{&lc.Initialize, "/initializeCommand"},
@@ -519,7 +529,9 @@ func substituteLifecycle(lc *LifecycleCommands, sub func(s, path string) string)
 		{&lc.PostAttach, "/postAttachCommand"},
 	}
 	for _, p := range pairs {
-		substituteCommand(p.cmd, p.path, sub)
+		for i := range *p.cmds {
+			substituteCommand(&(*p.cmds)[i], p.path, sub)
+		}
 	}
 }
 
