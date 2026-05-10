@@ -22,7 +22,9 @@ import (
 //
 // Skips (returns finalImage unchanged, no error) when:
 //   - cfg.UpdateRemoteUserUID is explicitly false
-//   - host is not Linux/Darwin (Stat_t.Uid not portably available)
+//   - host is not Linux (Docker Desktop on macOS remaps bind-mount
+//     ownership in the VM, so the host UID we see is not what the
+//     container sees — reconciling to it would be wrong, not a no-op)
 //   - LocalWorkspaceFolder cannot be stat-ed
 //   - host UID is 0 (root can write anywhere)
 //   - effective container user resolves to root / "0" / empty
@@ -36,7 +38,7 @@ func (e *Engine) reconcileRemoteUserUID(ctx context.Context, cfg *config.Resolve
 	if cfg.UpdateRemoteUserUID != nil && !*cfg.UpdateRemoteUserUID {
 		return finalImage, nil
 	}
-	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+	if runtime.GOOS != "linux" {
 		return finalImage, nil
 	}
 
@@ -153,8 +155,14 @@ func generateUIDDockerfile(baseImage, user string, hostUID, hostGID int) string 
 
 // uidReconcileScript rewrites the configured user's UID/GID in
 // /etc/passwd and /etc/group to (hostUID, hostGID), then chowns the
-// home directory. Uses POSIX awk/sed/chmod so it works on both Debian
+// home directory. Uses POSIX awk/chmod so it works on both Debian
 // shadow-utils and Alpine BusyBox without conditional branching.
+//
+// All row matching and rewriting is field-aware via awk -F: rather
+// than sed regex substitution: $_REMOTE_USER is user-supplied and may
+// contain regex metacharacters or otherwise-valid login forms (e.g.
+// names made up of digits) that would either silently miss or rewrite
+// the wrong row under a naive interpolated sed pattern.
 //
 // Skips quietly (exit 0) when:
 //   - the configured user doesn't exist in /etc/passwd (caller intent
@@ -167,8 +175,21 @@ func generateUIDDockerfile(baseImage, user string, hostUID, hostGID int) string 
 // affected on hardened images. No real-world devcontainer flow
 // depends on this; document and move on. Tracked under #29 if a
 // consumer ever hits it.
+//
+// rewriteFile() copies awk's output back over the original via `cat >`
+// rather than `mv`, preserving the file's inode, owner, and mode —
+// important because /etc/passwd and /etc/group have specific perms
+// that some images (and tools) rely on.
 const uidReconcileScript = `#!/bin/sh
 set -eu
+
+rewrite_file() {
+    # $1 = path. Reads stdin, writes back to $1 in place.
+    tmp=$1.dc-uid-tmp
+    cat > "$tmp"
+    cat "$tmp" > "$1"
+    rm "$tmp"
+}
 
 USER_LINE=$(awk -F: -v u="$_REMOTE_USER" '$1==u {print; exit}' /etc/passwd)
 if [ -z "$USER_LINE" ]; then
@@ -188,15 +209,16 @@ fi
 # fall through to just re-pointing the user instead).
 if [ "$CUR_GID" != "$_REMOTE_USER_GID" ]; then
     if ! awk -F: -v g="$_REMOTE_USER_GID" '$3==g {found=1} END {exit !found+0}' /etc/group; then
-        OLD_GROUP_NAME=$(awk -F: -v g="$CUR_GID" '$3==g {print $1; exit}' /etc/group)
-        if [ -n "$OLD_GROUP_NAME" ]; then
-            sed -i "s/^\(${OLD_GROUP_NAME}:[^:]*:\)$CUR_GID:/\1$_REMOTE_USER_GID:/" /etc/group
-        fi
+        awk -F: -v OFS=: -v cg="$CUR_GID" -v ng="$_REMOTE_USER_GID" '
+            $3==cg { $3=ng } { print }
+        ' /etc/group | rewrite_file /etc/group
     fi
 fi
 
 # Rewrite the user's row in /etc/passwd, swapping just UID and GID.
-sed -i "s/^\(${_REMOTE_USER}:[^:]*:\)$CUR_UID:$CUR_GID:/\1$_REMOTE_USER_UID:$_REMOTE_USER_GID:/" /etc/passwd
+awk -F: -v OFS=: -v u="$_REMOTE_USER" -v nu="$_REMOTE_USER_UID" -v ng="$_REMOTE_USER_GID" '
+    $1==u { $3=nu; $4=ng } { print }
+' /etc/passwd | rewrite_file /etc/passwd
 
 if [ -n "$HOME_DIR" ] && [ -d "$HOME_DIR" ]; then
     chown -R "$_REMOTE_USER_UID:$_REMOTE_USER_GID" "$HOME_DIR"

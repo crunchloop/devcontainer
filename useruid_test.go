@@ -69,7 +69,7 @@ func TestUIDReconcileScript_PortableShape(t *testing.T) {
 		}
 	}
 	// Required portable primitives.
-	for _, want := range []string{"awk -F:", "sed -i", "/etc/passwd", "/etc/group"} {
+	for _, want := range []string{"awk -F:", "/etc/passwd", "/etc/group"} {
 		if !strings.Contains(uidReconcileScript, want) {
 			t.Errorf("uidReconcileScript missing %q", want)
 		}

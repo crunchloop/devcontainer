@@ -192,6 +192,9 @@ func TestUpdateRemoteUserUID_FalseLeavesUIDUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Exec id: %v", err)
 	}
+	if res.ExitCode != 0 {
+		t.Fatalf("id exit=%d stderr=%q", res.ExitCode, res.Stderr)
+	}
 	got := strings.TrimSpace(res.Stdout)
 	want := strconv.Itoa(imageUID)
 	if got != want {
