@@ -40,7 +40,7 @@ func ResolveBytes(src []byte, input ResolveInput) (*ResolvedConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg.Warnings = append(parseWarns, cfg.Warnings...)
+	cfg.Warnings = append(addSource(parseWarns, input.ConfigPath), cfg.Warnings...)
 	return cfg, nil
 }
 

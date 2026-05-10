@@ -39,17 +39,21 @@ func parseRaw(src []byte, path string) (*rawConfig, []Warning, error) {
 	if err := json.Unmarshal(cleaned, &topLevel); err == nil {
 		warns = append(warns, unknownKeyWarnings(topLevel, knownTopLevelFields, "")...)
 
-		if b, ok := topLevel["build"]; ok && len(b) > 0 {
+		// Lookups are case-insensitive: encoding/json decodes "Build" /
+		// "BUILD" into the lower-case rawConfig.Build field, so the
+		// nested probe must match the same way or it would silently
+		// skip warnings on case-variant parents.
+		if b, ok := getRawCI(topLevel, "build"); ok && len(b) > 0 {
 			var nested map[string]json.RawMessage
 			if json.Unmarshal(b, &nested) == nil {
 				warns = append(warns, unknownKeyWarnings(nested, knownBuildFields, "/build")...)
 			}
 		}
-		if h, ok := topLevel["hostRequirements"]; ok && len(h) > 0 {
+		if h, ok := getRawCI(topLevel, "hostRequirements"); ok && len(h) > 0 {
 			var nested map[string]json.RawMessage
 			if json.Unmarshal(h, &nested) == nil {
 				warns = append(warns, unknownKeyWarnings(nested, knownHostRequirementsFields, "/hostRequirements")...)
-				if g, ok := nested["gpu"]; ok && len(g) > 0 {
+				if g, ok := getRawCI(nested, "gpu"); ok && len(g) > 0 {
 					var gpuMap map[string]json.RawMessage
 					if json.Unmarshal(g, &gpuMap) == nil {
 						warns = append(warns, unknownKeyWarnings(gpuMap, knownGPUFields, "/hostRequirements/gpu")...)
@@ -117,6 +121,19 @@ var (
 	knownHostRequirementsFields = lowercaseSet(jsonFieldNames(reflect.TypeOf(rawHostRequirements{})))
 	knownGPUFields              = map[string]struct{}{"optional": {}}
 )
+
+// getRawCI returns m[key] using case-insensitive key comparison,
+// matching encoding/json's field-lookup rules. Used by parseRaw's
+// nested-object probes so case-variant parent keys (e.g. "Build")
+// still drive nested-unknown-field warnings.
+func getRawCI(m map[string]json.RawMessage, key string) (json.RawMessage, bool) {
+	for k, v := range m {
+		if strings.EqualFold(k, key) {
+			return v, true
+		}
+	}
+	return nil, false
+}
 
 func lowercaseSet(in map[string]struct{}) map[string]struct{} {
 	out := make(map[string]struct{}, len(in))

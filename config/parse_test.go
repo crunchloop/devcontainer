@@ -124,6 +124,26 @@ func TestParseRaw_UnknownHostRequirementsFieldEmitsWarning(t *testing.T) {
 	}
 }
 
+func TestParseRaw_NestedProbesCaseInsensitive(t *testing.T) {
+	// Parent key is mixed-case ("Build"); encoding/json still decodes it
+	// into rawConfig.Build, so the nested unknown-field check must fire
+	// for `contxt` even though the lookup key differs in case.
+	src := []byte(`{"Build":{"dockerfile":"Dockerfile","contxt":"."}}`)
+	_, warns, err := parseRaw(src, "")
+	if err != nil {
+		t.Fatalf("parseRaw: %v", err)
+	}
+	found := false
+	for _, w := range warns {
+		if w.Code == WarnUnknownField && w.Path == "/build/contxt" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected nested warning under case-variant /Build, got %v", warns)
+	}
+}
+
 func TestParseRaw_KnownFieldsProduceNoWarnings(t *testing.T) {
 	src := []byte(`{
 		"image": "alpine:3.20",
@@ -139,6 +159,30 @@ func TestParseRaw_KnownFieldsProduceNoWarnings(t *testing.T) {
 		if w.Code == WarnUnknownField {
 			t.Errorf("unexpected WarnUnknownField: %+v", w)
 		}
+	}
+}
+
+func TestResolveBytes_ParseWarningsTaggedWithSource(t *testing.T) {
+	cfg, err := ResolveBytes([]byte(`{"image":"alpine:3.20","wibble":1}`), ResolveInput{
+		LocalWorkspaceFolder: "/home/u/proj",
+		ConfigPath:           "/home/u/proj/.devcontainer/devcontainer.json",
+		DevcontainerID:       "abc",
+	})
+	if err != nil {
+		t.Fatalf("ResolveBytes: %v", err)
+	}
+	var unknownWarn *Warning
+	for i, w := range cfg.Warnings {
+		if w.Code == WarnUnknownField && w.Path == "/wibble" {
+			unknownWarn = &cfg.Warnings[i]
+			break
+		}
+	}
+	if unknownWarn == nil {
+		t.Fatalf("missing /wibble warning, got %v", cfg.Warnings)
+	}
+	if unknownWarn.Source != "/home/u/proj/.devcontainer/devcontainer.json" {
+		t.Errorf("Source = %q, want config path", unknownWarn.Source)
 	}
 }
 
