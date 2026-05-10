@@ -60,6 +60,13 @@ type EngineOptions struct {
 	// the resolved digest — for reproducible builds. See
 	// design/features.md §10.3.
 	StrictFeatureVersionMatch bool
+
+	// HostExecutor enables host-side spec hooks (initializeCommand,
+	// future secretsCommand). Nil means host hooks return a
+	// *LifecycleError wrapping ErrHostExecutorNotConfigured, since
+	// host execution is opt-in and security-sensitive — see
+	// HostExecutor docs.
+	HostExecutor HostExecutor
 }
 
 // New constructs an Engine. Returns an error if Runtime is nil or the

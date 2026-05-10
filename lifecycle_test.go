@@ -261,7 +261,7 @@ func TestRunLifecycle_EmptyPhaseIsNoop(t *testing.T) {
 	}
 }
 
-func TestInitializeCommand_NotSupportedInV1(t *testing.T) {
+func TestInitializeCommand_RequiresHostExecutor(t *testing.T) {
 	rt := newScriptedRuntime()
 	eng, _ := New(EngineOptions{Runtime: rt})
 	ws := writeImageDevcontainer(t, `{
@@ -273,9 +273,97 @@ func TestInitializeCommand_NotSupportedInV1(t *testing.T) {
 		RunInitializeCommand: true,
 	})
 	if err == nil {
-		t.Fatal("expected error for initializeCommand in v1")
+		t.Fatal("expected error when HostExecutor is unset")
 	}
 	if !IsLifecycleError(err) {
-		t.Errorf("want *LifecycleError, got %T", err)
+		t.Fatalf("want *LifecycleError, got %T", err)
+	}
+	if !errors.Is(err, ErrHostExecutorNotConfigured) {
+		t.Errorf("want ErrHostExecutorNotConfigured in error chain, got %v", err)
+	}
+}
+
+// fakeHostExecutor records every call and returns a canned exit code.
+type fakeHostExecutor struct {
+	calls    []HostCommand
+	exitCode int
+	stderr   string
+	err      error
+}
+
+func (f *fakeHostExecutor) ExecHost(ctx context.Context, cmd HostCommand) (HostExecResult, error) {
+	f.calls = append(f.calls, cmd)
+	if f.err != nil {
+		return HostExecResult{}, f.err
+	}
+	return HostExecResult{ExitCode: f.exitCode, Stderr: f.stderr}, nil
+}
+
+func TestInitializeCommand_RoutesToHostExecutorSingle(t *testing.T) {
+	rt := newScriptedRuntime()
+	hx := &fakeHostExecutor{}
+	eng, _ := New(EngineOptions{Runtime: rt, HostExecutor: hx})
+	ws := writeImageDevcontainer(t, `{
+		"image":"alpine:3.20",
+		"initializeCommand":"echo on-host"
+	}`)
+	if _, err := eng.Up(context.Background(), UpOptions{
+		LocalWorkspaceFolder: ws,
+		RunInitializeCommand: true,
+	}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if len(hx.calls) != 1 {
+		t.Fatalf("expected one host call, got %d", len(hx.calls))
+	}
+	if hx.calls[0].Shell != "echo on-host" {
+		t.Errorf("Shell = %q, want %q", hx.calls[0].Shell, "echo on-host")
+	}
+	if hx.calls[0].WorkingDir != ws {
+		t.Errorf("WorkingDir = %q, want %q (LocalWorkspaceFolder)", hx.calls[0].WorkingDir, ws)
+	}
+}
+
+func TestInitializeCommand_NonZeroExitProducesLifecycleError(t *testing.T) {
+	rt := newScriptedRuntime()
+	hx := &fakeHostExecutor{exitCode: 7, stderr: "boom"}
+	eng, _ := New(EngineOptions{Runtime: rt, HostExecutor: hx})
+	ws := writeImageDevcontainer(t, `{
+		"image":"alpine:3.20",
+		"initializeCommand":"false"
+	}`)
+	_, err := eng.Up(context.Background(), UpOptions{
+		LocalWorkspaceFolder: ws,
+		RunInitializeCommand: true,
+	})
+	if err == nil {
+		t.Fatal("expected error on non-zero host exit")
+	}
+	var le *LifecycleError
+	if !errors.As(err, &le) {
+		t.Fatalf("want *LifecycleError, got %T", err)
+	}
+	if le.ExitCode != 7 {
+		t.Errorf("ExitCode = %d, want 7", le.ExitCode)
+	}
+}
+
+func TestInitializeCommand_SkippedByDefault(t *testing.T) {
+	// RunInitializeCommand=false (default) → host executor never called,
+	// even if devcontainer.json declares initializeCommand.
+	rt := newScriptedRuntime()
+	hx := &fakeHostExecutor{}
+	eng, _ := New(EngineOptions{Runtime: rt, HostExecutor: hx})
+	ws := writeImageDevcontainer(t, `{
+		"image":"alpine:3.20",
+		"initializeCommand":"echo never"
+	}`)
+	if _, err := eng.Up(context.Background(), UpOptions{
+		LocalWorkspaceFolder: ws,
+	}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if len(hx.calls) != 0 {
+		t.Errorf("HostExecutor must not be invoked unless RunInitializeCommand=true, got %d calls", len(hx.calls))
 	}
 }
