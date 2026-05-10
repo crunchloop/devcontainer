@@ -31,29 +31,44 @@ func parseMetadata(dir string) (config.FeatureMetadata, error) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return config.FeatureMetadata{}, fmt.Errorf("parse %s: %w", path, err)
 	}
-	return raw.toResolved(), nil
+	out, err := raw.toResolved()
+	if err != nil {
+		return config.FeatureMetadata{}, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return out, nil
 }
 
 // rawFeatureMetadata mirrors devcontainer-feature.json on the wire. We
 // keep this internal because the public type lives in config; the raw
 // form here only needs to round-trip the on-disk JSON.
+//
+// The mergeable subset (containerEnv, mounts, init, privileged, capAdd,
+// securityOpt, entrypoint, customizations, lifecycle hooks) lines up
+// with the metadata-label entries; reads here flow through to
+// MergeMetadata via Engine.Up.
 type rawFeatureMetadata struct {
-	ID               string                      `json:"id"`
-	Version          string                      `json:"version,omitempty"`
-	Name             string                      `json:"name,omitempty"`
-	Description      string                      `json:"description,omitempty"`
-	DocumentationURL string                      `json:"documentationURL,omitempty"`
-	LicenseURL       string                      `json:"licenseURL,omitempty"`
-	Options          map[string]rawFeatureOption `json:"options,omitempty"`
-	ContainerEnv     map[string]string           `json:"containerEnv,omitempty"`
-	Init             *bool                       `json:"init,omitempty"`
-	Privileged       *bool                       `json:"privileged,omitempty"`
-	CapAdd           []string                    `json:"capAdd,omitempty"`
-	SecurityOpt      []string                    `json:"securityOpt,omitempty"`
-	Entrypoint       string                      `json:"entrypoint,omitempty"`
-	InstallsAfter    []string                    `json:"installsAfter,omitempty"`
-	DependsOn        map[string]map[string]any   `json:"dependsOn,omitempty"`
-	Customizations   map[string]json.RawMessage  `json:"customizations,omitempty"`
+	ID                   string                      `json:"id"`
+	Version              string                      `json:"version,omitempty"`
+	Name                 string                      `json:"name,omitempty"`
+	Description          string                      `json:"description,omitempty"`
+	DocumentationURL     string                      `json:"documentationURL,omitempty"`
+	LicenseURL           string                      `json:"licenseURL,omitempty"`
+	Options              map[string]rawFeatureOption `json:"options,omitempty"`
+	ContainerEnv         map[string]string           `json:"containerEnv,omitempty"`
+	Mounts               json.RawMessage             `json:"mounts,omitempty"`
+	Init                 *bool                       `json:"init,omitempty"`
+	Privileged           *bool                       `json:"privileged,omitempty"`
+	CapAdd               []string                    `json:"capAdd,omitempty"`
+	SecurityOpt          []string                    `json:"securityOpt,omitempty"`
+	Entrypoint           string                      `json:"entrypoint,omitempty"`
+	InstallsAfter        []string                    `json:"installsAfter,omitempty"`
+	DependsOn            map[string]map[string]any   `json:"dependsOn,omitempty"`
+	OnCreateCommand      json.RawMessage             `json:"onCreateCommand,omitempty"`
+	UpdateContentCommand json.RawMessage             `json:"updateContentCommand,omitempty"`
+	PostCreateCommand    json.RawMessage             `json:"postCreateCommand,omitempty"`
+	PostStartCommand     json.RawMessage             `json:"postStartCommand,omitempty"`
+	PostAttachCommand    json.RawMessage             `json:"postAttachCommand,omitempty"`
+	Customizations       map[string]json.RawMessage  `json:"customizations,omitempty"`
 }
 
 type rawFeatureOption struct {
@@ -64,7 +79,7 @@ type rawFeatureOption struct {
 	Description string `json:"description,omitempty"`
 }
 
-func (r rawFeatureMetadata) toResolved() config.FeatureMetadata {
+func (r rawFeatureMetadata) toResolved() (config.FeatureMetadata, error) {
 	out := config.FeatureMetadata{
 		ID:               r.ID,
 		Version:          r.Version,
@@ -94,5 +109,28 @@ func (r rawFeatureMetadata) toResolved() config.FeatureMetadata {
 			}
 		}
 	}
-	return out
+	if len(r.Mounts) > 0 {
+		mounts, _, err := config.DecodeMounts(r.Mounts)
+		if err != nil {
+			return config.FeatureMetadata{}, err
+		}
+		out.Mounts = mounts
+	}
+	for _, p := range []struct {
+		dst *config.LifecycleCommand
+		src json.RawMessage
+	}{
+		{&out.OnCreateCommand, r.OnCreateCommand},
+		{&out.UpdateContentCommand, r.UpdateContentCommand},
+		{&out.PostCreateCommand, r.PostCreateCommand},
+		{&out.PostStartCommand, r.PostStartCommand},
+		{&out.PostAttachCommand, r.PostAttachCommand},
+	} {
+		cmd, err := config.DecodeLifecycleCommand(p.src)
+		if err != nil {
+			return config.FeatureMetadata{}, err
+		}
+		*p.dst = cmd
+	}
+	return out, nil
 }

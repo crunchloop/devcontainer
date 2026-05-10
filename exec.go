@@ -63,6 +63,16 @@ func (e *Engine) Exec(ctx context.Context, ws *Workspace, opts ExecOptions) (Exe
 	user, _ := ws.subst.String(opts.User)
 	wd, _ := ws.subst.String(opts.WorkingDir)
 
+	// Fall back to the spec's effective user (remoteUser → containerUser)
+	// when callers leave User unset — matches lifecycle.go and
+	// userenvprobe.go, and is required for image-metadata-baked
+	// remoteUser to take effect on Exec callers that don't pass User
+	// explicitly. Caller-supplied opts.User (substitution-aware) still
+	// wins; this is a *fallback*, not an override.
+	if user == "" {
+		user = effectiveUser(ws.Config)
+	}
+
 	if !opts.SkipUserEnvProbe {
 		remoteEnv, _ := ws.subst.Map(ws.Config.RemoteEnv)
 		env = mergeProbedEnv(ws.probedEnv, remoteEnv, env, effectiveUser(ws.Config))

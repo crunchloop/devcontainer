@@ -27,11 +27,17 @@ var orderedPhases = []config.LifecyclePhase{
 // workspace, applying idempotency markers. Phases run in-container
 // except initialize, which runs on the host.
 //
-// The user's command goes through the workspace Substituter so
-// ${containerEnv:*} resolves against the live container.
+// A phase may have multiple LifecycleCommand hooks (one per metadata
+// layer that contributed); they run in order [base image label entries
+// → each feature → user devcontainer.json] per spec. The marker covers
+// the whole phase: any one hook's non-zero exit aborts and re-runs on
+// next Up.
 //
-// Returns (nil, nil) if the phase has no command configured. Returns a
-// *LifecycleError if the user command exited non-zero.
+// User commands go through the workspace Substituter so ${containerEnv:*}
+// resolves against the live container.
+//
+// Returns nil if the phase has no commands configured. Returns a
+// *LifecycleError if any hook exited non-zero.
 func (e *Engine) RunLifecycle(ctx context.Context, ws *Workspace, phase config.LifecyclePhase) error {
 	if err := ctxIfDone(ctx); err != nil {
 		return err
@@ -39,8 +45,8 @@ func (e *Engine) RunLifecycle(ctx context.Context, ws *Workspace, phase config.L
 	if ws == nil {
 		return fmt.Errorf("Engine.RunLifecycle: Workspace is required")
 	}
-	cmd := lifecycleCommandFor(ws.Config, phase)
-	return e.runPhase(ctx, ws, phase, cmd)
+	cmds := lifecycleCommandsFor(ws.Config, phase)
+	return e.runPhase(ctx, ws, phase, cmds)
 }
 
 // runAllLifecycle invokes every configured phase in spec order. initialize
@@ -52,15 +58,15 @@ func (e *Engine) runAllLifecycle(ctx context.Context, ws *Workspace, runInitiali
 		if phase == config.LifecycleInitialize && !runInitialize {
 			continue
 		}
-		cmd := lifecycleCommandFor(ws.Config, phase)
-		if err := e.runPhase(ctx, ws, phase, cmd); err != nil {
+		cmds := lifecycleCommandsFor(ws.Config, phase)
+		if err := e.runPhase(ctx, ws, phase, cmds); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func lifecycleCommandFor(cfg *config.ResolvedConfig, phase config.LifecyclePhase) config.LifecycleCommand {
+func lifecycleCommandsFor(cfg *config.ResolvedConfig, phase config.LifecyclePhase) []config.LifecycleCommand {
 	switch phase {
 	case config.LifecycleInitialize:
 		return cfg.Lifecycle.Initialize
@@ -75,22 +81,30 @@ func lifecycleCommandFor(cfg *config.ResolvedConfig, phase config.LifecyclePhase
 	case config.LifecyclePostAttach:
 		return cfg.Lifecycle.PostAttach
 	default:
-		return config.LifecycleCommand{}
+		return nil
 	}
 }
 
-// runPhase is the core: marker check → exec → marker write. No-op for
-// empty commands. Marker writes only happen on success (exit=0); a
-// failed phase will retry on next Up.
-func (e *Engine) runPhase(ctx context.Context, ws *Workspace, phase config.LifecyclePhase, cmd config.LifecycleCommand) error {
-	if cmd.IsEmpty() {
+// runPhase is the core: marker check → exec each hook in order →
+// marker write. No-op for empty hook list. Marker writes only happen on
+// success (every hook exit=0); a failed phase will retry the whole list
+// on next Up. We don't currently record per-hook progress within a
+// phase — re-running is cheap enough for typical hooks (idempotent rc
+// edits, package installs guarded by the script).
+func (e *Engine) runPhase(ctx context.Context, ws *Workspace, phase config.LifecyclePhase, cmds []config.LifecycleCommand) error {
+	if len(cmds) == 0 {
 		return nil
 	}
 
 	// initialize runs on the host, not in the container, and is not
 	// markered (caller opts in deliberately each invocation).
 	if phase == config.LifecycleInitialize {
-		return e.runInitialize(ctx, ws, cmd)
+		for _, c := range cmds {
+			if err := e.runInitialize(ctx, ws, c); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 
 	if phase != config.LifecyclePostAttach {
@@ -104,12 +118,14 @@ func (e *Engine) runPhase(ctx context.Context, ws *Workspace, phase config.Lifec
 	}
 
 	start := time.Now()
-	exitCode, stdout, stderr, err := e.execLifecycleCommand(ctx, ws, cmd)
-	if err != nil {
-		return &LifecycleError{Phase: phase, Cause: err}
-	}
-	if exitCode != 0 {
-		return &LifecycleError{Phase: phase, ExitCode: exitCode, Stdout: stdout, Stderr: stderr}
+	for _, c := range cmds {
+		exitCode, stdout, stderr, err := e.execLifecycleCommand(ctx, ws, c)
+		if err != nil {
+			return &LifecycleError{Phase: phase, Cause: err}
+		}
+		if exitCode != 0 {
+			return &LifecycleError{Phase: phase, ExitCode: exitCode, Stdout: stdout, Stderr: stderr}
+		}
 	}
 
 	if phase == config.LifecyclePostAttach {
@@ -123,7 +139,7 @@ func (e *Engine) runPhase(ctx context.Context, ws *Workspace, phase config.Lifec
 		KeyTimestamp: keyTimestampFor(phase, ws.Container),
 		RanAt:        start,
 		DurationMs:   time.Since(start).Milliseconds(),
-		ExitCode:     exitCode,
+		ExitCode:     0,
 	}); err != nil {
 		return fmt.Errorf("write marker for %s: %w", phase, err)
 	}

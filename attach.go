@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/crunchloop/devcontainer/config"
+	"github.com/crunchloop/devcontainer/feature"
 	"github.com/crunchloop/devcontainer/runtime"
 )
 
@@ -57,6 +59,24 @@ func (e *Engine) AttachWith(ctx context.Context, id WorkspaceID, opts AttachOpti
 	// have changed since Up); callers that need it should Resolve again.
 	cfg := configFromContainerLabels(details)
 	cfg.DevcontainerID = string(id)
+
+	// The container's image carries the merged-config metadata label
+	// from when Up created it; folding it in here means Attach-only
+	// callers see the same RemoteUser / lifecycle hooks / probe config
+	// as Up. Failures to read or parse the label are non-fatal — Attach
+	// then gives back a minimal cfg as before.
+	var baseLayers []config.FeatureMetadata
+	if details.Image != "" {
+		if imgDetails, err := e.runtime.InspectImage(ctx, details.Image); err == nil && imgDetails != nil {
+			if label := imgDetails.Labels[feature.MetadataLabel]; label != "" {
+				if parsed, err := feature.ParseMetadataLabel(label); err == nil {
+					baseLayers = parsed
+				}
+			}
+		}
+	}
+	config.MergeMetadata(cfg, baseLayers)
+	cfg.Finalize()
 
 	localEnv := opts.LocalEnv
 	if localEnv == nil {

@@ -24,6 +24,19 @@ func decodeStringOrStringArray(data json.RawMessage) ([]string, error) {
 	return nil, fmt.Errorf("expected string or []string")
 }
 
+// DecodeLifecycleCommand is the exported alias of decodeLifecycleCommand
+// for use by the feature package's metadata-label parser. Same semantics:
+// accepts string | []string | object (parallel-named).
+func DecodeLifecycleCommand(data json.RawMessage) (LifecycleCommand, error) {
+	return decodeLifecycleCommand(data)
+}
+
+// DecodeMounts is the exported alias of decodeMounts for use by the
+// feature package's metadata-label parser. Same semantics.
+func DecodeMounts(data json.RawMessage) ([]Mount, []Warning, error) {
+	return decodeMounts(data)
+}
+
 // decodeLifecycleCommand decodes a spec lifecycle-command field, which may
 // be a single string (shell), an array (exec), or an object mapping names to
 // either string or array (parallel-named).

@@ -207,11 +207,83 @@ func TestParseMetadataLabel_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseMetadataLabel: %v", err)
 	}
-	if len(parsed) != 2 {
-		t.Fatalf("expected 2 feature metas back, got %d (raw=%s)", len(parsed), raw)
+	// Expect the two feature entries plus the final no-ID resolved-config
+	// entry — the latter carries user mergeable overrides and must not be
+	// dropped on round-trip.
+	if len(parsed) != 3 {
+		t.Fatalf("expected 3 entries back (2 features + final config), got %d (raw=%s)", len(parsed), raw)
 	}
 	if parsed[0].ID != "git" || parsed[1].ID != "node" {
 		t.Errorf("got %+v", parsed)
+	}
+	if parsed[2].ID != "" {
+		t.Errorf("expected final entry to have no ID, got %q", parsed[2].ID)
+	}
+}
+
+func TestParseMetadataLabel_PreservesFinalEntryFields(t *testing.T) {
+	// Reference behavior: the final no-ID resolved-config entry carries
+	// remoteUser/containerUser. ParseMetadataLabel must round-trip them
+	// — this is the primary symptom of issue #20.
+	label := `[{"id":"common-utils","version":"2"},{"remoteUser":"vscode","containerUser":"vscode"}]`
+	parsed, err := ParseMetadataLabel(label)
+	if err != nil {
+		t.Fatalf("ParseMetadataLabel: %v", err)
+	}
+	if len(parsed) != 2 {
+		t.Fatalf("want 2 entries, got %d", len(parsed))
+	}
+	if parsed[1].RemoteUser != "vscode" || parsed[1].ContainerUser != "vscode" {
+		t.Errorf("final entry: got remoteUser=%q containerUser=%q", parsed[1].RemoteUser, parsed[1].ContainerUser)
+	}
+}
+
+func TestParseMetadataLabel_AllFieldsRoundTrip(t *testing.T) {
+	label := `[{
+		"id":"x",
+		"remoteUser":"u",
+		"containerUser":"u",
+		"userEnvProbe":"none",
+		"waitFor":"postStart",
+		"shutdownAction":"stopContainer",
+		"updateRemoteUserUID":true,
+		"init":true,
+		"privileged":false,
+		"overrideCommand":false,
+		"containerEnv":{"K":"v"},
+		"remoteEnv":{"R":"e"},
+		"capAdd":["SYS_PTRACE"],
+		"securityOpt":["seccomp=unconfined"],
+		"entrypoint":"/bin/x",
+		"mounts":[{"type":"bind","source":"/h","target":"/c"}],
+		"hostRequirements":{"cpus":2,"memory":"4gb"},
+		"postCreateCommand":"echo hi"
+	}]`
+	parsed, err := ParseMetadataLabel(label)
+	if err != nil {
+		t.Fatalf("ParseMetadataLabel: %v", err)
+	}
+	if len(parsed) != 1 {
+		t.Fatalf("want 1 entry, got %d", len(parsed))
+	}
+	e := parsed[0]
+	if e.RemoteUser != "u" || e.ContainerUser != "u" || e.UserEnvProbe != "none" {
+		t.Errorf("scalar fields: %+v", e)
+	}
+	if e.UpdateRemoteUserUID == nil || !*e.UpdateRemoteUserUID {
+		t.Errorf("UpdateRemoteUserUID = %v", e.UpdateRemoteUserUID)
+	}
+	if e.Init == nil || !*e.Init {
+		t.Errorf("Init = %v", e.Init)
+	}
+	if len(e.Mounts) != 1 || e.Mounts[0].Target != "/c" {
+		t.Errorf("Mounts = %+v", e.Mounts)
+	}
+	if e.HostRequirements == nil || e.HostRequirements.CPUs != 2 {
+		t.Errorf("HostRequirements = %+v", e.HostRequirements)
+	}
+	if e.PostCreateCommand.Single == nil || e.PostCreateCommand.Single.Shell != "echo hi" {
+		t.Errorf("PostCreateCommand = %+v", e.PostCreateCommand)
 	}
 }
 
