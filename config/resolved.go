@@ -389,6 +389,7 @@ const (
 	WarnDeepFeatureChain        WarningCode = "deep_feature_chain"
 	WarnUnknownFeatureOption    WarningCode = "unknown_feature_option"
 	WarnComposePortsIgnored     WarningCode = "compose_ports_ignored"
+	WarnUIDReconcileSkipped     WarningCode = "uid_reconcile_skipped"
 )
 
 // Warning is a non-fatal diagnostic accumulated during parse, merge, or

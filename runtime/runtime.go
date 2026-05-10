@@ -184,6 +184,12 @@ type ImageDetails struct {
 	Tags   []string
 	Labels map[string]string
 	Env    []string
+
+	// User is the image's default USER directive (Config.User), or "" if
+	// unset. Used to determine the effective container user for UID
+	// reconciliation when devcontainer.json's remoteUser/containerUser
+	// are also empty.
+	User string
 }
 
 // MountInspect describes a mount as reported by the runtime, not what

@@ -28,6 +28,7 @@ func (r *Runtime) InspectImage(ctx context.Context, ref string) (*runtime.ImageD
 	if res.Config != nil {
 		out.Labels = copyLabels(res.Config.Labels)
 		out.Env = append([]string(nil), res.Config.Env...)
+		out.User = res.Config.User
 	}
 	return out, nil
 }
