@@ -7,7 +7,7 @@ import (
 
 func TestParseRaw_Plain(t *testing.T) {
 	src := []byte(`{"image": "alpine:3.20"}`)
-	raw, err := parseRaw(src, "")
+	raw, _, err := parseRaw(src, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -25,7 +25,7 @@ func TestParseRaw_JSONCFeatures(t *testing.T) {
 			"--privileged", // trailing-comma + comment combo
 		],
 	}`)
-	raw, err := parseRaw(src, "")
+	raw, _, err := parseRaw(src, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -37,9 +37,158 @@ func TestParseRaw_JSONCFeatures(t *testing.T) {
 	}
 }
 
+func TestParseRaw_UnknownTopLevelFieldEmitsWarning(t *testing.T) {
+	src := []byte(`{"image":"alpine:3.20","wibble":42}`)
+	raw, warns, err := parseRaw(src, "")
+	if err != nil {
+		t.Fatalf("parseRaw: %v", err)
+	}
+	if raw.Image != "alpine:3.20" {
+		t.Errorf("Image = %q", raw.Image)
+	}
+	found := false
+	for _, w := range warns {
+		if w.Code == WarnUnknownField && w.Path == "/wibble" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected WarnUnknownField for /wibble, got %v", warns)
+	}
+}
+
+func TestParseRaw_UnknownNestedBuildFieldEmitsWarning(t *testing.T) {
+	// Real typo (not just casing — encoding/json is case-insensitive,
+	// so "dockerFile" actually decodes correctly into Dockerfile).
+	src := []byte(`{"build":{"dockerfile":"Dockerfile","contxt":"."}}`)
+	raw, warns, err := parseRaw(src, "")
+	if err != nil {
+		t.Fatalf("parseRaw: %v", err)
+	}
+	if raw.Build == nil || raw.Build.Dockerfile != "Dockerfile" {
+		t.Errorf("expected raw.Build.Dockerfile populated, got %+v", raw.Build)
+	}
+	if raw.Build.Context != "" {
+		t.Errorf("expected raw.Build.Context empty (typo), got %q", raw.Build.Context)
+	}
+	found := false
+	for _, w := range warns {
+		if w.Code == WarnUnknownField && w.Path == "/build/contxt" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected WarnUnknownField for /build/contxt, got %v", warns)
+	}
+}
+
+func TestParseRaw_CaseVariantOfKnownFieldDoesNotWarn(t *testing.T) {
+	// encoding/json matches case-insensitively, so "dockerFile" populates
+	// "dockerfile". Don't claim it was ignored.
+	src := []byte(`{"build":{"dockerFile":"Dockerfile"}}`)
+	raw, warns, err := parseRaw(src, "")
+	if err != nil {
+		t.Fatalf("parseRaw: %v", err)
+	}
+	if raw.Build == nil || raw.Build.Dockerfile != "Dockerfile" {
+		t.Errorf("expected Dockerfile populated via case-insensitive match, got %+v", raw.Build)
+	}
+	for _, w := range warns {
+		if w.Code == WarnUnknownField {
+			t.Errorf("unexpected WarnUnknownField: %+v", w)
+		}
+	}
+}
+
+func TestParseRaw_UnknownHostRequirementsFieldEmitsWarning(t *testing.T) {
+	src := []byte(`{"hostRequirements":{"cpus":2,"ram":"4gb","gpu":{"optional":true,"strange":1}}}`)
+	_, warns, err := parseRaw(src, "")
+	if err != nil {
+		t.Fatalf("parseRaw: %v", err)
+	}
+	wantPaths := map[string]bool{
+		"/hostRequirements/ram":         false,
+		"/hostRequirements/gpu/strange": false,
+	}
+	for _, w := range warns {
+		if w.Code == WarnUnknownField {
+			if _, ok := wantPaths[w.Path]; ok {
+				wantPaths[w.Path] = true
+			}
+		}
+	}
+	for p, seen := range wantPaths {
+		if !seen {
+			t.Errorf("expected WarnUnknownField for %s, got %v", p, warns)
+		}
+	}
+}
+
+func TestParseRaw_NestedProbesCaseInsensitive(t *testing.T) {
+	// Parent key is mixed-case ("Build"); encoding/json still decodes it
+	// into rawConfig.Build, so the nested unknown-field check must fire
+	// for `contxt` even though the lookup key differs in case.
+	src := []byte(`{"Build":{"dockerfile":"Dockerfile","contxt":"."}}`)
+	_, warns, err := parseRaw(src, "")
+	if err != nil {
+		t.Fatalf("parseRaw: %v", err)
+	}
+	found := false
+	for _, w := range warns {
+		if w.Code == WarnUnknownField && w.Path == "/build/contxt" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected nested warning under case-variant /Build, got %v", warns)
+	}
+}
+
+func TestParseRaw_KnownFieldsProduceNoWarnings(t *testing.T) {
+	src := []byte(`{
+		"image": "alpine:3.20",
+		"build": {"dockerfile": "Dockerfile", "context": "."},
+		"hostRequirements": {"cpus": 2, "memory": "4gb", "gpu": {"optional": true}},
+		"runArgs": ["--init"]
+	}`)
+	_, warns, err := parseRaw(src, "")
+	if err != nil {
+		t.Fatalf("parseRaw: %v", err)
+	}
+	for _, w := range warns {
+		if w.Code == WarnUnknownField {
+			t.Errorf("unexpected WarnUnknownField: %+v", w)
+		}
+	}
+}
+
+func TestResolveBytes_ParseWarningsTaggedWithSource(t *testing.T) {
+	cfg, err := ResolveBytes([]byte(`{"image":"alpine:3.20","wibble":1}`), ResolveInput{
+		LocalWorkspaceFolder: "/home/u/proj",
+		ConfigPath:           "/home/u/proj/.devcontainer/devcontainer.json",
+		DevcontainerID:       "abc",
+	})
+	if err != nil {
+		t.Fatalf("ResolveBytes: %v", err)
+	}
+	var unknownWarn *Warning
+	for i, w := range cfg.Warnings {
+		if w.Code == WarnUnknownField && w.Path == "/wibble" {
+			unknownWarn = &cfg.Warnings[i]
+			break
+		}
+	}
+	if unknownWarn == nil {
+		t.Fatalf("missing /wibble warning, got %v", cfg.Warnings)
+	}
+	if unknownWarn.Source != "/home/u/proj/.devcontainer/devcontainer.json" {
+		t.Errorf("Source = %q, want config path", unknownWarn.Source)
+	}
+}
+
 func TestParseRaw_InvalidJSON(t *testing.T) {
 	src := []byte(`{"image": }`)
-	_, err := parseRaw(src, "/path/to/devcontainer.json")
+	_, _, err := parseRaw(src, "/path/to/devcontainer.json")
 	if err == nil {
 		t.Fatal("expected parse error, got nil")
 	}

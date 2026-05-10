@@ -32,11 +32,16 @@ type ResolveInput struct {
 // resolution are stubbed in this milestone; see PRD §13 / status.md for
 // what still lands in M3.
 func ResolveBytes(src []byte, input ResolveInput) (*ResolvedConfig, error) {
-	raw, err := parseRaw(src, input.ConfigPath)
+	raw, parseWarns, err := parseRaw(src, input.ConfigPath)
 	if err != nil {
 		return nil, err
 	}
-	return resolveFromRaw(raw, input)
+	cfg, err := resolveFromRaw(raw, input)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Warnings = append(addSource(parseWarns, input.ConfigPath), cfg.Warnings...)
+	return cfg, nil
 }
 
 func resolveFromRaw(raw *rawConfig, input ResolveInput) (*ResolvedConfig, error) {
