@@ -210,6 +210,11 @@ func (e *Engine) createFresh(ctx context.Context, cfg *config.ResolvedConfig, op
 	}
 	applyMetadataMerge(cfg, baseLayers)
 
+	finalImage, err = e.reconcileRemoteUserUID(ctx, cfg, finalImage, opts)
+	if err != nil {
+		return nil, err
+	}
+
 	spec := buildRunSpec(cfg, finalImage, opts.ExtraMounts, opts.ExtraContainerEnv)
 	c, err := e.runtime.RunContainer(ctx, spec)
 	if err != nil {
@@ -383,6 +388,11 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 		return nil, err
 	}
 	applyMetadataMerge(cfg, baseLayers)
+
+	finalImage, err = e.reconcileRemoteUserUID(ctx, cfg, finalImage, opts)
+	if err != nil {
+		return nil, err
+	}
 
 	tmp, err := os.MkdirTemp("", "dc-go-compose-*")
 	if err != nil {
