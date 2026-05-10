@@ -250,15 +250,15 @@ type FeatureMetadata struct {
 	ShutdownAction      ShutdownAction
 	UpdateRemoteUserUID *bool
 
-	ContainerEnv map[string]string
-	RemoteEnv    map[string]string
-	Mounts       []Mount
-	Init         *bool
-	Privileged   *bool
+	ContainerEnv    map[string]string
+	RemoteEnv       map[string]string
+	Mounts          []Mount
+	Init            *bool
+	Privileged      *bool
 	OverrideCommand *bool
-	CapAdd       []string
-	SecurityOpt  []string
-	Entrypoint   string
+	CapAdd          []string
+	SecurityOpt     []string
+	Entrypoint      string
 
 	HostRequirements *HostRequirements
 

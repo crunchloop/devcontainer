@@ -26,27 +26,27 @@ type metadataEntry struct {
 	ResolvedRef string `json:"resolvedRef,omitempty"`
 
 	// Mergeable surface.
-	RemoteUser          string             `json:"remoteUser,omitempty"`
-	ContainerUser       string             `json:"containerUser,omitempty"`
-	UserEnvProbe        string             `json:"userEnvProbe,omitempty"`
-	WaitFor             string             `json:"waitFor,omitempty"`
-	ShutdownAction      string             `json:"shutdownAction,omitempty"`
-	UpdateRemoteUserUID *bool              `json:"updateRemoteUserUID,omitempty"`
-	ContainerEnv        map[string]string  `json:"containerEnv,omitempty"`
-	RemoteEnv           map[string]string  `json:"remoteEnv,omitempty"`
-	Init                *bool              `json:"init,omitempty"`
-	Privileged          *bool              `json:"privileged,omitempty"`
-	OverrideCommand     *bool              `json:"overrideCommand,omitempty"`
-	CapAdd              []string           `json:"capAdd,omitempty"`
-	SecurityOpt         []string           `json:"securityOpt,omitempty"`
-	Entrypoint          string             `json:"entrypoint,omitempty"`
-	Mounts              json.RawMessage    `json:"mounts,omitempty"`
-	HostRequirements    *rawHostReq        `json:"hostRequirements,omitempty"`
-	OnCreateCommand     json.RawMessage    `json:"onCreateCommand,omitempty"`
+	RemoteUser           string            `json:"remoteUser,omitempty"`
+	ContainerUser        string            `json:"containerUser,omitempty"`
+	UserEnvProbe         string            `json:"userEnvProbe,omitempty"`
+	WaitFor              string            `json:"waitFor,omitempty"`
+	ShutdownAction       string            `json:"shutdownAction,omitempty"`
+	UpdateRemoteUserUID  *bool             `json:"updateRemoteUserUID,omitempty"`
+	ContainerEnv         map[string]string `json:"containerEnv,omitempty"`
+	RemoteEnv            map[string]string `json:"remoteEnv,omitempty"`
+	Init                 *bool             `json:"init,omitempty"`
+	Privileged           *bool             `json:"privileged,omitempty"`
+	OverrideCommand      *bool             `json:"overrideCommand,omitempty"`
+	CapAdd               []string          `json:"capAdd,omitempty"`
+	SecurityOpt          []string          `json:"securityOpt,omitempty"`
+	Entrypoint           string            `json:"entrypoint,omitempty"`
+	Mounts               json.RawMessage   `json:"mounts,omitempty"`
+	HostRequirements     *rawHostReq       `json:"hostRequirements,omitempty"`
+	OnCreateCommand      json.RawMessage   `json:"onCreateCommand,omitempty"`
 	UpdateContentCommand json.RawMessage   `json:"updateContentCommand,omitempty"`
-	PostCreateCommand   json.RawMessage    `json:"postCreateCommand,omitempty"`
-	PostStartCommand    json.RawMessage    `json:"postStartCommand,omitempty"`
-	PostAttachCommand   json.RawMessage    `json:"postAttachCommand,omitempty"`
+	PostCreateCommand    json.RawMessage   `json:"postCreateCommand,omitempty"`
+	PostStartCommand     json.RawMessage   `json:"postStartCommand,omitempty"`
+	PostAttachCommand    json.RawMessage   `json:"postAttachCommand,omitempty"`
 
 	Customizations map[string]json.RawMessage `json:"customizations,omitempty"`
 }

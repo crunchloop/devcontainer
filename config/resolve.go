@@ -372,20 +372,6 @@ func decodeLifecycleCommands(raw *rawConfig) (LifecycleCommands, []Warning, erro
 	return out, nil, nil
 }
 
-// computeWaitFor selects the spec default when waitFor is not user-set.
-// Called from Finalize so it sees the post-merge lifecycle (i.e. an
-// updateContentCommand contributed by a feature's metadata still triggers
-// the updateContent default).
-func computeWaitFor(rawWaitFor string, lifecycle LifecycleCommands) LifecyclePhase {
-	if rawWaitFor != "" {
-		return LifecyclePhase(rawWaitFor)
-	}
-	if len(lifecycle.UpdateContent) > 0 {
-		return LifecycleUpdateContent
-	}
-	return LifecyclePostCreate
-}
-
 func convertPortsAttributes(in map[string]rawPortAttrs) map[string]PortAttributes {
 	if len(in) == 0 {
 		return nil
