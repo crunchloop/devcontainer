@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -321,6 +322,55 @@ func TestInitializeCommand_RoutesToHostExecutorSingle(t *testing.T) {
 	}
 	if hx.calls[0].WorkingDir != ws {
 		t.Errorf("WorkingDir = %q, want %q (LocalWorkspaceFolder)", hx.calls[0].WorkingDir, ws)
+	}
+}
+
+// concurrentHostExecutor records calls under a mutex (the parallel
+// form runs goroutines, so the bare slice in fakeHostExecutor would
+// race under -race).
+type concurrentHostExecutor struct {
+	mu    sync.Mutex
+	calls []HostCommand
+}
+
+func (c *concurrentHostExecutor) ExecHost(ctx context.Context, cmd HostCommand) (HostExecResult, error) {
+	c.mu.Lock()
+	c.calls = append(c.calls, cmd)
+	c.mu.Unlock()
+	return HostExecResult{}, nil
+}
+
+func TestInitializeCommand_RoutesToHostExecutorParallel(t *testing.T) {
+	rt := newScriptedRuntime()
+	hx := &concurrentHostExecutor{}
+	eng, _ := New(EngineOptions{Runtime: rt, HostExecutor: hx})
+	ws := writeImageDevcontainer(t, `{
+		"image":"alpine:3.20",
+		"initializeCommand": {
+			"setup":   "echo setup",
+			"prepare": "echo prepare"
+		}
+	}`)
+	if _, err := eng.Up(context.Background(), UpOptions{
+		LocalWorkspaceFolder: ws,
+		RunInitializeCommand: true,
+	}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if len(hx.calls) != 2 {
+		t.Fatalf("expected 2 host calls, got %d", len(hx.calls))
+	}
+	got := map[string]bool{}
+	for _, c := range hx.calls {
+		got[c.Shell] = true
+		if c.WorkingDir != ws {
+			t.Errorf("WorkingDir = %q, want %q", c.WorkingDir, ws)
+		}
+	}
+	for _, want := range []string{"echo setup", "echo prepare"} {
+		if !got[want] {
+			t.Errorf("missing parallel call %q (got %v)", want, got)
+		}
 	}
 }
 
