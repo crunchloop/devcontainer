@@ -162,7 +162,19 @@ func (e *Engine) Up(ctx context.Context, opts UpOptions) (*Workspace, error) {
 		// stay, stopped ones restart, missing ones get created. So we
 		// always go through createFreshCompose, regardless of whether
 		// `existing` was found — compose handles the dispatch internally.
-		ws, err = e.createFreshCompose(ctx, cfg, opts)
+		//
+		// Reattach caveat for host-side hooks: when compose finds an
+		// existing container, its env is already baked. secretsCommand
+		// output would not actually flow into the running container,
+		// so suppress it here to keep the "fresh-only" contract
+		// documented on UpOptions.RunSecretsCommand. Callers wanting a
+		// refresh pass Recreate=true (which already nils out
+		// `existing` above).
+		composeOpts := opts
+		if existing != nil {
+			composeOpts.RunSecretsCommand = false
+		}
+		ws, err = e.createFreshCompose(ctx, cfg, composeOpts)
 	case existing != nil:
 		ws, err = e.attachExisting(ctx, existing, cfg, opts)
 	default:
