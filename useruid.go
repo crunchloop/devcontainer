@@ -48,15 +48,32 @@ func (e *Engine) reconcileRemoteUserUID(ctx context.Context, cfg *config.Resolve
 		return finalImage, nil
 	}
 
-	user := effectiveContainerUser(ctx, e.runtime, cfg, finalImage)
+	user, err := effectiveContainerUser(ctx, e.runtime, cfg, finalImage)
+	if err != nil {
+		// Only reachable when neither remoteUser nor containerUser is
+		// set in cfg, so we have to fall back on the image's USER. If
+		// that inspect fails, we can't determine who to reconcile —
+		// skip with a warning rather than failing Up. Any genuine
+		// "image not found" surfaces at RunContainer with the same ref
+		// and a clearer message.
+		cfg.Warnings = append(cfg.Warnings, config.Warning{
+			Code:    config.WarnUIDReconcileSkipped,
+			Message: "updateRemoteUserUID: could not determine effective container user (" + err.Error() + "); skipping reconciliation",
+			Source:  finalImage,
+		})
+		return finalImage, nil
+	}
 	if user == "" || user == "root" || user == "0" {
 		return finalImage, nil
 	}
 
-	tag := finalImage + "-uid"
-	// If `finalImage` is itself a tagged ref like "name:tag", append the
-	// suffix to the tag rather than producing "name:tag-uid" — both are
-	// valid, but the latter still parses, and matches upstream's tagging.
+	// Use a deterministic engine-owned tag rather than appending to
+	// `finalImage`: the latter breaks on digest-pinned refs
+	// (`name@sha256:...-uid` is not a valid docker tag) and on refs that
+	// already carry a `:tag` suffix where appending produces a confusing
+	// `name:tag-uid` rather than a clean `name:tag` form. Matches the
+	// `dc-go-final-` / `dc-go-base-` naming used elsewhere.
+	tag := "dc-go-uid-" + cfg.DevcontainerID + ":latest"
 
 	tmp, err := os.MkdirTemp("", "dc-go-uid-*")
 	if err != nil {
@@ -80,19 +97,24 @@ func (e *Engine) reconcileRemoteUserUID(ctx context.Context, cfg *config.Resolve
 
 // effectiveContainerUser resolves the container user that the workspace
 // will run as, using the spec's precedence: remoteUser > containerUser >
-// image's default USER.
-func effectiveContainerUser(ctx context.Context, rt dcruntime.Runtime, cfg *config.ResolvedConfig, image string) string {
+// image's default USER. Inspect failures are propagated so callers can
+// distinguish "no user configured" (return value "") from "we failed to
+// figure out what the user is" (non-nil error).
+func effectiveContainerUser(ctx context.Context, rt dcruntime.Runtime, cfg *config.ResolvedConfig, image string) (string, error) {
 	if cfg.RemoteUser != "" {
-		return cfg.RemoteUser
+		return cfg.RemoteUser, nil
 	}
 	if cfg.ContainerUser != "" {
-		return cfg.ContainerUser
+		return cfg.ContainerUser, nil
 	}
 	details, err := rt.InspectImage(ctx, image)
-	if err != nil || details == nil {
-		return ""
+	if err != nil {
+		return "", fmt.Errorf("inspect image %s: %w", image, err)
 	}
-	return details.User
+	if details == nil {
+		return "", nil
+	}
+	return details.User, nil
 }
 
 // statOwner returns the UID/GID of path on Unix-like systems. ok=false
@@ -124,6 +146,10 @@ func generateUIDDockerfile(baseImage, user string, hostUID, hostGID int) string 
 		"RUN set -e; \\\n" +
 		"    if ! id -u \"$_REMOTE_USER\" >/dev/null 2>&1; then \\\n" +
 		"        echo \"updateRemoteUserUID: user $_REMOTE_USER not found in image; skipping\" >&2; \\\n" +
+		"        exit 0; \\\n" +
+		"    fi; \\\n" +
+		"    if ! command -v usermod >/dev/null 2>&1; then \\\n" +
+		"        echo \"updateRemoteUserUID: usermod not available (Alpine/BusyBox?); skipping — see crunchloop/devcontainer#29\" >&2; \\\n" +
 		"        exit 0; \\\n" +
 		"    fi; \\\n" +
 		"    CUR_UID=$(id -u \"$_REMOTE_USER\"); \\\n" +

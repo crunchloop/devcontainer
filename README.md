@@ -27,20 +27,81 @@ between minor versions until v1.0.0. The `events` channel surface is
 explicitly experimental. See [PRD.md](#design-docs) for scope and
 roadmap.
 
-| Source kind | Works? | Notes |
-| --- | --- | --- |
-| `image` | ✅ | Pull, run, exec, lifecycle |
-| `build` (Dockerfile) | ✅ | User Dockerfile + features layered atop |
-| `dockerComposeFile` | ✅ | compose-go for parse, shell-out to `docker compose` for orchestration |
-| Features (OCI / HTTPS / local) | ✅ | DAG ordering, options validation, content-addressed cache |
-| Pre-baked image (skip-already-installed) | ✅ | `devcontainer.metadata` label read on Up |
-| Lifecycle phases (`onCreate` … `postAttach`) | ✅ | Per-phase idempotency markers in container |
-| `${...}` substitution | ✅ | Host context at Resolve, container env post-create |
-| `customizations.<tool>` pass-through | ✅ | `map[string]json.RawMessage` for callers to decode |
+### Spec compliance
 
-Out of scope for v1: Templates spec, dotfiles repos, IDE/SSH injection
-hooks, Kubernetes / podman drivers, `forwardPorts` actuation. See
-[design/](#design-docs) for the full non-goals list.
+Status of each [Dev Containers spec](https://containers.dev/implementors/json_reference/)
+field/behavior the library covers. Legend: ✅ acted on · ⚠️ parsed but not enforced (or partial) · ❌ missing · ➖ out of scope.
+
+**Sources**
+
+| Field | Status | Notes |
+| --- | --- | --- |
+| `image` | ✅ | Pull, run, exec |
+| `build` (`dockerfile`, `context`, `args`, `target`, `cacheFrom`) | ✅ | User Dockerfile + features layered atop |
+| `dockerComposeFile`, `service`, `runServices` | ✅ | compose-go parse, shell-out to `docker compose` |
+
+**Container config**
+
+| Field | Status | Notes |
+| --- | --- | --- |
+| `workspaceFolder`, `workspaceMount` | ✅ | |
+| `mounts` (bind / volume / tmpfs) | ✅ | |
+| `containerEnv`, `remoteEnv` | ✅ | |
+| `containerUser`, `remoteUser` | ✅ | |
+| `updateRemoteUserUID` | ✅ | Debian-family images; Alpine/BusyBox tracked in [#29](https://github.com/crunchloop/devcontainer/issues/29) |
+| `userEnvProbe` (all four modes) | ✅ | |
+| `runArgs`, `init`, `privileged`, `capAdd`, `securityOpt`, `overrideCommand` | ✅ | |
+| `shutdownAction` | ⚠️ parsed | Not enforced at `Down`; [#22](https://github.com/crunchloop/devcontainer/issues/22) |
+
+**Features**
+
+| Field | Status | Notes |
+| --- | --- | --- |
+| `features` (OCI / HTTPS / local) | ✅ | DAG ordering, options validation, content-addressed cache |
+| `dependsOn` / `installsAfter` / `overrideFeatureInstallOrder` | ✅ | |
+| Pre-baked-image short-circuit | ✅ | `devcontainer.metadata` label read on Up |
+| `devcontainer-lock.json` | ❌ | [#26](https://github.com/crunchloop/devcontainer/issues/26) |
+
+**Lifecycle**
+
+| Phase | Status | Notes |
+| --- | --- | --- |
+| `initializeCommand` (host) | ⚠️ stub | Opt-in; requires `HostExecutor` wiring; [#11](https://github.com/crunchloop/devcontainer/issues/11) |
+| `onCreateCommand`, `updateContentCommand`, `postCreateCommand` | ✅ | Run-once idempotency markers |
+| `postStartCommand`, `postAttachCommand` | ✅ | Run-every-start / run-every-Up |
+| `waitFor` | ✅ | |
+| Parallel command form (object → named commands run concurrently) | ✅ | |
+| `secretsCommand` | ❌ | [#23](https://github.com/crunchloop/devcontainer/issues/23) |
+
+**Substitution**
+
+| Variable | Status | Notes |
+| --- | --- | --- |
+| `${localWorkspaceFolder[Basename]}`, `${containerWorkspaceFolder[Basename]}` | ✅ | |
+| `${localEnv:VAR[:default]}`, `${devcontainerId}` | ✅ | |
+| `${containerEnv:VAR[:default]}` | ⚠️ partial | Resolved post-create but not re-applied on `Exec`; [#25](https://github.com/crunchloop/devcontainer/issues/25) |
+
+**Ports**
+
+| Field | Status | Notes |
+| --- | --- | --- |
+| `forwardPorts` | ⚠️ parsed | Not actuated; [#7](https://github.com/crunchloop/devcontainer/issues/7) |
+| `portsAttributes`, `otherPortsAttributes` | ⚠️ parsed | Surfaced on `ResolvedConfig`; not enforced |
+| `appPort` (deprecated) | ⚠️ parsed | Warned but not translated to `forwardPorts`; [#24](https://github.com/crunchloop/devcontainer/issues/24) |
+
+**Other**
+
+| Behavior | Status | Notes |
+| --- | --- | --- |
+| `customizations.<tool>` pass-through | ✅ | `map[string]json.RawMessage` for callers |
+| `hostRequirements` | ⚠️ parsed | Surfaced; not enforced |
+| `devcontainer.metadata` label round-trip | ✅ | Written on build, read + merged on next Up |
+| Top-level unknown-field warnings | ✅ | Nested unknown-field strictness tracked in [#27](https://github.com/crunchloop/devcontainer/issues/27) |
+| GPG / SSH agent forwarding | ❌ | [#28](https://github.com/crunchloop/devcontainer/issues/28) |
+
+**Out of scope** (➖): Templates spec, dotfiles repos, IDE injection hooks,
+Kubernetes / podman drivers. See [PRD §4](#design-docs) for the full
+non-goals list.
 
 ## Install
 
