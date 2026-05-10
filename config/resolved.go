@@ -40,6 +40,15 @@ type ResolvedConfig struct {
 	Lifecycle LifecycleCommands
 	WaitFor   LifecyclePhase
 
+	// SecretsCommand is a host-side hook that runs before container start
+	// (analogous to initializeCommand) and whose stdout is parsed as
+	// key=value lines and merged into the container's environment. Unlike
+	// the lifecycle phases, it is not contributed by feature/base-image
+	// metadata layers — only the user's devcontainer.json sources it —
+	// so it is a single LifecycleCommand rather than a slice. Empty
+	// when devcontainer.json has no `secretsCommand`.
+	SecretsCommand LifecycleCommand
+
 	ForwardPorts         []PortSpec
 	PortsAttributes      map[string]PortAttributes
 	OtherPortsAttributes *PortAttributes

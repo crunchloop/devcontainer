@@ -130,6 +130,12 @@ func resolveFromRaw(raw *rawConfig, input ResolveInput) (*ResolvedConfig, error)
 	out.Lifecycle = lifecycle
 	out.Warnings = append(out.Warnings, addSource(lcWarns, input.ConfigPath)...)
 
+	secretsCmd, err := decodeLifecycleCommand(raw.SecretsCommand)
+	if err != nil {
+		return nil, &ConfigInvalidError{Path: input.ConfigPath, Message: fmt.Sprintf("/secretsCommand: %v", err)}
+	}
+	out.SecretsCommand = secretsCmd
+
 	// WaitFor passes through verbatim; the spec default (postCreate, or
 	// updateContent if any layer contributes one) is applied by Finalize
 	// after the metadata-merge pipeline.
@@ -490,6 +496,7 @@ func substituteAll(out *ResolvedConfig, ctx SubstitutionContext, source string) 
 	}
 
 	substituteLifecycle(&out.Lifecycle, subStr)
+	substituteCommand(&out.SecretsCommand, "/secretsCommand", subStr)
 
 	switch s := out.Source.(type) {
 	case *ImageSource:

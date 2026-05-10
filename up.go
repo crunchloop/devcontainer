@@ -54,6 +54,20 @@ type UpOptions struct {
 	// real host execution requires caller-supplied wiring (PRD §11).
 	RunInitializeCommand bool
 
+	// RunSecretsCommand, when true, runs the host-side secretsCommand
+	// before container creation and merges its stdout (parsed as
+	// key=value lines) into the container's environment. Default false
+	// for the same reason as RunInitializeCommand: arbitrary host
+	// execution is opt-in. Requires EngineOptions.HostExecutor to be
+	// set; otherwise a *LifecycleError wrapping
+	// ErrHostExecutorNotConfigured is returned.
+	//
+	// Only applied on fresh container creation. On reattach the
+	// existing container's env is already baked, so re-running
+	// secretsCommand would have no effect and we skip it; callers
+	// wanting a refresh should pass Recreate=true.
+	RunSecretsCommand bool
+
 	// ExtraMounts are appended to the mounts derived from devcontainer.json.
 	// They layer on top of cfg.WorkspaceMount and cfg.Mounts and are
 	// preserved across reattach (they only apply on fresh container
@@ -148,7 +162,19 @@ func (e *Engine) Up(ctx context.Context, opts UpOptions) (*Workspace, error) {
 		// stay, stopped ones restart, missing ones get created. So we
 		// always go through createFreshCompose, regardless of whether
 		// `existing` was found — compose handles the dispatch internally.
-		ws, err = e.createFreshCompose(ctx, cfg, opts)
+		//
+		// Reattach caveat for host-side hooks: when compose finds an
+		// existing container, its env is already baked. secretsCommand
+		// output would not actually flow into the running container,
+		// so suppress it here to keep the "fresh-only" contract
+		// documented on UpOptions.RunSecretsCommand. Callers wanting a
+		// refresh pass Recreate=true (which already nils out
+		// `existing` above).
+		composeOpts := opts
+		if existing != nil {
+			composeOpts.RunSecretsCommand = false
+		}
+		ws, err = e.createFreshCompose(ctx, cfg, composeOpts)
 	case existing != nil:
 		ws, err = e.attachExisting(ctx, existing, cfg, opts)
 	default:
@@ -215,7 +241,12 @@ func (e *Engine) createFresh(ctx context.Context, cfg *config.ResolvedConfig, op
 		return nil, err
 	}
 
-	spec := buildRunSpec(cfg, finalImage, opts.ExtraMounts, opts.ExtraContainerEnv)
+	extraEnv, err := e.collectSecretsEnv(ctx, cfg, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	spec := buildRunSpec(cfg, finalImage, opts.ExtraMounts, extraEnv)
 	c, err := e.runtime.RunContainer(ctx, spec)
 	if err != nil {
 		return nil, fmt.Errorf("create container: %w", err)
@@ -394,6 +425,11 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 		return nil, err
 	}
 
+	extraEnv, err := e.collectSecretsEnv(ctx, cfg, opts)
+	if err != nil {
+		return nil, err
+	}
+
 	tmp, err := os.MkdirTemp("", "dc-go-compose-*")
 	if err != nil {
 		return nil, fmt.Errorf("create compose override tmpdir: %w", err)
@@ -438,7 +474,7 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 	if err := compose.WriteRunOverride(runOverridePath, project, compose.Override{
 		Service:          src.Service,
 		ExtraBindMounts:  bindMounts,
-		ExtraEnvironment: mergeEnv(cfg.ContainerEnv, opts.ExtraContainerEnv),
+		ExtraEnvironment: mergeEnv(cfg.ContainerEnv, extraEnv),
 		Labels: map[string]string{
 			LabelDevcontainerID:       cfg.DevcontainerID,
 			LabelLocalWorkspaceFolder: cfg.LocalWorkspaceFolder,
