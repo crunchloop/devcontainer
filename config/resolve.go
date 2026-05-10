@@ -102,9 +102,41 @@ func resolveFromRaw(raw *rawConfig, input ResolveInput) (*ResolvedConfig, error)
 	out.Warnings = append(out.Warnings, addSource(portWarns, input.ConfigPath)...)
 
 	if len(raw.AppPort) > 0 {
+		appPorts, appWarns, err := decodeAppPort(raw.AppPort)
+		if err != nil {
+			return nil, &ConfigInvalidError{Path: input.ConfigPath, Message: err.Error()}
+		}
+		out.Warnings = append(out.Warnings, addSource(appWarns, input.ConfigPath)...)
+
+		// Fold into ForwardPorts, skipping container ports already
+		// declared. Match by container port: appPort historically
+		// declared container-side ports, and the user can override
+		// host binding via forwardPorts' `host:container` form.
+		seen := make(map[int]bool, len(out.ForwardPorts))
+		for _, p := range out.ForwardPorts {
+			seen[p.Container] = true
+		}
+		var added int
+		for _, p := range appPorts {
+			if seen[p.Container] {
+				continue
+			}
+			out.ForwardPorts = append(out.ForwardPorts, p)
+			seen[p.Container] = true
+			added++
+		}
+
+		msg := "appPort is deprecated; use forwardPorts"
+		if added > 0 {
+			suffix := "y"
+			if added != 1 {
+				suffix = "ies"
+			}
+			msg += fmt.Sprintf(" (translated %d entr%s into forwardPorts)", added, suffix)
+		}
 		out.Warnings = append(out.Warnings, Warning{
 			Code:    WarnDeprecatedKey,
-			Message: "appPort is deprecated; use forwardPorts",
+			Message: msg,
 			Path:    "/appPort",
 			Source:  input.ConfigPath,
 		})
