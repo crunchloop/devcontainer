@@ -24,8 +24,7 @@ shelling out.
 
 **Alpha.** API is stable enough for early integration but may change
 between minor versions until v1.0.0. The `events` channel surface is
-explicitly experimental. See [PRD.md](#design-docs) for scope and
-roadmap.
+explicitly experimental.
 
 ### Spec compliance
 
@@ -48,10 +47,10 @@ field/behavior the library covers. Legend: ✅ acted on · ⚠️ parsed but not
 | `mounts` (bind / volume / tmpfs) | ✅ | |
 | `containerEnv`, `remoteEnv` | ✅ | |
 | `containerUser`, `remoteUser` | ✅ | |
-| `updateRemoteUserUID` | ✅ | Debian-family images; Alpine/BusyBox tracked in [#29](https://github.com/crunchloop/devcontainer/issues/29) |
+| `updateRemoteUserUID` | ✅ | Portable shell (Debian, Alpine/BusyBox) |
 | `userEnvProbe` (all four modes) | ✅ | |
 | `runArgs`, `init`, `privileged`, `capAdd`, `securityOpt`, `overrideCommand` | ✅ | |
-| `shutdownAction` | ⚠️ parsed | Not enforced at `Down`; [#22](https://github.com/crunchloop/devcontainer/issues/22) |
+| `shutdownAction` | ✅ | Honored via `Engine.Shutdown` (`none` / `stopContainer` / `stopCompose`) |
 
 **Features**
 
@@ -66,12 +65,12 @@ field/behavior the library covers. Legend: ✅ acted on · ⚠️ parsed but not
 
 | Phase | Status | Notes |
 | --- | --- | --- |
-| `initializeCommand` (host) | ⚠️ stub | Opt-in; requires `HostExecutor` wiring; [#11](https://github.com/crunchloop/devcontainer/issues/11) |
+| `initializeCommand` (host) | ✅ | Opt-in via `UpOptions.RunInitializeCommand`; requires `EngineOptions.HostExecutor` |
 | `onCreateCommand`, `updateContentCommand`, `postCreateCommand` | ✅ | Run-once idempotency markers |
 | `postStartCommand`, `postAttachCommand` | ✅ | Run-every-start / run-every-Up |
 | `waitFor` | ✅ | |
 | Parallel command form (object → named commands run concurrently) | ✅ | |
-| `secretsCommand` | ❌ | [#23](https://github.com/crunchloop/devcontainer/issues/23) |
+| `secretsCommand` | ✅ | Opt-in via `UpOptions.RunSecretsCommand`; requires `EngineOptions.HostExecutor` |
 
 **Substitution**
 
@@ -79,7 +78,7 @@ field/behavior the library covers. Legend: ✅ acted on · ⚠️ parsed but not
 | --- | --- | --- |
 | `${localWorkspaceFolder[Basename]}`, `${containerWorkspaceFolder[Basename]}` | ✅ | |
 | `${localEnv:VAR[:default]}`, `${devcontainerId}` | ✅ | |
-| `${containerEnv:VAR[:default]}` | ⚠️ partial | Resolved post-create but not re-applied on `Exec`; [#25](https://github.com/crunchloop/devcontainer/issues/25) |
+| `${containerEnv:VAR[:default]}` | ✅ | Two-pass: host context pre-create, re-applied per `Exec` via the workspace substituter |
 
 **Ports**
 
@@ -96,12 +95,11 @@ field/behavior the library covers. Legend: ✅ acted on · ⚠️ parsed but not
 | `customizations.<tool>` pass-through | ✅ | `map[string]json.RawMessage` for callers |
 | `hostRequirements` | ⚠️ parsed | Surfaced; not enforced |
 | `devcontainer.metadata` label round-trip | ✅ | Written on build, read + merged on next Up |
-| Top-level unknown-field warnings | ✅ | Nested unknown-field strictness tracked in [#27](https://github.com/crunchloop/devcontainer/issues/27) |
+| Unknown-field warnings (top-level + nested) | ✅ | Includes `build`, `hostRequirements`, `gpu` sub-objects |
 | GPG / SSH agent forwarding | ❌ | [#28](https://github.com/crunchloop/devcontainer/issues/28) |
 
-**Out of scope** (➖): Templates spec, dotfiles repos, IDE injection hooks,
-Kubernetes / podman drivers. See [PRD §4](#design-docs) for the full
-non-goals list.
+**Out of scope** (➖): Templates spec, dotfiles repos, IDE injection
+hooks, Kubernetes / podman drivers.
 
 ## Install
 
@@ -196,8 +194,8 @@ Sub-packages:
 ## Tests
 
 ```bash
-make test              # unit tests (~140 cases, ~3s)
-make test-integration  # integration tests against real Docker (~30s)
+make test              # unit tests
+make test-integration  # integration tests against real Docker
 make lint              # golangci-lint
 ```
 
@@ -205,11 +203,6 @@ The integration suite (build tag `integration`) exercises real Docker:
 pulls public images from GHCR, builds Dockerfiles, runs feature install
 scripts, drives `docker compose up/down`. Skipped automatically if a
 Docker daemon isn't reachable.
-
-## Design docs
-
-PRD and design docs are kept in `design/` (private during incubation).
-They will move to `docs/` and become public alongside the v0.1.0 tag.
 
 ## Contributing
 
