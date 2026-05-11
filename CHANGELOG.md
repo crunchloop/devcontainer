@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-11
+
+### Fixed
+
+- **LICENSE** — restore canonical Apache 2.0 text. The previous file had
+  wording deviations (§4(c) trademarks clause, §9 heading and body) that
+  caused pkg.go.dev's license detector to classify the module as UNKNOWN
+  and hide all generated documentation. (#43)
+
+### Changed
+
+- **engine** — emit `ConfigWarningEvent` for warnings appended after
+  `Resolve` (feature option validation, DAG depth, post-fetch re-Order)
+  so the event stream matches `Workspace.Config.Warnings`. (#39)
+
+### Build
+
+- **Makefile** — add `make tools` target installing `golangci-lint`
+  pinned to `GOLANGCI_LINT_VERSION` (kept in sync with CI). (#39)
+- **ci** — pin `golangci-lint` to `v2.5.0` and set
+  `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true` to silence the Node 20
+  deprecation banner ahead of the 2026-06-02 default flip. (#39)
+- **dependabot** — weekly `gomod` + `github-actions` updates, grouped
+  for `moby/*` and `go.opentelemetry.io/*` lockstep packages. (#39)
+
+### Docs
+
+- **workspace** — document the `Config` asymmetry between `Up` (full)
+  and `Attach` (minimal: substituter-driving fields only). (#39)
+
 ## [0.1.0] - 2026-05-11
 
 Initial public release. A programmatic Go runtime for [Dev Containers](https://containers.dev/)
@@ -62,5 +92,6 @@ shelling out to `@devcontainers/cli`.
 - `events` is doc-tagged **experimental** until v1.0.0 — type shapes may evolve
   without a SemVer-major bump.
 
-[Unreleased]: https://github.com/crunchloop/devcontainer/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/crunchloop/devcontainer/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/crunchloop/devcontainer/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/crunchloop/devcontainer/releases/tag/v0.1.0
