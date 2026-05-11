@@ -3,7 +3,7 @@
 GO ?= go
 GOLANGCI_LINT ?= golangci-lint
 # Keep in sync with .github/workflows/ci.yml (lint job)
-GOLANGCI_LINT_VERSION ?= v2.5.3
+GOLANGCI_LINT_VERSION ?= v2.5.0
 
 all: lint test
 

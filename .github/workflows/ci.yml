@@ -26,7 +26,7 @@ jobs:
         with:
           # Pinned exact (not v2.5). Keep in sync with Makefile
           # GOLANGCI_LINT_VERSION.
-          version: v2.5.3
+          version: v2.5.0
 
   test:
     runs-on: ubuntu-latest
