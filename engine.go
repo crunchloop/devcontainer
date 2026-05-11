@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/authn"
 
+	"github.com/crunchloop/devcontainer/events"
 	"github.com/crunchloop/devcontainer/feature"
 	"github.com/crunchloop/devcontainer/runtime"
 )
@@ -16,6 +17,7 @@ import (
 type Engine struct {
 	runtime      runtime.Runtime
 	featureStore feature.Store
+	emitter      *events.Emitter
 	opts         EngineOptions
 }
 
@@ -90,7 +92,12 @@ func New(opts EngineOptions) (*Engine, error) {
 		store = ds
 	}
 
-	return &Engine{runtime: opts.Runtime, featureStore: store, opts: opts}, nil
+	return &Engine{
+		runtime:      opts.Runtime,
+		featureStore: store,
+		emitter:      events.NewEmitter(nil),
+		opts:         opts,
+	}, nil
 }
 
 // Common labels written to every container the engine creates. Labels are

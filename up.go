@@ -11,6 +11,7 @@ import (
 
 	"github.com/crunchloop/devcontainer/compose"
 	"github.com/crunchloop/devcontainer/config"
+	"github.com/crunchloop/devcontainer/events"
 	"github.com/crunchloop/devcontainer/feature"
 	"github.com/crunchloop/devcontainer/runtime"
 )
@@ -37,9 +38,12 @@ type UpOptions struct {
 	// PullPolicy controls image pulling. Default IfNotPresent.
 	PullPolicy PullPolicy
 
-	// Events optionally receives runtime build/pull progress messages.
-	// Drop-on-full; non-blocking.
-	Events chan<- runtime.BuildEvent
+	// Events optionally receives structured engine events for the duration
+	// of this Up call (config resolved, feature resolve, build/pull
+	// progress, container lifecycle, spec lifecycle phases). Drop-on-full;
+	// the engine never blocks on send. See package events for the type
+	// surface (experimental until v1.0.0).
+	Events chan<- events.Event
 
 	// SkipLifecycle, when true, suppresses automatic invocation of
 	// devcontainer lifecycle phases (onCreate, postCreate, etc.) from
@@ -84,6 +88,11 @@ type UpOptions struct {
 	// to inject host-derived env (PATH overrides, proxy vars, short-lived
 	// auth tokens) without mutating devcontainer.json.
 	ExtraContainerEnv map[string]string
+
+	// bus is the per-Up event bus, set at the top of Engine.Up and threaded
+	// through internal helpers via the UpOptions value copy. Never read or
+	// written by callers.
+	bus *eventBus
 }
 
 // PullPolicy controls when images are pulled from a registry.
@@ -114,6 +123,9 @@ func (e *Engine) Up(ctx context.Context, opts UpOptions) (*Workspace, error) {
 		return nil, fmt.Errorf("UpOptions.LocalWorkspaceFolder is required")
 	}
 
+	opts.bus = newEventBus(e.emitter, opts.Events)
+	defer opts.bus.Close()
+
 	cfg, err := Resolve(ctx, ResolveOptions{
 		LocalWorkspaceFolder: opts.LocalWorkspaceFolder,
 		ConfigPath:           opts.ConfigPath,
@@ -121,6 +133,11 @@ func (e *Engine) Up(ctx context.Context, opts UpOptions) (*Workspace, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	opts.bus.Emit(events.ConfigResolvedEvent{Config: cfg})
+	for _, w := range cfg.Warnings {
+		opts.bus.Emit(events.ConfigWarningEvent{Code: string(w.Code), Message: w.Message})
 	}
 
 	switch cfg.Source.(type) {
@@ -185,7 +202,7 @@ func (e *Engine) Up(ctx context.Context, opts UpOptions) (*Workspace, error) {
 	}
 
 	if !opts.SkipLifecycle {
-		if err := e.runAllLifecycle(ctx, ws, opts.RunInitializeCommand); err != nil {
+		if err := e.runAllLifecycle(ctx, ws, opts.RunInitializeCommand, opts.bus); err != nil {
 			return nil, err
 		}
 	}
@@ -207,6 +224,7 @@ func (e *Engine) attachExisting(ctx context.Context, c *runtime.Container, cfg *
 		if err := e.runtime.StartContainer(ctx, c.ID); err != nil {
 			return nil, fmt.Errorf("start existing container %s: %w", c.ID, err)
 		}
+		opts.bus.Emit(events.ContainerStartedEvent{ContainerID: c.ID, StartedAt: time.Now()})
 	}
 	// The container's image carries the merged-config metadata label
 	// from the prior build; re-running the merge here keeps cfg's
@@ -247,16 +265,19 @@ func (e *Engine) createFresh(ctx context.Context, cfg *config.ResolvedConfig, op
 	}
 
 	spec := buildRunSpec(cfg, finalImage, opts.ExtraMounts, extraEnv)
+	opts.bus.Emit(events.ContainerCreatingEvent{Name: spec.Name})
 	c, err := e.runtime.RunContainer(ctx, spec)
 	if err != nil {
 		return nil, fmt.Errorf("create container: %w", err)
 	}
+	opts.bus.Emit(events.ContainerCreatedEvent{ContainerID: c.ID, Name: spec.Name})
 	if err := e.runtime.StartContainer(ctx, c.ID); err != nil {
 		// Best-effort cleanup so we don't leave a created-but-stopped
 		// container behind on hard failures.
 		_ = e.runtime.RemoveContainer(ctx, c.ID, runtime.RemoveOptions{Force: true})
 		return nil, fmt.Errorf("start container %s: %w", c.ID, err)
 	}
+	opts.bus.Emit(events.ContainerStartedEvent{ContainerID: c.ID, StartedAt: time.Now()})
 	return e.buildWorkspace(ctx, c.ID, cfg, opts.LocalEnv)
 }
 
@@ -299,6 +320,17 @@ func (e *Engine) markAlreadyInstalled(cfg *config.ResolvedConfig, baked []config
 				f.Metadata = b
 				break
 			}
+		}
+	}
+}
+
+// emitFeatureSkippedFromLabel fires FeatureSkipped events for each request
+// that markAlreadyInstalled flipped via the base image's label. Called
+// from layerFeatures after the mark pass.
+func emitFeatureSkippedFromLabel(bus *eventBus, features []config.ResolvedFeature) {
+	for _, f := range features {
+		if f.AlreadyInstalled {
+			bus.Emit(events.FeatureSkippedEvent{Ref: f.Ref, Reason: "base_image_label"})
 		}
 	}
 }
@@ -492,7 +524,7 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 		ProjectName: projectName,
 		Services:    src.RunServices,
 		WorkingDir:  workingDir,
-	}, opts.Events); err != nil {
+	}, opts.bus.BuildChan(events.BuildSourceCompose)); err != nil {
 		return nil, err
 	}
 
@@ -518,7 +550,8 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 // the compose-go ServiceConfig.
 func (e *Engine) prepareComposeServiceImage(ctx context.Context, cfg *config.ResolvedConfig, svc *composetypes.ServiceConfig, workingDir string, opts UpOptions) (string, error) {
 	if svc.Image != "" && svc.Build == nil {
-		if err := e.ensureImage(ctx, svc.Image, opts.PullPolicy, opts.Events); err != nil {
+		opts.bus.Emit(events.BuildStartEvent{Source: events.BuildSourceImage, Ref: svc.Image})
+		if err := e.ensureImage(ctx, svc.Image, opts.PullPolicy, opts.bus.BuildChan(events.BuildSourceImage)); err != nil {
 			return "", err
 		}
 		return svc.Image, nil
@@ -532,13 +565,14 @@ func (e *Engine) prepareComposeServiceImage(ctx context.Context, cfg *config.Res
 		if !filepath.IsAbs(ctxPath) {
 			ctxPath = filepath.Join(workingDir, ctxPath)
 		}
+		opts.bus.Emit(events.BuildStartEvent{Source: events.BuildSourceDockerfile, Ref: tag})
 		_, err := e.runtime.BuildImage(ctx, runtime.BuildSpec{
 			ContextPath: ctxPath,
 			Dockerfile:  svc.Build.Dockerfile,
 			Tag:         tag,
 			Args:        flattenStringMap(svc.Build.Args),
 			Target:      svc.Build.Target,
-		}, opts.Events)
+		}, opts.bus.BuildChan(events.BuildSourceDockerfile))
 		if err != nil {
 			return "", fmt.Errorf("build compose primary service image: %w", err)
 		}
@@ -639,13 +673,15 @@ func (e *Engine) composeDownExisting(ctx context.Context, existing *runtime.Cont
 func (e *Engine) prepareBaseImage(ctx context.Context, cfg *config.ResolvedConfig, opts UpOptions) (string, error) {
 	switch s := cfg.Source.(type) {
 	case *config.ImageSource:
-		if err := e.ensureImage(ctx, s.Image, opts.PullPolicy, opts.Events); err != nil {
+		opts.bus.Emit(events.BuildStartEvent{Source: events.BuildSourceImage, Ref: s.Image})
+		if err := e.ensureImage(ctx, s.Image, opts.PullPolicy, opts.bus.BuildChan(events.BuildSourceImage)); err != nil {
 			return "", err
 		}
 		return s.Image, nil
 
 	case *config.BuildSource:
 		tag := "dc-go-base-" + cfg.DevcontainerID + ":latest"
+		opts.bus.Emit(events.BuildStartEvent{Source: events.BuildSourceDockerfile, Ref: tag})
 		_, err := e.runtime.BuildImage(ctx, runtime.BuildSpec{
 			ContextPath: s.Context,
 			Dockerfile:  s.Dockerfile,
@@ -653,7 +689,7 @@ func (e *Engine) prepareBaseImage(ctx context.Context, cfg *config.ResolvedConfi
 			Args:        s.Args,
 			Target:      s.Target,
 			CacheFrom:   s.CacheFrom,
-		}, opts.Events)
+		}, opts.bus.BuildChan(events.BuildSourceDockerfile))
 		if err != nil {
 			return "", fmt.Errorf("build base image from %s: %w", s.Context, err)
 		}
@@ -710,6 +746,12 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 		configDir = filepath.Join(cfg.LocalWorkspaceFolder, ".devcontainer")
 	}
 
+	// Emit a Skipped event for features the base-image label satisfied
+	// (markAlreadyInstalled has already flipped their AlreadyInstalled
+	// flag). Done before the fetch loop so the event order is:
+	// skip(s) → resolve_start → resolved → ...
+	emitFeatureSkippedFromLabel(opts.bus, cfg.Features)
+
 	// Fetch each not-yet-installed feature. Resolve refs in place.
 	for i := range cfg.Features {
 		f := &cfg.Features[i]
@@ -720,6 +762,7 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 		if f.SourceKind == config.FeatureSourceLocal {
 			ref = feature.ResolveLocalRef(configDir, f.Ref)
 		}
+		opts.bus.Emit(events.FeatureResolveStartEvent{Ref: f.Ref})
 		fetched, err := e.featureStore.Fetch(ctx, ref, f.SourceKind)
 		if err != nil {
 			return "", nil, fmt.Errorf("fetch feature %s: %w", f.Ref, err)
@@ -727,6 +770,9 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 		f.Dir = fetched.Dir
 		f.ResolvedRef = fetched.ResolvedRef
 		f.Metadata = fetched.Metadata
+		// FromCache is left false: the current Store interface doesn't
+		// distinguish cached from network fetches. See feature.Fetched.
+		opts.bus.Emit(events.FeatureResolvedEvent{Ref: f.Ref, Digest: fetched.ResolvedRef})
 
 		// Apply spec defaults + validate against the now-known options.
 		merged, mwarns, err := feature.MergeOptions(f.Metadata, f.Options)
@@ -767,6 +813,7 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 	}
 
 	finalTag := "dc-go-final-" + cfg.DevcontainerID + ":latest"
+	opts.bus.Emit(events.BuildStartEvent{Source: events.BuildSourceFeatures, Ref: finalTag})
 	_, err = e.runtime.BuildImage(ctx, runtime.BuildSpec{
 		ContextPath: tmp,
 		Dockerfile:  "Dockerfile",
@@ -774,7 +821,7 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 		Args: map[string]string{
 			"_DEV_CONTAINERS_BASE_IMAGE": baseImage,
 		},
-	}, opts.Events)
+	}, opts.bus.BuildChan(events.BuildSourceFeatures))
 	if err != nil {
 		return "", nil, fmt.Errorf("build feature-extended image: %w", err)
 	}
