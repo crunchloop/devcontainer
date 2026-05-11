@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/crunchloop/devcontainer/config"
+	"github.com/crunchloop/devcontainer/events"
 	"github.com/crunchloop/devcontainer/runtime"
 )
 
@@ -18,6 +19,15 @@ type DownOptions struct {
 	// RemoveVolumes, when true with Remove, also removes anonymous volumes
 	// the container created. Has no effect when Remove is false.
 	RemoveVolumes bool
+
+	// Events optionally receives structured engine events for the duration
+	// of this Down call (container.stopped, container.removed). See package
+	// events (experimental until v1.0.0).
+	//
+	// Ownership: the caller owns the channel. The engine only writes —
+	// it never closes the channel. The caller MUST NOT close it before
+	// Down returns.
+	Events chan<- events.Event
 }
 
 // Down stops the workspace's container. With opts.Remove, the container
@@ -40,8 +50,11 @@ func (e *Engine) Down(ctx context.Context, ws *Workspace, opts DownOptions) erro
 		return fmt.Errorf("Engine.Down: Workspace is required")
 	}
 
+	bus := newEventBus(e.emitter, opts.Events)
+	defer bus.Close()
+
 	if isComposeWorkspace(ws) {
-		return e.downCompose(ctx, ws, opts)
+		return e.downCompose(ctx, ws, opts, bus)
 	}
 
 	id := ws.Container.ID
@@ -49,6 +62,8 @@ func (e *Engine) Down(ctx context.Context, ws *Workspace, opts DownOptions) erro
 		if !isNotFound(err) {
 			return fmt.Errorf("stop container %s: %w", id, err)
 		}
+	} else {
+		bus.Emit(events.ContainerStoppedEvent{ContainerID: id, ExitCode: -1})
 	}
 
 	if opts.Remove {
@@ -57,6 +72,7 @@ func (e *Engine) Down(ctx context.Context, ws *Workspace, opts DownOptions) erro
 		}); err != nil && !isNotFound(err) {
 			return fmt.Errorf("remove container %s: %w", id, err)
 		}
+		bus.Emit(events.ContainerRemovedEvent{ContainerID: id})
 	}
 	return nil
 }
@@ -77,7 +93,7 @@ func isComposeWorkspace(ws *Workspace) bool {
 // ComposeRuntime.ComposeDown. Without Remove, falls back to a per-
 // container stop (compose has no native "stop the whole project
 // without removing" command in its stable API surface; we approximate).
-func (e *Engine) downCompose(ctx context.Context, ws *Workspace, opts DownOptions) error {
+func (e *Engine) downCompose(ctx context.Context, ws *Workspace, opts DownOptions, bus *eventBus) error {
 	cr, ok := e.runtime.(runtime.ComposeRuntime)
 	if !ok {
 		// Shouldn't happen — we couldn't have created a compose
@@ -99,6 +115,7 @@ func (e *Engine) downCompose(ctx context.Context, ws *Workspace, opts DownOption
 		if err := e.runtime.StopContainer(ctx, ws.Container.ID, runtime.StopOptions{}); err != nil && !isNotFound(err) {
 			return fmt.Errorf("stop compose primary %s: %w", ws.Container.ID, err)
 		}
+		bus.Emit(events.ContainerStoppedEvent{ContainerID: ws.Container.ID, ExitCode: -1})
 		return nil
 	}
 
@@ -108,6 +125,7 @@ func (e *Engine) downCompose(ctx context.Context, ws *Workspace, opts DownOption
 	}); err != nil {
 		return fmt.Errorf("compose down: %w", err)
 	}
+	bus.Emit(events.ContainerRemovedEvent{ContainerID: ws.Container.ID})
 	return nil
 }
 

@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
+	"github.com/crunchloop/devcontainer/events"
 	"github.com/crunchloop/devcontainer/runtime"
 )
 
@@ -35,6 +37,21 @@ type ExecOptions struct {
 	// environment — internal probes, low-level fs operations,
 	// DiscoverPath-style helpers that read raw container env.
 	SkipUserEnvProbe bool
+
+	// EmitEvents, when true and Events is non-nil, sends ExecStartEvent
+	// and ExecCompletedEvent for this call. Default false: hot-loop
+	// callers (readiness probes that run hundreds of execs per minute)
+	// would otherwise drown the events channel.
+	EmitEvents bool
+
+	// Events optionally receives ExecStartEvent / ExecCompletedEvent for
+	// this call. Used only when EmitEvents is true. See package events
+	// (experimental until v1.0.0).
+	//
+	// Ownership: the caller owns the channel. The engine only writes —
+	// it never closes the channel. The caller MUST NOT close it before
+	// Exec returns.
+	Events chan<- events.Event
 }
 
 // ExecResult is the outcome of Engine.Exec.
@@ -78,6 +95,14 @@ func (e *Engine) Exec(ctx context.Context, ws *Workspace, opts ExecOptions) (Exe
 		env = mergeProbedEnv(ws.probedEnv, remoteEnv, env, effectiveUser(ws.Config))
 	}
 
+	var bus *eventBus
+	if opts.EmitEvents && opts.Events != nil {
+		bus = newEventBus(e.emitter, opts.Events)
+		defer bus.Close()
+		bus.Emit(events.ExecStartEvent{ContainerID: ws.Container.ID, Cmd: cmd})
+	}
+	start := time.Now()
+
 	res, err := e.runtime.ExecContainer(ctx, ws.Container.ID, runtime.ExecOptions{
 		Cmd:        cmd,
 		Env:        env,
@@ -89,8 +114,18 @@ func (e *Engine) Exec(ctx context.Context, ws *Workspace, opts ExecOptions) (Exe
 		Stderr:     opts.Stderr,
 	})
 	if err != nil {
+		bus.Emit(events.ExecCompletedEvent{
+			ContainerID: ws.Container.ID,
+			ExitCode:    -1,
+			DurationMs:  time.Since(start).Milliseconds(),
+		})
 		return ExecResult{}, err
 	}
+	bus.Emit(events.ExecCompletedEvent{
+		ContainerID: ws.Container.ID,
+		ExitCode:    res.ExitCode,
+		DurationMs:  time.Since(start).Milliseconds(),
+	})
 	return ExecResult{
 		ExitCode: res.ExitCode,
 		Stdout:   res.Stdout,

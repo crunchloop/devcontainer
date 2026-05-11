@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/crunchloop/devcontainer/config"
+	"github.com/crunchloop/devcontainer/events"
 	"github.com/crunchloop/devcontainer/runtime"
 )
 
@@ -46,20 +48,20 @@ func (e *Engine) RunLifecycle(ctx context.Context, ws *Workspace, phase config.L
 		return fmt.Errorf("Engine.RunLifecycle: Workspace is required")
 	}
 	cmds := lifecycleCommandsFor(ws.Config, phase)
-	return e.runPhase(ctx, ws, phase, cmds)
+	return e.runPhase(ctx, ws, phase, cmds, nil)
 }
 
 // runAllLifecycle invokes every configured phase in spec order. initialize
 // is skipped unless runInitialize is true (caller opt-in via
 // UpOptions.RunInitializeCommand). Stops at the first phase to return an
 // error.
-func (e *Engine) runAllLifecycle(ctx context.Context, ws *Workspace, runInitialize bool) error {
+func (e *Engine) runAllLifecycle(ctx context.Context, ws *Workspace, runInitialize bool, bus *eventBus) error {
 	for _, phase := range orderedPhases {
 		if phase == config.LifecycleInitialize && !runInitialize {
 			continue
 		}
 		cmds := lifecycleCommandsFor(ws.Config, phase)
-		if err := e.runPhase(ctx, ws, phase, cmds); err != nil {
+		if err := e.runPhase(ctx, ws, phase, cmds, bus); err != nil {
 			return err
 		}
 	}
@@ -91,7 +93,7 @@ func lifecycleCommandsFor(cfg *config.ResolvedConfig, phase config.LifecyclePhas
 // on next Up. We don't currently record per-hook progress within a
 // phase — re-running is cheap enough for typical hooks (idempotent rc
 // edits, package installs guarded by the script).
-func (e *Engine) runPhase(ctx context.Context, ws *Workspace, phase config.LifecyclePhase, cmds []config.LifecycleCommand) error {
+func (e *Engine) runPhase(ctx context.Context, ws *Workspace, phase config.LifecyclePhase, cmds []config.LifecycleCommand, bus *eventBus) error {
 	if len(cmds) == 0 {
 		return nil
 	}
@@ -100,9 +102,17 @@ func (e *Engine) runPhase(ctx context.Context, ws *Workspace, phase config.Lifec
 	// markered (caller opts in deliberately each invocation).
 	if phase == config.LifecycleInitialize {
 		for _, c := range cmds {
+			bus.Emit(events.LifecycleStartEvent{Phase: string(phase), Command: lifecycleCommandDisplay(c)})
+			start := time.Now()
 			if err := e.runInitialize(ctx, ws, c); err != nil {
+				bus.Emit(events.LifecycleCompletedEvent{
+					Phase:      string(phase),
+					ExitCode:   exitCodeFromErr(err),
+					DurationMs: time.Since(start).Milliseconds(),
+				})
 				return err
 			}
+			bus.Emit(events.LifecycleCompletedEvent{Phase: string(phase), DurationMs: time.Since(start).Milliseconds()})
 		}
 		return nil
 	}
@@ -113,16 +123,29 @@ func (e *Engine) runPhase(ctx context.Context, ws *Workspace, phase config.Lifec
 			return fmt.Errorf("read marker for %s: %w", phase, err)
 		}
 		if !shouldRun(phase, m, ws.Container) {
+			bus.Emit(events.LifecycleSkippedEvent{Phase: string(phase), Reason: "marker_present"})
 			return nil
 		}
 	}
 
 	start := time.Now()
 	for _, c := range cmds {
+		bus.Emit(events.LifecycleStartEvent{Phase: string(phase), Command: lifecycleCommandDisplay(c)})
+		hookStart := time.Now()
 		exitCode, stdout, stderr, err := e.execLifecycleCommand(ctx, ws, c)
 		if err != nil {
+			bus.Emit(events.LifecycleCompletedEvent{
+				Phase:      string(phase),
+				ExitCode:   -1,
+				DurationMs: time.Since(hookStart).Milliseconds(),
+			})
 			return &LifecycleError{Phase: phase, Cause: err}
 		}
+		bus.Emit(events.LifecycleCompletedEvent{
+			Phase:      string(phase),
+			ExitCode:   exitCode,
+			DurationMs: time.Since(hookStart).Milliseconds(),
+		})
 		if exitCode != 0 {
 			return &LifecycleError{Phase: phase, ExitCode: exitCode, Stdout: stdout, Stderr: stderr}
 		}
@@ -331,6 +354,45 @@ func (e *Engine) execParallel(ctx context.Context, ws *Workspace, parallel map[s
 		return 0, aggOut, aggErr, firstErr
 	}
 	return firstExit, aggOut, aggErr, nil
+}
+
+// lifecycleCommandDisplay returns a human-readable rendering of c for the
+// LifecycleStartEvent.Command field. Single shell → the shell string;
+// single exec → space-joined argv; parallel → "<name1>,<name2>,..."
+// (deterministic by sort order).
+func lifecycleCommandDisplay(c config.LifecycleCommand) string {
+	if c.Single != nil {
+		if c.Single.Shell != "" {
+			return c.Single.Shell
+		}
+		if len(c.Single.Exec) > 0 {
+			return strings.Join(c.Single.Exec, " ")
+		}
+	}
+	if len(c.Parallel) > 0 {
+		names := make([]string, 0, len(c.Parallel))
+		for k := range c.Parallel {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		return strings.Join(names, ",")
+	}
+	return ""
+}
+
+// exitCodeFromErr extracts a *LifecycleError's ExitCode, falling back to
+// -1 when err is not a LifecycleError or carries no exit code.
+func exitCodeFromErr(err error) int {
+	var le *LifecycleError
+	if err != nil {
+		if le2, ok := err.(*LifecycleError); ok {
+			le = le2
+		}
+	}
+	if le != nil && le.ExitCode != 0 {
+		return le.ExitCode
+	}
+	return -1
 }
 
 // effectiveUser is the user lifecycle commands run as: remoteUser,
