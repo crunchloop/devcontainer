@@ -3,6 +3,7 @@ package devcontainer
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/crunchloop/devcontainer/events"
 )
@@ -119,6 +120,6 @@ func TestExecEventsOptOutByDefault(t *testing.T) {
 	select {
 	case ev := <-ch:
 		t.Fatalf("expected no events, got %T", ev)
-	default:
+	case <-time.After(50 * time.Millisecond):
 	}
 }
