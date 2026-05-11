@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# Force JavaScript-based actions onto Node.js 24 ahead of the
+# 2026-06-02 default flip; silences the Node 20 deprecation banner.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -19,7 +24,9 @@ jobs:
           cache: true
       - uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.5
+          # Pinned exact (not v2.5). Keep in sync with Makefile
+          # GOLANGCI_LINT_VERSION.
+          version: v2.5.0
 
   test:
     runs-on: ubuntu-latest

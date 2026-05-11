@@ -17,8 +17,31 @@ type WorkspaceID string
 // Workspace is safe for concurrent reads (Exec/Inspect/Logs) but not for
 // concurrent mutation. Engine.Attach returns a fresh Workspace; callers
 // should not share Workspace values across re-attaches.
+//
+// Config asymmetry between Up and Attach:
+//
+//   - Workspaces returned by Engine.Up have a fully-populated Config:
+//     every field from devcontainer.json (lifecycle commands, mounts,
+//     customizations, features, etc.) is present, image-metadata
+//     merged, and warnings accumulated on Config.Warnings.
+//
+//   - Workspaces returned by Engine.Attach have a MINIMAL Config
+//     reconstructed from container labels and image inspect:
+//     LocalWorkspaceFolder, ContainerWorkspaceFolder, ContainerUser,
+//     RemoteUser (from image-metadata merge), and the source kind.
+//     Lifecycle hooks, Mounts, Customizations, Features, and most
+//     other devcontainer.json fields are NOT repopulated — Attach
+//     does not re-read devcontainer.json from disk.
+//
+//     This is enough to drive Exec (the substituter is bound to the
+//     live container env) and Down, but callers that need the full
+//     devcontainer.json view should call Resolve themselves, or use
+//     Engine.Up which always returns the full Config.
 type Workspace struct {
-	ID        WorkspaceID
+	ID WorkspaceID
+
+	// Config is the resolved devcontainer.json. Full after Up; minimal
+	// after Attach — see the type-level docs for the field breakdown.
 	Config    *config.ResolvedConfig
 	Container *runtime.ContainerDetails
 

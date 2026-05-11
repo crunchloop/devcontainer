@@ -1,9 +1,16 @@
-.PHONY: all test test-integration lint fmt vet tidy clean
+.PHONY: all test test-integration lint fmt vet tidy clean tools
 
 GO ?= go
 GOLANGCI_LINT ?= golangci-lint
+# Keep in sync with .github/workflows/ci.yml (lint job)
+GOLANGCI_LINT_VERSION ?= v2.5.0
 
 all: lint test
+
+# tools installs developer tooling under $GOPATH/bin (or $GOBIN). Re-run
+# to refresh after bumping GOLANGCI_LINT_VERSION.
+tools:
+	$(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 test:
 	$(GO) test -race -count=1 ./...

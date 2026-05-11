@@ -28,6 +28,15 @@ type AttachOptions struct {
 // AttachOptions.LocalEnv (or os.Environ() if nil) — note that
 // LocalWorkspaceFolder and ConfigPath cannot be recovered from a running
 // container alone, so callers needing those should use Up.
+//
+// The returned Workspace.Config is the MINIMAL form (LocalWorkspaceFolder,
+// ContainerWorkspaceFolder, ContainerUser/RemoteUser, source kind plus
+// any image-metadata-merged fields). Devcontainer.json-only fields
+// (Lifecycle hooks, Mounts, Customizations, Features) are NOT
+// reconstructed here — Attach does not re-read the source
+// devcontainer.json. Callers that need the full ResolvedConfig should
+// either call Resolve directly or use Engine.Up. See the Workspace
+// type docs for the full breakdown.
 func (e *Engine) Attach(ctx context.Context, id WorkspaceID) (*Workspace, error) {
 	return e.AttachWith(ctx, id, AttachOptions{})
 }

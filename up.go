@@ -145,6 +145,12 @@ func (e *Engine) Up(ctx context.Context, opts UpOptions) (*Workspace, error) {
 	for _, w := range cfg.Warnings {
 		opts.bus.Emit(events.ConfigWarningEvent{Code: string(w.Code), Message: w.Message})
 	}
+	// Track how many warnings exist post-Resolve. layerFeatures may
+	// append more (feature option validation, DAG depth, post-fetch
+	// re-Order) — we emit ConfigWarningEvent for those after the
+	// workspace is ready so callers see them in the event stream and
+	// not just on Workspace.Config.Warnings.
+	preFeatureWarnings := len(cfg.Warnings)
 
 	switch cfg.Source.(type) {
 	case *config.ImageSource:
@@ -205,6 +211,16 @@ func (e *Engine) Up(ctx context.Context, opts UpOptions) (*Workspace, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+
+	// Emit any warnings appended between Resolve and now (feature
+	// options validation, DAG depth, post-fetch re-Order). Done after
+	// the workspace exists so consumers can correlate via the bus's
+	// Seq with container.created / container.started.
+	if ws != nil && ws.Config != nil {
+		for _, w := range ws.Config.Warnings[preFeatureWarnings:] {
+			opts.bus.Emit(events.ConfigWarningEvent{Code: string(w.Code), Message: w.Message})
+		}
 	}
 
 	if !opts.SkipLifecycle {
