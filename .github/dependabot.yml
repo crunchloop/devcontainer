@@ -1,0 +1,33 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    groups:
+      # Bundle Docker SDK packages so the moby/moby/api ↔ moby/moby/client
+      # versions move together.
+      moby:
+        patterns:
+          - github.com/moby/moby/*
+      # OpenTelemetry packages release in lockstep; one PR per bump.
+      opentelemetry:
+        patterns:
+          - go.opentelemetry.io/*
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
