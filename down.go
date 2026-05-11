@@ -23,6 +23,10 @@ type DownOptions struct {
 	// Events optionally receives structured engine events for the duration
 	// of this Down call (container.stopped, container.removed). See package
 	// events (experimental until v1.0.0).
+	//
+	// Ownership: the caller owns the channel. The engine only writes —
+	// it never closes the channel. The caller MUST NOT close it before
+	// Down returns.
 	Events chan<- events.Event
 }
 

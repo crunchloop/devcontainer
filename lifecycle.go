@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -365,14 +366,7 @@ func lifecycleCommandDisplay(c config.LifecycleCommand) string {
 			return c.Single.Shell
 		}
 		if len(c.Single.Exec) > 0 {
-			out := ""
-			for i, s := range c.Single.Exec {
-				if i > 0 {
-					out += " "
-				}
-				out += s
-			}
-			return out
+			return strings.Join(c.Single.Exec, " ")
 		}
 	}
 	if len(c.Parallel) > 0 {
@@ -381,14 +375,7 @@ func lifecycleCommandDisplay(c config.LifecycleCommand) string {
 			names = append(names, k)
 		}
 		sort.Strings(names)
-		out := ""
-		for i, n := range names {
-			if i > 0 {
-				out += ","
-			}
-			out += n
-		}
-		return out
+		return strings.Join(names, ",")
 	}
 	return ""
 }

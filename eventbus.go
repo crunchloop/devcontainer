@@ -102,11 +102,11 @@ func (b *eventBus) Close() {
 func translateBuildEvent(be runtime.BuildEvent, src events.BuildSource) events.Event {
 	switch be.Kind {
 	case runtime.BuildEventLayer, runtime.BuildEventPullProgress:
-		return events.BuildLayerEvent{LayerID: be.LayerID, Status: be.Message}
+		return events.BuildLayerEvent{Source: src, LayerID: be.LayerID, Status: be.Message}
 	case runtime.BuildEventCompleted:
-		return events.BuildCompletedEvent{ImageID: be.Digest}
+		return events.BuildCompletedEvent{Source: src, ImageID: be.Digest}
 	default:
-		return events.BuildLogEvent{Stream: "stdout", Line: be.Message}
+		return events.BuildLogEvent{Source: src, Stream: "stdout", Line: be.Message}
 	}
 }
 

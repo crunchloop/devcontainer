@@ -11,10 +11,11 @@ const (
 type BuildSource string
 
 const (
-	BuildSourceImage      BuildSource = "image"
-	BuildSourceDockerfile BuildSource = "dockerfile"
-	BuildSourceCompose    BuildSource = "compose"
-	BuildSourceFeatures   BuildSource = "features"
+	BuildSourceImage        BuildSource = "image"
+	BuildSourceDockerfile   BuildSource = "dockerfile"
+	BuildSourceCompose      BuildSource = "compose"
+	BuildSourceFeatures     BuildSource = "features"
+	BuildSourceUIDReconcile BuildSource = "uid_reconcile"
 )
 
 // BuildStartEvent fires once at the top of a build/pull operation.
@@ -31,6 +32,7 @@ func (BuildStartEvent) EventType() string { return TypeBuildStart }
 // distinguish, in which case Stream is "stdout".
 type BuildLogEvent struct {
 	Base
+	Source BuildSource
 	Stream string
 	Line   string
 }
@@ -41,6 +43,7 @@ func (BuildLogEvent) EventType() string { return TypeBuildLog }
 // "pulling", "extracting", "cached", "done".
 type BuildLayerEvent struct {
 	Base
+	Source  BuildSource
 	LayerID string
 	Status  string
 }
@@ -50,6 +53,7 @@ func (BuildLayerEvent) EventType() string { return TypeBuildLayer }
 // BuildCompletedEvent fires when the build/pull completes successfully.
 type BuildCompletedEvent struct {
 	Base
+	Source     BuildSource
 	ImageID    string
 	DurationMs int64
 }

@@ -47,6 +47,10 @@ type ExecOptions struct {
 	// Events optionally receives ExecStartEvent / ExecCompletedEvent for
 	// this call. Used only when EmitEvents is true. See package events
 	// (experimental until v1.0.0).
+	//
+	// Ownership: the caller owns the channel. The engine only writes —
+	// it never closes the channel. The caller MUST NOT close it before
+	// Exec returns.
 	Events chan<- events.Event
 }
 

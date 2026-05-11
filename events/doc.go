@@ -27,4 +27,11 @@
 // stamped at emission. The channel is non-blocking from the engine's
 // perspective — events are dropped on a full channel rather than
 // stalling work.
+//
+// Channel ownership: the caller owns the channel; the engine only writes
+// to it and never closes it. The caller MUST NOT close the channel
+// before the operation (Up / Down / Exec) it was passed to returns —
+// doing so races with the engine's send and will panic. The safe
+// pattern is to close after the call returns, or simply leave the
+// channel open and let it be garbage-collected.
 package events

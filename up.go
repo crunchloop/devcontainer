@@ -43,6 +43,12 @@ type UpOptions struct {
 	// progress, container lifecycle, spec lifecycle phases). Drop-on-full;
 	// the engine never blocks on send. See package events for the type
 	// surface (experimental until v1.0.0).
+	//
+	// Ownership: the caller owns the channel. The engine only writes —
+	// it never closes the channel. The caller MUST NOT close it before
+	// Up returns; closing a channel while the engine is still sending
+	// races with the engine's send and will panic. Close after Up
+	// returns (or simply leave the channel open and let it be GC'd).
 	Events chan<- events.Event
 
 	// SkipLifecycle, when true, suppresses automatic invocation of

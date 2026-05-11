@@ -91,12 +91,12 @@ func (e *Engine) reconcileRemoteUserUID(ctx context.Context, cfg *config.Resolve
 	if err := os.WriteFile(filepath.Join(tmp, "Dockerfile"), []byte(df), 0o644); err != nil {
 		return "", err
 	}
-	opts.bus.Emit(events.BuildStartEvent{Source: events.BuildSourceFeatures, Ref: tag})
+	opts.bus.Emit(events.BuildStartEvent{Source: events.BuildSourceUIDReconcile, Ref: tag})
 	if _, err := e.runtime.BuildImage(ctx, dcruntime.BuildSpec{
 		ContextPath: tmp,
 		Dockerfile:  "Dockerfile",
 		Tag:         tag,
-	}, opts.bus.BuildChan(events.BuildSourceFeatures)); err != nil {
+	}, opts.bus.BuildChan(events.BuildSourceUIDReconcile)); err != nil {
 		return "", fmt.Errorf("build uid-reconciled image: %w", err)
 	}
 	return tag, nil

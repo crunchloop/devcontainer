@@ -58,7 +58,10 @@ func TestUpEmitsEvents(t *testing.T) {
 // TestExecEmitsEvents verifies the opt-in ExecOptions.EmitEvents path.
 func TestExecEmitsEvents(t *testing.T) {
 	rt := newFakeRuntime()
-	eng, _ := New(EngineOptions{Runtime: rt})
+	eng, err := New(EngineOptions{Runtime: rt})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	wsDir := writeImageDevcontainer(t, `{"image":"alpine:3.20"}`)
 	ws, err := eng.Up(context.Background(), UpOptions{LocalWorkspaceFolder: wsDir})
 	if err != nil {
@@ -94,12 +97,18 @@ func TestExecEmitsEvents(t *testing.T) {
 // events reach the channel even if Events is supplied.
 func TestExecEventsOptOutByDefault(t *testing.T) {
 	rt := newFakeRuntime()
-	eng, _ := New(EngineOptions{Runtime: rt})
+	eng, err := New(EngineOptions{Runtime: rt})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	wsDir := writeImageDevcontainer(t, `{"image":"alpine:3.20"}`)
-	ws, _ := eng.Up(context.Background(), UpOptions{LocalWorkspaceFolder: wsDir})
+	ws, err := eng.Up(context.Background(), UpOptions{LocalWorkspaceFolder: wsDir})
+	if err != nil {
+		t.Fatalf("Up: %v", err)
+	}
 
 	ch := make(chan events.Event, 8)
-	_, err := eng.Exec(context.Background(), ws, ExecOptions{
+	_, err = eng.Exec(context.Background(), ws, ExecOptions{
 		Cmd:    []string{"true"},
 		Events: ch,
 		// EmitEvents: false (default)
