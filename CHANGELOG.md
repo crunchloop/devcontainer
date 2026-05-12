@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-05-12
+
+### Fixed
+
+- **runtime/docker** — switch image builds to BuildKit
+  (`Version: build.BuilderBuildKit`). The classic builder synthesizes
+  one intermediate container per Dockerfile step and routes every
+  container API through dockerd's authorization pipeline; behind an
+  authz plugin (e.g. DAP's `dap-authz`) this turned a sub-second
+  build into a multi-minute one (~140× slowdown observed on a 7-step
+  Dockerfile against a 7.7 GB base). BuildKit uses a single
+  streaming session and is unaffected. BuildKit is now a hard
+  requirement — Docker Engine has shipped with it enabled by default
+  since 23.0 (Feb 2023). (#47)
+- **runtime/docker** — pre-pull `FROM` images via the classic
+  `ImagePull` API before invoking `ImageBuild`. BuildKit refuses
+  remote metadata resolution without an active session ("no active
+  sessions"), even for fully anonymous public-image pulls; seeding
+  the local image store side-steps the session requirement without
+  pulling `github.com/moby/buildkit` in as a direct dep. (#47)
+- **runtime/docker** — preserve symlinks in the build-context tar.
+  `tarDirectory` was emitting `TypeSymlink` entries with an empty
+  `Linkname` (passing `""` to `tar.FileInfoHeader` instead of
+  `os.Readlink(path)`); some tar readers reject those as malformed
+  and abort the build mid-stream, which broke compose-primary
+  contexts containing `node_modules/.bin/*` or similar bin-symlinks.
+  (#47)
+- **useruid / feature** — drop the
+  `# syntax=docker/dockerfile:1.4` directive from generated
+  Dockerfiles. The instructions in use (`ARG`, `FROM $ARG`, `USER`,
+  `COPY`, `RUN`) are all handled by buildkit's built-in frontend;
+  declaring an external frontend forces buildkit to pull
+  `docker/dockerfile:*` before parsing, which needs a session for
+  credential forwarding (we don't open one) and hangs indefinitely
+  behind broken registry mirrors. Test guards added so the directive
+  can't be reintroduced. (#47, #48)
+- **events** — populate `BuildCompletedEvent.DurationMs`. The field
+  was declared but never set in the event-bus translator, so every
+  completion shipped with `DurationMs == 0` regardless of actual
+  wall-clock duration. Duration is now measured in the bus (start
+  stamped in `BuildChan`, reset on every call so each build is timed
+  independently). (#46)
+
+### Build
+
+- **ci** — bump `actions/setup-go` to v6, `actions/checkout` to v6,
+  `golangci/golangci-lint-action` to v9. (#40, #41, #42)
+
 ## [0.1.1] - 2026-05-11
 
 ### Fixed
@@ -92,6 +140,7 @@ shelling out to `@devcontainers/cli`.
 - `events` is doc-tagged **experimental** until v1.0.0 — type shapes may evolve
   without a SemVer-major bump.
 
-[Unreleased]: https://github.com/crunchloop/devcontainer/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/crunchloop/devcontainer/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/crunchloop/devcontainer/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/crunchloop/devcontainer/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/crunchloop/devcontainer/releases/tag/v0.1.0
