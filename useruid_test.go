@@ -57,6 +57,13 @@ func TestGenerateUIDDockerfile_ContainsKeyDirectives(t *testing.T) {
 			t.Errorf("dockerfile missing %q\n--\n%s", want, df)
 		}
 	}
+	// Declaring an external dockerfile frontend forces buildkit to pull
+	// docker/dockerfile:* before parsing — which hangs in environments
+	// whose registry mirror routes docker.io through a broken upstream.
+	// Nothing in this Dockerfile needs a non-builtin frontend.
+	if strings.Contains(df, "# syntax=") {
+		t.Errorf("dockerfile must not declare a syntax= frontend; built-in frontend is sufficient\n--\n%s", df)
+	}
 }
 
 func TestUIDReconcileScript_PortableShape(t *testing.T) {
