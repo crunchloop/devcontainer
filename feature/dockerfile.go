@@ -108,7 +108,6 @@ func GenerateBuildContext(plan BuildPlan, dst string) error {
 // generateDockerfile returns the contents of the Dockerfile that layers
 // the configured features on top of plan.BaseImage. Structure:
 //
-//	# syntax=docker/dockerfile:1.4
 //	ARG _DEV_CONTAINERS_BASE_IMAGE=...
 //	FROM $_DEV_CONTAINERS_BASE_IMAGE AS devcontainer_target
 //	USER root
@@ -119,9 +118,14 @@ func GenerateBuildContext(plan BuildPlan, dst string) error {
 //	LABEL devcontainer.metadata='[...]'
 //	ARG _DEV_CONTAINERS_IMAGE_USER=root
 //	USER $_DEV_CONTAINERS_IMAGE_USER
+//
+// Intentionally no `# syntax=docker/dockerfile:X` directive: nothing
+// in the emitted file needs a non-builtin frontend, and declaring one
+// forces buildkit to pull `docker/dockerfile:*` from a registry —
+// which requires a session to forward credentials (we don't open
+// one) and hangs indefinitely behind broken registry mirrors.
 func generateDockerfile(plan BuildPlan) (string, error) {
 	var b strings.Builder
-	b.WriteString("# syntax=docker/dockerfile:1.4\n")
 	fmt.Fprintf(&b, "ARG _DEV_CONTAINERS_BASE_IMAGE=%s\n", plan.BaseImage)
 	b.WriteString("FROM $_DEV_CONTAINERS_BASE_IMAGE AS devcontainer_target\n\n")
 
