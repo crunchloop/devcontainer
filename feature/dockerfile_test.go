@@ -58,7 +58,6 @@ func TestGenerateBuildContext_WritesExpectedLayout(t *testing.T) {
 	}
 
 	wantSubstrings := []string{
-		"# syntax=docker/dockerfile:1.4",
 		"ARG _DEV_CONTAINERS_BASE_IMAGE=alpine:3.20",
 		"FROM $_DEV_CONTAINERS_BASE_IMAGE",
 		"COPY ./build-context/ /tmp/dc-features/",
@@ -75,6 +74,12 @@ func TestGenerateBuildContext_WritesExpectedLayout(t *testing.T) {
 		if !strings.Contains(string(df), want) {
 			t.Errorf("Dockerfile missing %q", want)
 		}
+	}
+	// Frontend directive must not be reintroduced: buildkit treats it as
+	// a hard frontend-pull requirement, which we don't supply credentials
+	// for (no session) and which hangs behind broken registry mirrors.
+	if strings.Contains(string(df), "# syntax=") {
+		t.Errorf("Dockerfile must not declare a syntax= frontend; built-in is sufficient")
 	}
 
 	// Per-feature dirs populated with run.sh, feature.env, install.sh.
