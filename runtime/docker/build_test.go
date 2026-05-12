@@ -7,10 +7,10 @@ import (
 
 func TestExtractBaseImages(t *testing.T) {
 	cases := []struct {
-		name      string
+		name       string
 		dockerfile string
-		buildArgs map[string]string
-		want      []string
+		buildArgs  map[string]string
+		want       []string
 	}{
 		{
 			name: "literal FROM",
@@ -47,7 +47,7 @@ FROM alpine:3.20`,
 			want: []string{"golang:1.25", "alpine:3.20"},
 		},
 		{
-			name: "FROM with --platform flag",
+			name:       "FROM with --platform flag",
 			dockerfile: `FROM --platform=linux/amd64 alpine:3.20`,
 			want:       []string{"alpine:3.20"},
 		},
@@ -66,7 +66,7 @@ FROM alpine:3.20`,
 			want: []string{"alpine:3.20"},
 		},
 		{
-			name: "lowercase from is recognized",
+			name:       "lowercase from is recognized",
 			dockerfile: `from alpine:3.20`,
 			want:       []string{"alpine:3.20"},
 		},
