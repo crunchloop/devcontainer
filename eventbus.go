@@ -2,6 +2,7 @@ package devcontainer
 
 import (
 	"sync"
+	"time"
 
 	"github.com/crunchloop/devcontainer/events"
 	"github.com/crunchloop/devcontainer/runtime"
@@ -18,11 +19,12 @@ type eventBus struct {
 	emitter *events.Emitter
 	out     chan<- events.Event
 
-	mu       sync.Mutex
-	buildCh  chan runtime.BuildEvent // lazily started
-	buildSrc events.BuildSource      // current build source, attached to translated events
-	wg       sync.WaitGroup          // build translator goroutine
-	closed   bool
+	mu         sync.Mutex
+	buildCh    chan runtime.BuildEvent // lazily started
+	buildSrc   events.BuildSource      // current build source, attached to translated events
+	buildStart time.Time               // start of the current build, stamped on BuildCompletedEvent
+	wg         sync.WaitGroup          // build translator goroutine
+	closed     bool
 }
 
 func newEventBus(emitter *events.Emitter, out chan<- events.Event) *eventBus {
@@ -57,6 +59,9 @@ func (b *eventBus) BuildChan(source events.BuildSource) chan<- runtime.BuildEven
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.buildSrc = source
+	// Reset on every call (including same-source re-entry) so each build's
+	// DurationMs reflects its own wall-clock, not the first build's start.
+	b.buildStart = time.Now()
 	if b.buildCh != nil {
 		return b.buildCh
 	}
@@ -71,8 +76,9 @@ func (b *eventBus) translateLoop(in <-chan runtime.BuildEvent) {
 	for be := range in {
 		b.mu.Lock()
 		src := b.buildSrc
+		start := b.buildStart
 		b.mu.Unlock()
-		b.Emit(translateBuildEvent(be, src))
+		b.Emit(translateBuildEvent(be, src, start))
 	}
 }
 
@@ -99,12 +105,16 @@ func (b *eventBus) Close() {
 // translateBuildEvent maps a runtime.BuildEvent (which has no embedded
 // Base) into the appropriate events.Build* type. The translator does not
 // stamp Base; Emit handles that.
-func translateBuildEvent(be runtime.BuildEvent, src events.BuildSource) events.Event {
+func translateBuildEvent(be runtime.BuildEvent, src events.BuildSource, start time.Time) events.Event {
 	switch be.Kind {
 	case runtime.BuildEventLayer, runtime.BuildEventPullProgress:
 		return events.BuildLayerEvent{Source: src, LayerID: be.LayerID, Status: be.Message}
 	case runtime.BuildEventCompleted:
-		return events.BuildCompletedEvent{Source: src, ImageID: be.Digest}
+		var dur int64
+		if !start.IsZero() {
+			dur = time.Since(start).Milliseconds()
+		}
+		return events.BuildCompletedEvent{Source: src, ImageID: be.Digest, DurationMs: dur}
 	default:
 		return events.BuildLogEvent{Source: src, Stream: "stdout", Line: be.Message}
 	}
