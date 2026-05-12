@@ -59,6 +59,16 @@ func (r *Runtime) BuildImage(ctx context.Context, spec runtime.BuildSpec, events
 		args[k] = &v
 	}
 
+	// Pre-pull base images so BuildKit can resolve them from the local
+	// image store. BuildKit refuses remote metadata resolution without
+	// an active session ("no active sessions" — the session is the
+	// callback channel for registry credentials, mandatory even for
+	// anonymous public pulls). Pulling via the classic ImagePull API
+	// (which is unaffected by the session requirement) seeds the local
+	// store; BuildKit then picks up the cached manifest instead of
+	// reaching for the registry.
+	prePullBaseImages(ctx, r, spec.ContextPath, dockerfile, spec.Args, events)
+
 	res, err := r.api.ImageBuild(ctx, pr, client.ImageBuildOptions{
 		Dockerfile: dockerfile,
 		Tags:       []string{spec.Tag},
@@ -219,4 +229,181 @@ func tarDirectory(dir string, w io.Writer) error {
 		_ = f.Close()
 		return err
 	})
+}
+
+// prePullBaseImages reads the Dockerfile at contextPath/dockerfile,
+// extracts FROM image references (resolving simple $ARG substitutions
+// against ARG defaults in the file and the spec's BuildArgs
+// overrides), and pulls each that isn't already in the local image
+// store. Best-effort: any pull error is silently ignored — the
+// subsequent ImageBuild surfaces a clearer "failed to resolve" error
+// if the image really can't be obtained, and images that exist only
+// locally (e.g. dc-go-base-*) correctly skip the pull attempt because
+// ImageInspect finds them.
+func prePullBaseImages(ctx context.Context, r *Runtime, contextPath, dockerfile string, buildArgs map[string]string, events chan<- runtime.BuildEvent) {
+	df, err := os.ReadFile(filepath.Join(contextPath, dockerfile))
+	if err != nil {
+		return
+	}
+	for _, ref := range extractBaseImages(string(df), buildArgs) {
+		if _, err := r.api.ImageInspect(ctx, ref); err == nil {
+			continue
+		}
+		_, _ = r.PullImage(ctx, ref, events)
+	}
+}
+
+// extractBaseImages does a naive line-based parse of Dockerfile
+// content, returning the de-duplicated list of resolved FROM image
+// references. Supports:
+//
+//   - Literal FROM lines (`FROM alpine:3.20`, with optional
+//     `AS <stage>` and `--platform=...` flags).
+//   - $VAR / ${VAR} substitution against the file's `ARG VAR=default`
+//     lines, with overrides from buildArgs taking precedence.
+//
+// FROMs whose ref still contains an unresolved `$` after substitution
+// are dropped — we'd rather miss a pre-pull (and let BuildKit surface
+// its native error) than guess wrong. Stage references (`FROM
+// previous-stage AS …`) are also dropped since they're not image
+// refs; we detect them by skipping refs that match a prior AS name.
+func extractBaseImages(content string, buildArgs map[string]string) []string {
+	args := map[string]string{}
+	for k, v := range buildArgs {
+		args[k] = v
+	}
+	stages := map[string]bool{}
+	seen := map[string]bool{}
+	var out []string
+
+	for _, raw := range strings.Split(content, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		kw := strings.ToUpper(fields[0])
+		switch kw {
+		case "ARG":
+			rest := strings.TrimSpace(line[len("ARG"):])
+			if eq := strings.IndexByte(rest, '='); eq > 0 {
+				name := strings.TrimSpace(rest[:eq])
+				val := strings.TrimSpace(rest[eq+1:])
+				// Only set if not already overridden by buildArgs.
+				if _, override := args[name]; !override {
+					args[name] = val
+				}
+			}
+		case "FROM":
+			rest := strings.TrimSpace(line[len("FROM"):])
+			// Drop leading flags (--platform=..., --link, ...).
+			for strings.HasPrefix(rest, "--") {
+				if sp := strings.IndexByte(rest, ' '); sp > 0 {
+					rest = strings.TrimSpace(rest[sp+1:])
+				} else {
+					rest = ""
+				}
+			}
+			// Trim "AS <stage>" suffix, recording the stage name.
+			ref := rest
+			if idx := indexFoldWord(rest, "AS"); idx > 0 {
+				ref = strings.TrimSpace(rest[:idx])
+				stageName := strings.TrimSpace(rest[idx+len("AS"):])
+				if stageName != "" {
+					stages[stageName] = true
+				}
+			}
+			ref = substituteArgs(ref, args)
+			if ref == "" || strings.Contains(ref, "$") {
+				continue
+			}
+			if stages[ref] {
+				continue
+			}
+			if !seen[ref] {
+				seen[ref] = true
+				out = append(out, ref)
+			}
+		}
+	}
+	return out
+}
+
+// indexFoldWord returns the byte index of the first occurrence of
+// `word` in s as a standalone whitespace-delimited token, matching
+// case-insensitively. Returns -1 if not found.
+func indexFoldWord(s, word string) int {
+	wlen := len(word)
+	for i := 0; i+wlen <= len(s); i++ {
+		if !strings.EqualFold(s[i:i+wlen], word) {
+			continue
+		}
+		// Must be at start or preceded by whitespace.
+		if i > 0 && s[i-1] != ' ' && s[i-1] != '\t' {
+			continue
+		}
+		// Must be at end or followed by whitespace.
+		if i+wlen < len(s) && s[i+wlen] != ' ' && s[i+wlen] != '\t' {
+			continue
+		}
+		return i
+	}
+	return -1
+}
+
+// substituteArgs replaces $VAR and ${VAR} occurrences in ref with the
+// corresponding value from args. Leaves unknown vars unsubstituted so
+// the caller can detect and skip refs with unresolved vars.
+func substituteArgs(ref string, args map[string]string) string {
+	var b strings.Builder
+	i := 0
+	for i < len(ref) {
+		if ref[i] != '$' {
+			b.WriteByte(ref[i])
+			i++
+			continue
+		}
+		// $ at end of string — keep as-is.
+		if i+1 >= len(ref) {
+			b.WriteByte('$')
+			i++
+			continue
+		}
+		var name string
+		var consumed int
+		if ref[i+1] == '{' {
+			end := strings.IndexByte(ref[i+2:], '}')
+			if end < 0 {
+				b.WriteByte('$')
+				i++
+				continue
+			}
+			name = ref[i+2 : i+2+end]
+			consumed = 2 + end + 1
+		} else {
+			j := i + 1
+			for j < len(ref) && (isIdentByte(ref[j])) {
+				j++
+			}
+			name = ref[i+1 : j]
+			consumed = j - i
+		}
+		if val, ok := args[name]; ok {
+			b.WriteString(val)
+		} else {
+			b.WriteString(ref[i : i+consumed])
+		}
+		i += consumed
+	}
+	return b.String()
+}
+
+func isIdentByte(b byte) bool {
+	return b == '_' ||
+		(b >= 'a' && b <= 'z') ||
+		(b >= 'A' && b <= 'Z') ||
+		(b >= '0' && b <= '9')
 }
