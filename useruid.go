@@ -143,9 +143,15 @@ func statOwner(path string) (uid, gid int, ok bool) {
 // /etc/passwd and /etc/group directly via awk + sed so it works on
 // Debian (shadow tools) and Alpine/BusyBox (no shadow tools) alike —
 // no `usermod`/`groupmod`/`getent` runtime dependency.
+//
+// Intentionally no `# syntax=docker/dockerfile:X` directive: the
+// instructions used here (ARG, FROM $ARG, USER, COPY, RUN) are all
+// handled by buildkit's built-in frontend, and declaring an external
+// frontend forces buildkit to pull `docker/dockerfile:*` from a
+// registry before parsing — which hangs indefinitely in environments
+// whose registry mirror routes docker.io through a broken upstream.
 func generateUIDDockerfile(baseImage, user string, hostUID, hostGID int) string {
-	return "# syntax=docker/dockerfile:1.4\n" +
-		"ARG _DEV_CONTAINERS_BASE_IMAGE=" + baseImage + "\n" +
+	return "ARG _DEV_CONTAINERS_BASE_IMAGE=" + baseImage + "\n" +
 		"FROM $_DEV_CONTAINERS_BASE_IMAGE\n" +
 		"USER root\n" +
 		"ARG _REMOTE_USER=" + user + "\n" +
