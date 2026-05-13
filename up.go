@@ -260,7 +260,7 @@ func (e *Engine) attachExisting(ctx context.Context, c *runtime.Container, cfg *
 			}
 		}
 	}
-	applyMetadataMerge(cfg, baseLayers)
+	applyMetadataMerge(cfg, baseLayers, opts.LocalEnv)
 	return e.buildWorkspace(ctx, c.ID, cfg, opts.LocalEnv)
 }
 
@@ -274,7 +274,7 @@ func (e *Engine) createFresh(ctx context.Context, cfg *config.ResolvedConfig, op
 	if err != nil {
 		return nil, err
 	}
-	applyMetadataMerge(cfg, baseLayers)
+	applyMetadataMerge(cfg, baseLayers, opts.LocalEnv)
 
 	finalImage, err = e.reconcileRemoteUserUID(ctx, cfg, finalImage, opts)
 	if err != nil {
@@ -472,7 +472,7 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 	if err != nil {
 		return nil, err
 	}
-	applyMetadataMerge(cfg, baseLayers)
+	applyMetadataMerge(cfg, baseLayers, opts.LocalEnv)
 
 	finalImage, err = e.reconcileRemoteUserUID(ctx, cfg, finalImage, opts)
 	if err != nil {
@@ -860,7 +860,7 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 // already part of baseLayers as a prior label entry. (Re-adding is
 // harmless for idempotent fields but produces duplicate hooks for
 // lifecycle phases.)
-func applyMetadataMerge(cfg *config.ResolvedConfig, baseLayers []config.FeatureMetadata) {
+func applyMetadataMerge(cfg *config.ResolvedConfig, baseLayers []config.FeatureMetadata, localEnv map[string]string) {
 	chain := make([]config.FeatureMetadata, 0, len(baseLayers)+len(cfg.Features))
 	chain = append(chain, baseLayers...)
 	for _, f := range cfg.Features {
@@ -869,7 +869,13 @@ func applyMetadataMerge(cfg *config.ResolvedConfig, baseLayers []config.FeatureM
 		}
 		chain = append(chain, f.Metadata)
 	}
-	config.MergeMetadata(cfg, chain)
+	subCtx := config.SubstitutionContext{
+		LocalWorkspaceFolder:     cfg.LocalWorkspaceFolder,
+		ContainerWorkspaceFolder: cfg.ContainerWorkspaceFolder,
+		DevcontainerID:           cfg.DevcontainerID,
+		LocalEnv:                 localEnv,
+	}
+	config.MergeMetadata(cfg, subCtx, chain)
 	cfg.Finalize()
 }
 

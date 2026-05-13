@@ -9,7 +9,7 @@ func ptrBool(b bool) *bool { return &b }
 
 func TestMergeMetadata_RemoteUser_UserWins(t *testing.T) {
 	cfg := &ResolvedConfig{RemoteUser: "alice"}
-	MergeMetadata(cfg, []FeatureMetadata{
+	MergeMetadata(cfg, SubstitutionContext{}, []FeatureMetadata{
 		{ID: "base", RemoteUser: "vscode"},
 		{ID: "feat", RemoteUser: "node"},
 	})
@@ -20,7 +20,7 @@ func TestMergeMetadata_RemoteUser_UserWins(t *testing.T) {
 
 func TestMergeMetadata_RemoteUser_FillsFromBase(t *testing.T) {
 	cfg := &ResolvedConfig{}
-	MergeMetadata(cfg, []FeatureMetadata{
+	MergeMetadata(cfg, SubstitutionContext{}, []FeatureMetadata{
 		{ID: "base", RemoteUser: "vscode"},
 	})
 	if cfg.RemoteUser != "vscode" {
@@ -30,7 +30,7 @@ func TestMergeMetadata_RemoteUser_FillsFromBase(t *testing.T) {
 
 func TestMergeMetadata_RemoteUser_LastLayerWins(t *testing.T) {
 	cfg := &ResolvedConfig{}
-	MergeMetadata(cfg, []FeatureMetadata{
+	MergeMetadata(cfg, SubstitutionContext{}, []FeatureMetadata{
 		{ID: "base", RemoteUser: "root"},
 		{ID: "common-utils", RemoteUser: "vscode"},
 	})
@@ -41,7 +41,7 @@ func TestMergeMetadata_RemoteUser_LastLayerWins(t *testing.T) {
 
 func TestMergeMetadata_BoolFields(t *testing.T) {
 	cfg := &ResolvedConfig{Init: ptrBool(true)}
-	MergeMetadata(cfg, []FeatureMetadata{
+	MergeMetadata(cfg, SubstitutionContext{}, []FeatureMetadata{
 		{ID: "a", Init: ptrBool(false), Privileged: ptrBool(true)},
 	})
 	if !*cfg.Init {
@@ -54,7 +54,7 @@ func TestMergeMetadata_BoolFields(t *testing.T) {
 
 func TestMergeMetadata_EnvUnion_UserWinsOnCollision(t *testing.T) {
 	cfg := &ResolvedConfig{ContainerEnv: map[string]string{"PATH": "/user", "USER_VAR": "u"}}
-	MergeMetadata(cfg, []FeatureMetadata{
+	MergeMetadata(cfg, SubstitutionContext{}, []FeatureMetadata{
 		{ID: "a", ContainerEnv: map[string]string{"PATH": "/feat", "FEAT_VAR": "v"}},
 	})
 	want := map[string]string{"PATH": "/user", "USER_VAR": "u", "FEAT_VAR": "v"}
@@ -65,7 +65,7 @@ func TestMergeMetadata_EnvUnion_UserWinsOnCollision(t *testing.T) {
 
 func TestMergeMetadata_CapAdd_UnionDedup(t *testing.T) {
 	cfg := &ResolvedConfig{CapAdd: []string{"SYS_PTRACE"}}
-	MergeMetadata(cfg, []FeatureMetadata{
+	MergeMetadata(cfg, SubstitutionContext{}, []FeatureMetadata{
 		{ID: "a", CapAdd: []string{"NET_ADMIN", "SYS_PTRACE"}},
 		{ID: "b", CapAdd: []string{"NET_ADMIN", "SYS_ADMIN"}},
 	})
@@ -81,7 +81,7 @@ func TestMergeMetadata_LifecycleHooks_OrderedAndUserLast(t *testing.T) {
 			PostCreate: []LifecycleCommand{{Single: &Command{Shell: "user"}}},
 		},
 	}
-	MergeMetadata(cfg, []FeatureMetadata{
+	MergeMetadata(cfg, SubstitutionContext{}, []FeatureMetadata{
 		{ID: "base", PostCreateCommand: LifecycleCommand{Single: &Command{Shell: "base"}}},
 		{ID: "feat", PostCreateCommand: LifecycleCommand{Single: &Command{Shell: "feat"}}},
 	})
@@ -101,7 +101,7 @@ func TestMergeMetadata_LifecycleHooks_OrderedAndUserLast(t *testing.T) {
 
 func TestMergeMetadata_LifecycleHooks_SkipEmpty(t *testing.T) {
 	cfg := &ResolvedConfig{}
-	MergeMetadata(cfg, []FeatureMetadata{
+	MergeMetadata(cfg, SubstitutionContext{}, []FeatureMetadata{
 		{ID: "a", PostCreateCommand: LifecycleCommand{}},
 		{ID: "b", PostCreateCommand: LifecycleCommand{Single: &Command{Shell: "b"}}},
 	})
@@ -114,7 +114,7 @@ func TestMergeMetadata_Mounts_TargetDedup_UserWins(t *testing.T) {
 	cfg := &ResolvedConfig{
 		Mounts: []Mount{{Type: MountBind, Source: "/host/user", Target: "/data"}},
 	}
-	MergeMetadata(cfg, []FeatureMetadata{
+	MergeMetadata(cfg, SubstitutionContext{}, []FeatureMetadata{
 		{ID: "a", Mounts: []Mount{
 			{Type: MountVolume, Source: "feat-vol", Target: "/data"},
 			{Type: MountBind, Source: "/host/feat", Target: "/feat-only"},
@@ -137,7 +137,7 @@ func TestMergeMetadata_Mounts_TargetDedup_UserWins(t *testing.T) {
 
 func TestMergeMetadata_HostRequirements_FillsIfNil(t *testing.T) {
 	cfg := &ResolvedConfig{}
-	MergeMetadata(cfg, []FeatureMetadata{
+	MergeMetadata(cfg, SubstitutionContext{}, []FeatureMetadata{
 		{ID: "a", HostRequirements: &HostRequirements{CPUs: 4}},
 	})
 	if cfg.HostRequirements == nil || cfg.HostRequirements.CPUs != 4 {
@@ -147,7 +147,7 @@ func TestMergeMetadata_HostRequirements_FillsIfNil(t *testing.T) {
 
 func TestMergeMetadata_HostRequirements_UserWins(t *testing.T) {
 	cfg := &ResolvedConfig{HostRequirements: &HostRequirements{CPUs: 8}}
-	MergeMetadata(cfg, []FeatureMetadata{
+	MergeMetadata(cfg, SubstitutionContext{}, []FeatureMetadata{
 		{ID: "a", HostRequirements: &HostRequirements{CPUs: 4}},
 	})
 	if cfg.HostRequirements.CPUs != 8 {
@@ -156,9 +156,9 @@ func TestMergeMetadata_HostRequirements_UserWins(t *testing.T) {
 }
 
 func TestMergeMetadata_NilCfgOrEmptyLayers_NoOp(t *testing.T) {
-	MergeMetadata(nil, []FeatureMetadata{{RemoteUser: "x"}})
+	MergeMetadata(nil, SubstitutionContext{}, []FeatureMetadata{{RemoteUser: "x"}})
 	cfg := &ResolvedConfig{RemoteUser: "u"}
-	MergeMetadata(cfg, nil)
+	MergeMetadata(cfg, SubstitutionContext{}, nil)
 	if cfg.RemoteUser != "u" {
 		t.Errorf("empty layers should not mutate cfg")
 	}
@@ -175,10 +175,10 @@ func TestMergeMetadata_DedupFieldsIdempotent(t *testing.T) {
 		{ID: "base", RemoteUser: "vscode", CapAdd: []string{"SYS_PTRACE"}, ContainerEnv: map[string]string{"K": "v"}},
 	}
 	cfg1 := &ResolvedConfig{}
-	MergeMetadata(cfg1, layers)
+	MergeMetadata(cfg1, SubstitutionContext{}, layers)
 	cfg2 := &ResolvedConfig{}
-	MergeMetadata(cfg2, layers)
-	MergeMetadata(cfg2, layers) // run twice
+	MergeMetadata(cfg2, SubstitutionContext{}, layers)
+	MergeMetadata(cfg2, SubstitutionContext{}, layers) // run twice
 	if cfg1.RemoteUser != cfg2.RemoteUser {
 		t.Errorf("RemoteUser drift: %q vs %q", cfg1.RemoteUser, cfg2.RemoteUser)
 	}
@@ -187,6 +187,61 @@ func TestMergeMetadata_DedupFieldsIdempotent(t *testing.T) {
 	}
 	if !reflect.DeepEqual(cfg1.ContainerEnv, cfg2.ContainerEnv) {
 		t.Errorf("ContainerEnv drift: %v vs %v", cfg1.ContainerEnv, cfg2.ContainerEnv)
+	}
+}
+
+func TestMergeMetadata_SubstitutesLayerStrings(t *testing.T) {
+	cfg := &ResolvedConfig{
+		DevcontainerID:       "abc123",
+		LocalWorkspaceFolder: "/home/u/proj",
+	}
+	subCtx := SubstitutionContext{
+		LocalWorkspaceFolder: cfg.LocalWorkspaceFolder,
+		DevcontainerID:       cfg.DevcontainerID,
+		LocalEnv:             map[string]string{"USER": "alice"},
+	}
+	MergeMetadata(cfg, subCtx, []FeatureMetadata{
+		{
+			ID: "dind",
+			Mounts: []Mount{{
+				Type:   MountVolume,
+				Source: "dind-var-lib-docker-${devcontainerId}",
+				Target: "/var/lib/docker",
+			}},
+			ContainerEnv: map[string]string{
+				"WORK": "${localWorkspaceFolder}",
+				"WHO":  "${localEnv:USER}",
+			},
+			PostCreateCommand: LifecycleCommand{Single: &Command{
+				Shell: "echo ${devcontainerId}",
+			}},
+		},
+	})
+
+	if got := cfg.Mounts[0].Source; got != "dind-var-lib-docker-abc123" {
+		t.Errorf("mount source not substituted: %q", got)
+	}
+	if got := cfg.ContainerEnv["WORK"]; got != "/home/u/proj" {
+		t.Errorf("containerEnv WORK = %q", got)
+	}
+	if got := cfg.ContainerEnv["WHO"]; got != "alice" {
+		t.Errorf("containerEnv WHO = %q", got)
+	}
+	if got := cfg.Lifecycle.PostCreate[0].Single.Shell; got != "echo abc123" {
+		t.Errorf("postCreate shell = %q", got)
+	}
+}
+
+// Substitution must not mutate the caller's layers slice (feature metadata
+// is often cached across builds; mutating it would corrupt later merges).
+func TestMergeMetadata_SubstitutionDoesNotMutateLayers(t *testing.T) {
+	layers := []FeatureMetadata{{
+		Mounts: []Mount{{Source: "vol-${devcontainerId}", Target: "/t"}},
+	}}
+	cfg := &ResolvedConfig{DevcontainerID: "X"}
+	MergeMetadata(cfg, SubstitutionContext{DevcontainerID: "X"}, layers)
+	if layers[0].Mounts[0].Source != "vol-${devcontainerId}" {
+		t.Errorf("input layers were mutated: %q", layers[0].Mounts[0].Source)
 	}
 }
 
