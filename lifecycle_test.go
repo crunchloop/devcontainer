@@ -143,6 +143,42 @@ func TestUp_LifecycleErrorsSurfaceAsLifecycleError(t *testing.T) {
 	}
 }
 
+// TestUp_LifecycleFailureReturnsWorkspace verifies that when a lifecycle
+// phase fails, Up still returns the *Workspace so callers can choose to
+// recover (warn-and-continue, reattach for debugging) instead of treating
+// every postCreateCommand bug as a fatal Up failure. Mirrors
+// @devcontainers/cli, where lifecycle failure exits 1 but the container
+// stays running and reattachable.
+func TestUp_LifecycleFailureReturnsWorkspace(t *testing.T) {
+	rt := newScriptedRuntime()
+	rt.scripts["broken-script"] = runtime.ExecResult{ExitCode: 17, Stderr: "boom"}
+	eng, _ := New(EngineOptions{Runtime: rt})
+	ws := writeImageDevcontainer(t, `{
+		"image":"alpine:3.20",
+		"postCreateCommand":"./broken-script"
+	}`)
+
+	wsObj, err := eng.Up(context.Background(), UpOptions{LocalWorkspaceFolder: ws})
+	if err == nil {
+		t.Fatal("expected error from failing lifecycle")
+	}
+	var le *LifecycleError
+	if !errors.As(err, &le) {
+		t.Fatalf("expected *LifecycleError, got %T: %v", err, err)
+	}
+	if wsObj == nil {
+		t.Fatal("Up returned nil workspace on lifecycle failure; want the workspace so callers can recover")
+	}
+	if wsObj.Container == nil || wsObj.Container.ID == "" {
+		t.Fatalf("returned workspace has no container: %+v", wsObj)
+	}
+	// The container should still be reachable via the runtime — Up
+	// must not have torn it down. Run a no-op exec to confirm.
+	if _, err := eng.Exec(context.Background(), wsObj, ExecOptions{Cmd: []string{"true"}}); err != nil {
+		t.Errorf("Exec on returned workspace after lifecycle failure: %v", err)
+	}
+}
+
 func TestRunPhase_SkipsWhenMarkerMatches(t *testing.T) {
 	rt := newScriptedRuntime()
 	// Pretend a marker exists matching the container's Created timestamp.
