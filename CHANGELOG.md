@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-05-13
+
+### Fixed
+
+- **runtime** — probe the user's interactive shell environment
+  *before* running lifecycle hooks instead of only after. `Engine.Up`
+  used to leave `ws.probedEnv` empty for the entire lifecycle chain,
+  so `postCreateCommand` (and earlier phases) ran with only the
+  container's default env plus `remoteEnv`. PATH entries published
+  via `.bashrc` / `/etc/profile.d` snippets — nvm- or asdf-managed
+  binaries, or pnpm installed by the official
+  `ghcr.io/devcontainers-extra/features/pnpm` feature — were
+  invisible to hooks, causing `command not found` failures that
+  diverged from `@devcontainers/cli`. Probing happens both before
+  and after lifecycle now: the pre-pass gives hooks rc-derived env,
+  the post-pass picks up any rc edits the hooks themselves made for
+  subsequent `Exec` calls. (#55)
+
+### Changed
+
+- **runtime** — `Engine.Up` now returns `(ws, err)` instead of
+  `(nil, err)` when a lifecycle hook exits non-zero. The container
+  is created and still running; consumers building VS Code /
+  Codespaces-style UX want to surface a warning and keep the
+  container reattachable rather than treat every `postCreateCommand`
+  bug as a fatal Up failure. Matches `@devcontainers/cli`, which
+  exits 1 on lifecycle failure but leaves the container intact.
+  `*LifecycleError` is the discriminator — non-lifecycle errors
+  (marker I/O, ctx cancellation, image build, feature install)
+  still return `(nil, err)` unchanged. Strict callers keep current
+  behavior with the usual `if err != nil { return nil, err }`. (#56)
+
 ## [0.1.3] - 2026-05-13
 
 ### Fixed
