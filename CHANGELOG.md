@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-05-13
+
+### Fixed
+
+- **config** — substitute `${devcontainerId}`,
+  `${localWorkspaceFolder}`, `${localEnv:*}` and friends in feature-
+  and base-image-contributed metadata (mount sources, env values,
+  lifecycle commands). Previously only the user's `devcontainer.json`
+  was resolved by `ResolveBytes`; fields folded in afterwards by
+  `MergeMetadata` kept their literal `${...}` tokens and flowed into
+  `ContainerCreate`, causing Docker to reject mounts like
+  `dind-var-lib-docker-${devcontainerId}` with "includes invalid
+  characters for a local volume name". `MergeMetadata` now takes a
+  `SubstitutionContext` and resolves layer-contributed strings before
+  folding them in. (#53)
+
 ## [0.1.2] - 2026-05-12
 
 ### Fixed
