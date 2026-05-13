@@ -166,11 +166,8 @@ func TestUp_LifecycleFailureReturnsWorkspace(t *testing.T) {
 	if !errors.As(err, &le) {
 		t.Fatalf("expected *LifecycleError, got %T: %v", err, err)
 	}
-	if wsObj == nil {
-		t.Fatal("Up returned nil workspace on lifecycle failure; want the workspace so callers can recover")
-	}
-	if wsObj.Container == nil || wsObj.Container.ID == "" {
-		t.Fatalf("returned workspace has no container: %+v", wsObj)
+	if wsObj == nil || wsObj.Container == nil || wsObj.Container.ID == "" {
+		t.Fatalf("Up returned no usable workspace on lifecycle failure (want one so callers can recover): %+v", wsObj)
 	}
 	// The container should still be reachable via the runtime — Up
 	// must not have torn it down. Run a no-op exec to confirm.
