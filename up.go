@@ -223,19 +223,25 @@ func (e *Engine) Up(ctx context.Context, opts UpOptions) (*Workspace, error) {
 		}
 	}
 
+	// Probe BEFORE lifecycle so hooks (postCreateCommand etc.) see the
+	// PATH and other vars contributed by the user's shell rc files —
+	// e.g. nvm/asdf-managed binaries, or pnpm installed via the
+	// devcontainers-extra/pnpm feature, which only publishes its bin
+	// dir via an rc-snippet sourced by bash -l. This matches the
+	// @devcontainers/cli reference: it awaits the probe promise before
+	// running every lifecycle exec. Failures are non-fatal.
+	if probed, err := e.probeUserEnv(ctx, ws, ws.Config.UserEnvProbe); err == nil {
+		ws.probedEnv = probed
+	}
 	if !opts.SkipLifecycle {
 		if err := e.runAllLifecycle(ctx, ws, opts.RunInitializeCommand, opts.bus); err != nil {
 			return nil, err
 		}
 	}
-
-	// Probe the user's interactive shell environment AFTER lifecycle —
-	// postCreateCommand and friends typically install rc-modifying tools
-	// (nvm, asdf, etc.) and we want their effects reflected in subsequent
-	// Exec calls. Failures are non-fatal: we log via warnings and proceed
-	// without probed env (matches devpod's behavior).
-	probed, err := e.probeUserEnv(ctx, ws, ws.Config.UserEnvProbe)
-	if err == nil {
+	// Re-probe AFTER lifecycle: hooks may have installed rc-modifying
+	// tools themselves (the classic case the prior comment described),
+	// and subsequent Exec calls should see those additions too.
+	if probed, err := e.probeUserEnv(ctx, ws, ws.Config.UserEnvProbe); err == nil {
 		ws.probedEnv = probed
 	}
 	return ws, nil
