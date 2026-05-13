@@ -233,16 +233,36 @@ func (e *Engine) Up(ctx context.Context, opts UpOptions) (*Workspace, error) {
 	if probed, err := e.probeUserEnv(ctx, ws, ws.Config.UserEnvProbe); err == nil {
 		ws.probedEnv = probed
 	}
+	var lifecycleErr error
 	if !opts.SkipLifecycle {
-		if err := e.runAllLifecycle(ctx, ws, opts.RunInitializeCommand, opts.bus); err != nil {
-			return nil, err
-		}
+		lifecycleErr = e.runAllLifecycle(ctx, ws, opts.RunInitializeCommand, opts.bus)
 	}
 	// Re-probe AFTER lifecycle: hooks may have installed rc-modifying
 	// tools themselves (the classic case the prior comment described),
-	// and subsequent Exec calls should see those additions too.
+	// and subsequent Exec calls should see those additions too. Done
+	// even when lifecycle failed — partial rc edits made before the
+	// failing hook should still reach the caller's recovery Exec calls.
 	if probed, err := e.probeUserEnv(ctx, ws, ws.Config.UserEnvProbe); err == nil {
 		ws.probedEnv = probed
+	}
+	// On *lifecycle* failure (postCreateCommand etc. exited non-zero)
+	// return (ws, err) instead of (nil, err). The container is created
+	// and still running; consumers building VS Code / Codespaces-style
+	// UX want to surface a warning and keep the container reattachable
+	// rather than treat every postCreateCommand bug as a fatal Up
+	// failure. Matches @devcontainers/cli, which exits 1 on lifecycle
+	// failure but leaves the container intact.
+	//
+	// Other errors out of runAllLifecycle (marker read/write I/O,
+	// ctx cancellation) still return (nil, err): they're not the
+	// user-script-failed case the partial-success contract targets,
+	// and leaking a workspace handle there would surprise strict
+	// callers. *LifecycleError is the discriminator.
+	if lifecycleErr != nil {
+		if IsLifecycleError(lifecycleErr) {
+			return ws, lifecycleErr
+		}
+		return nil, lifecycleErr
 	}
 	return ws, nil
 }
