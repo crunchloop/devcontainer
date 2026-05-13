@@ -4,6 +4,7 @@ package integration
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +56,59 @@ func TestUserEnvProbe_PathFromBashrc(t *testing.T) {
 	}
 	if got := strings.TrimSpace(res.Stdout); got != "/from/bashrc" {
 		t.Errorf("EXTRA_PATH = %q, want %q (probedEnv didn't inject from .bashrc)", got, "/from/bashrc")
+	}
+}
+
+// TestUserEnvProbe_LifecycleSeesBashrcPath covers the original divergence
+// from @devcontainers/cli: lifecycle hooks (postCreateCommand here) must
+// run with the probed shell env merged in, so a tool whose PATH entry
+// only lands via an rc-sourced snippet is visible during the hook itself
+// — not just to later Exec calls.
+func TestUserEnvProbe_LifecycleSeesBashrcPath(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+	eng, rt := newEngine(t)
+	defer rt.Close()
+
+	// /etc/profile.d/*.sh is sourced by bash -l. The fake "mytool" lives
+	// at /opt/mytool/bin/mytool; without the probe injecting the rc-
+	// contributed PATH, `command -v mytool` from inside postCreateCommand
+	// would fail. The Dockerfile bakes both the snippet and the binary
+	// before any lifecycle phase runs.
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "Dockerfile"), `FROM `+bashImage+`
+RUN mkdir -p /opt/mytool/bin /etc/profile.d \
+ && printf '#!/bin/sh\necho hello-from-mytool\n' > /opt/mytool/bin/mytool \
+ && chmod +x /opt/mytool/bin/mytool \
+ && printf 'export PATH=/opt/mytool/bin:$PATH\n' > /etc/profile.d/mytool.sh
+`)
+	mustWrite(t, filepath.Join(dir, ".devcontainer", "devcontainer.json"), `{
+		"build": { "dockerfile": "Dockerfile", "context": ".." },
+		"postCreateCommand": "command -v mytool && mytool > /tmp/lifecycle-out"
+	}`)
+	ws := dir
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	wsObj, err := eng.Up(ctx, devcontainer.UpOptions{
+		LocalWorkspaceFolder: ws,
+		Recreate:             true,
+	})
+	if err != nil {
+		t.Fatalf("Up: %v (postCreateCommand likely couldn't find mytool — probe not merged into lifecycle env)", err)
+	}
+	defer func() { _ = eng.Down(context.Background(), wsObj, devcontainer.DownOptions{Remove: true}) }()
+
+	res, err := eng.Exec(ctx, wsObj, devcontainer.ExecOptions{
+		Cmd: []string{"cat", "/tmp/lifecycle-out"},
+	})
+	if err != nil {
+		t.Fatalf("read lifecycle output: %v", err)
+	}
+	if got := strings.TrimSpace(res.Stdout); got != "hello-from-mytool" {
+		t.Errorf("/tmp/lifecycle-out = %q, want %q", got, "hello-from-mytool")
 	}
 }
 
