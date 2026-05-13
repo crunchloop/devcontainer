@@ -84,13 +84,18 @@ func (e *Engine) AttachWith(ctx context.Context, id WorkspaceID, opts AttachOpti
 			}
 		}
 	}
-	config.MergeMetadata(cfg, baseLayers)
-	cfg.Finalize()
-
 	localEnv := opts.LocalEnv
 	if localEnv == nil {
 		localEnv = environAsMap(os.Environ())
 	}
+
+	config.MergeMetadata(cfg, config.SubstitutionContext{
+		LocalWorkspaceFolder:     cfg.LocalWorkspaceFolder,
+		ContainerWorkspaceFolder: cfg.ContainerWorkspaceFolder,
+		DevcontainerID:           cfg.DevcontainerID,
+		LocalEnv:                 localEnv,
+	}, baseLayers)
+	cfg.Finalize()
 
 	ws := &Workspace{
 		ID:        id,

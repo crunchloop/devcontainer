@@ -33,12 +33,22 @@ package config
 //     and decides how to combine layers. We pass the user's map through
 //     unchanged.
 //
+// `subCtx` supplies values for ${devcontainerId}, ${localWorkspaceFolder},
+// ${containerWorkspaceFolder}, ${localEnv:*} placeholders that appear in
+// layer-contributed string fields (mount sources, env values, lifecycle
+// commands, …). Variables in the user's devcontainer.json are already
+// substituted by ResolveBytes; this pass extends the invariant to
+// feature- and base-image-contributed strings so they reach the runtime
+// without literal ${...} tokens. Pass a zero SubstitutionContext to skip
+// substitution (useful for tests with no placeholders).
+//
 // Idempotent: calling MergeMetadata with the same layers twice produces
 // the same result.
-func MergeMetadata(cfg *ResolvedConfig, layers []FeatureMetadata) {
+func MergeMetadata(cfg *ResolvedConfig, subCtx SubstitutionContext, layers []FeatureMetadata) {
 	if cfg == nil || len(layers) == 0 {
 		return
 	}
+	layers = substituteLayers(layers, subCtx)
 
 	cfg.RemoteUser = pickString(cfg.RemoteUser, layers, func(l FeatureMetadata) string { return l.RemoteUser })
 	cfg.ContainerUser = pickString(cfg.ContainerUser, layers, func(l FeatureMetadata) string { return l.ContainerUser })
@@ -88,6 +98,110 @@ func MergeMetadata(cfg *ResolvedConfig, layers []FeatureMetadata) {
 	cfg.Lifecycle.PostCreate = prependHooks(layers, func(l FeatureMetadata) LifecycleCommand { return l.PostCreateCommand }, cfg.Lifecycle.PostCreate)
 	cfg.Lifecycle.PostStart = prependHooks(layers, func(l FeatureMetadata) LifecycleCommand { return l.PostStartCommand }, cfg.Lifecycle.PostStart)
 	cfg.Lifecycle.PostAttach = prependHooks(layers, func(l FeatureMetadata) LifecycleCommand { return l.PostAttachCommand }, cfg.Lifecycle.PostAttach)
+}
+
+// substituteLayers returns copies of the input layers with every
+// substitution-bearing string field resolved against ctx. Layers are
+// often shared (feature metadata is cached) — we never mutate them.
+// A zero ctx leaves placeholders intact (ResolveString returns the
+// literal when the relevant field is empty).
+func substituteLayers(in []FeatureMetadata, ctx SubstitutionContext) []FeatureMetadata {
+	out := make([]FeatureMetadata, len(in))
+	for i, l := range in {
+		out[i] = substituteLayer(l, ctx)
+	}
+	return out
+}
+
+func substituteLayer(l FeatureMetadata, ctx SubstitutionContext) FeatureMetadata {
+	sub := func(s string) string {
+		if s == "" {
+			return s
+		}
+		v, _ := ResolveString(s, ctx)
+		return v
+	}
+
+	l.RemoteUser = sub(l.RemoteUser)
+	l.ContainerUser = sub(l.ContainerUser)
+	l.Entrypoint = sub(l.Entrypoint)
+
+	if len(l.ContainerEnv) > 0 {
+		m := make(map[string]string, len(l.ContainerEnv))
+		for k, v := range l.ContainerEnv {
+			m[k] = sub(v)
+		}
+		l.ContainerEnv = m
+	}
+	if len(l.RemoteEnv) > 0 {
+		m := make(map[string]string, len(l.RemoteEnv))
+		for k, v := range l.RemoteEnv {
+			m[k] = sub(v)
+		}
+		l.RemoteEnv = m
+	}
+	if len(l.Mounts) > 0 {
+		ms := make([]Mount, len(l.Mounts))
+		copy(ms, l.Mounts)
+		for i := range ms {
+			ms[i].Source = sub(ms[i].Source)
+			ms[i].Target = sub(ms[i].Target)
+		}
+		l.Mounts = ms
+	}
+	if len(l.CapAdd) > 0 {
+		s := make([]string, len(l.CapAdd))
+		for i, v := range l.CapAdd {
+			s[i] = sub(v)
+		}
+		l.CapAdd = s
+	}
+	if len(l.SecurityOpt) > 0 {
+		s := make([]string, len(l.SecurityOpt))
+		for i, v := range l.SecurityOpt {
+			s[i] = sub(v)
+		}
+		l.SecurityOpt = s
+	}
+
+	l.OnCreateCommand = substituteLifecycleCommand(l.OnCreateCommand, sub)
+	l.UpdateContentCommand = substituteLifecycleCommand(l.UpdateContentCommand, sub)
+	l.PostCreateCommand = substituteLifecycleCommand(l.PostCreateCommand, sub)
+	l.PostStartCommand = substituteLifecycleCommand(l.PostStartCommand, sub)
+	l.PostAttachCommand = substituteLifecycleCommand(l.PostAttachCommand, sub)
+
+	return l
+}
+
+func substituteLifecycleCommand(cmd LifecycleCommand, sub func(string) string) LifecycleCommand {
+	if cmd.Single != nil {
+		c := *cmd.Single
+		c.Shell = sub(c.Shell)
+		if len(c.Exec) > 0 {
+			ex := make([]string, len(c.Exec))
+			for i, v := range c.Exec {
+				ex[i] = sub(v)
+			}
+			c.Exec = ex
+		}
+		cmd.Single = &c
+	}
+	if len(cmd.Parallel) > 0 {
+		p := make(map[string]Command, len(cmd.Parallel))
+		for k, c := range cmd.Parallel {
+			c.Shell = sub(c.Shell)
+			if len(c.Exec) > 0 {
+				ex := make([]string, len(c.Exec))
+				for i, v := range c.Exec {
+					ex[i] = sub(v)
+				}
+				c.Exec = ex
+			}
+			p[k] = c
+		}
+		cmd.Parallel = p
+	}
+	return cmd
 }
 
 // pickString returns userVal when non-empty; otherwise the last non-empty

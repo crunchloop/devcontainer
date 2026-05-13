@@ -180,6 +180,7 @@ func TestResolveBytes_ParseWarningsTaggedWithSource(t *testing.T) {
 	}
 	if unknownWarn == nil {
 		t.Fatalf("missing /wibble warning, got %v", cfg.Warnings)
+		return
 	}
 	if unknownWarn.Source != "/home/u/proj/.devcontainer/devcontainer.json" {
 		t.Errorf("Source = %q, want config path", unknownWarn.Source)

@@ -407,6 +407,7 @@ func TestResolveBytes_AppPortTranslatesIntoForwardPorts(t *testing.T) {
 			}
 			if dep == nil {
 				t.Fatalf("missing /appPort deprecation warning")
+				return
 			}
 			if !strings.Contains(dep.Message, "translated") {
 				t.Errorf("warning should note translation, got %q", dep.Message)

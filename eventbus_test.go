@@ -30,6 +30,7 @@ func TestBuildCompletedEvent_DurationMs(t *testing.T) {
 	}
 	if done == nil {
 		t.Fatal("no BuildCompletedEvent emitted")
+		return
 	}
 	if done.DurationMs < 15 {
 		t.Errorf("DurationMs = %d, want >= 15 (slept 20ms before completion)", done.DurationMs)
@@ -64,6 +65,7 @@ func TestBuildCompletedEvent_DurationMs_ResetsPerSource(t *testing.T) {
 	second := drainCompleted(out, "sha256:second")
 	if second == nil {
 		t.Fatal("no second BuildCompletedEvent emitted")
+		return
 	}
 	if second.DurationMs >= 50 {
 		t.Errorf("second DurationMs = %d, expected < 50 (start should have reset)", second.DurationMs)
