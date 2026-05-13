@@ -102,9 +102,9 @@ func (d *buildkitTraceDecoder) decodeStatus(buf []byte, events chan<- runtime.Bu
 
 func (d *buildkitTraceDecoder) decodeVertex(buf []byte, events chan<- runtime.BuildEvent) {
 	var (
-		digest, name, vErr        string
-		cached                    bool
-		hasStarted, hasCompleted  bool
+		digest, name, vErr       string
+		cached                   bool
+		hasStarted, hasCompleted bool
 	)
 	for len(buf) > 0 {
 		num, typ, n := protowire.ConsumeTag(buf)
