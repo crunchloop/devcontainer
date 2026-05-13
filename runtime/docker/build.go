@@ -107,29 +107,29 @@ func (r *Runtime) BuildImage(ctx context.Context, spec runtime.BuildSpec, events
 //
 //   - Classic-builder-style records with `stream` (log lines) and
 //     `status` (layer/pull progress) fields. Pre-BuildKit format.
+//     Kept as a fallback — modern dockerd never emits these under
+//     BuildKit, but harmless if a future daemon falls back.
 //
 //   - BuildKit records of the form `{"id":"moby.buildkit.trace",
-//     "aux":"<base64-protobuf>"}` for per-step progress and
-//     `{"id":"moby.image.id","aux":{"ID":"sha256:..."}}` for the
-//     final image. The aux protobuf is buildkit's `SolveStatus` —
-//     decoding requires the buildkit module. We intentionally don't
-//     pull that dep in: per-step progress events are silently dropped
-//     under BuildKit; BuildStart / BuildCompleted (emitted by the
-//     caller and at the end of BuildImage) still fire correctly, and
-//     errors still propagate via `errorDetail` / `error` fields.
-//     A future PR can revisit if vertex-level progress is needed.
+//     "aux":"<base64-protobuf>"}` for per-step progress. The aux
+//     payload is decoded by buildkitTraceDecoder via protowire — no
+//     dependency on github.com/moby/buildkit. See buildkit_trace.go
+//     for the subset of the StatusResponse schema we parse.
 func streamBuildOutput(ctx context.Context, body io.ReadCloser, events chan<- runtime.BuildEvent) error {
 	defer body.Close()
 
 	type buildMsg struct {
-		Stream      string `json:"stream,omitempty"`
-		Status      string `json:"status,omitempty"`
+		Stream      string          `json:"stream,omitempty"`
+		Status      string          `json:"status,omitempty"`
+		ID          string          `json:"id,omitempty"`
+		Aux         json.RawMessage `json:"aux,omitempty"`
 		ErrorDetail *struct {
 			Message string `json:"message"`
 		} `json:"errorDetail,omitempty"`
 		Error string `json:"error,omitempty"`
 	}
 
+	trace := newBuildkitTraceDecoder()
 	dec := json.NewDecoder(body)
 	for {
 		select {
@@ -161,6 +161,9 @@ func streamBuildOutput(ctx context.Context, body io.ReadCloser, events chan<- ru
 				Kind:    runtime.BuildEventLayer,
 				Message: msg.Status,
 			})
+		}
+		if msg.ID == "moby.buildkit.trace" && len(msg.Aux) > 0 {
+			trace.handleAux(msg.Aux, events)
 		}
 	}
 }
