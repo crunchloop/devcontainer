@@ -35,10 +35,21 @@ clean:
 
 # bridge builds libACBridge.dylib via SwiftPM. Required before any Go
 # code that imports runtime/applecontainer can link on darwin/arm64.
-# No-op on other platforms; runtime/applecontainer's stub file builds
-# without the dylib.
+# darwin/arm64 only; on other platforms runtime/applecontainer's stub
+# file builds without the dylib so this target should not be invoked.
+# Guarded with a uname check rather than left unconditional: invoking
+# `make bridge` on linux/amd64 prints a clear skip message instead of
+# failing with "swift: command not found".
 bridge:
-	cd applecontainer-bridge && swift build -c release
+	@if [ "$$(uname -s)" = "Darwin" ] && [ "$$(uname -m)" = "arm64" ]; then \
+		cd applecontainer-bridge && swift build -c release; \
+	else \
+		echo "bridge: skipped (requires darwin/arm64)"; \
+	fi
 
 bridge-clean:
-	cd applecontainer-bridge && swift package clean && rm -rf .build
+	@if [ "$$(uname -s)" = "Darwin" ] && [ "$$(uname -m)" = "arm64" ]; then \
+		cd applecontainer-bridge && swift package clean && rm -rf .build; \
+	else \
+		echo "bridge-clean: skipped (requires darwin/arm64)"; \
+	fi

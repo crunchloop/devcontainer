@@ -22,6 +22,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"time"
 	"unsafe"
 
 	"github.com/crunchloop/devcontainer/runtime"
@@ -82,7 +84,22 @@ func (r *Runtime) Ping(ctx context.Context, timeoutSeconds int) (*PingResult, er
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	cstr := C.ac_ping(C.int32_t(timeoutSeconds))
+	// Respect ctx.Deadline() by clamping timeoutSeconds to the
+	// remaining time. The bridge call itself is synchronous from Go's
+	// perspective, so we can't cancel it mid-flight — bounding the
+	// argument is the next-best contract.
+	effective := timeoutSeconds
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, ctx.Err()
+		}
+		deadlineSec := int(math.Ceil(remaining.Seconds()))
+		if effective <= 0 || deadlineSec < effective {
+			effective = deadlineSec
+		}
+	}
+	cstr := C.ac_ping(C.int32_t(effective))
 	if cstr == nil {
 		return nil, &runtime.DaemonUnavailableError{Err: errors.New("bridge returned nil")}
 	}

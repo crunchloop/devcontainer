@@ -12,9 +12,10 @@ public func ac_version() -> UnsafePointer<CChar>? {
 
 @_cdecl("ac_ping")
 public func ac_ping(_ timeoutSeconds: Int32) -> UnsafePointer<CChar>? {
-    let timeout: Duration = .seconds(Int(timeoutSeconds <= 0 ? 5 : timeoutSeconds))
+    let seconds = Int(timeoutSeconds <= 0 ? 5 : timeoutSeconds)
+    let timeout: Duration = .seconds(seconds)
     let sem = DispatchSemaphore(value: 0)
-    var json = "{\"ok\":false,\"err\":\"unset\"}"
+    nonisolated(unsafe) var json = "{\"ok\":false,\"err\":\"unset\"}"
 
     Task {
         defer { sem.signal() }
@@ -25,7 +26,14 @@ public func ac_ping(_ timeoutSeconds: Int32) -> UnsafePointer<CChar>? {
             json = encodePingErr(error)
         }
     }
-    sem.wait()
+    // ClientHealthCheck.ping already enforces its own Duration timeout,
+    // but guard the semaphore wait as belt-and-suspenders: if the Task
+    // never signals (cancellation race, runtime hang), we return a
+    // deterministic error instead of blocking the cgo caller forever.
+    let waitResult = sem.wait(timeout: .now() + .seconds(seconds + 2))
+    if waitResult == .timedOut {
+        return UnsafePointer(strdup("{\"ok\":false,\"err\":\"bridge-timeout\"}"))
+    }
     return UnsafePointer(strdup(json))
 }
 
