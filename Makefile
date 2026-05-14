@@ -1,4 +1,4 @@
-.PHONY: all test test-integration lint fmt vet tidy clean tools
+.PHONY: all test test-integration lint fmt vet tidy clean tools bridge bridge-clean
 
 GO ?= go
 GOLANGCI_LINT ?= golangci-lint
@@ -32,3 +32,13 @@ tidy:
 
 clean:
 	$(GO) clean -testcache
+
+# bridge builds libACBridge.dylib via SwiftPM. Required before any Go
+# code that imports runtime/applecontainer can link on darwin/arm64.
+# No-op on other platforms; runtime/applecontainer's stub file builds
+# without the dylib.
+bridge:
+	cd applecontainer-bridge && swift build -c release
+
+bridge-clean:
+	cd applecontainer-bridge && swift package clean && rm -rf .build

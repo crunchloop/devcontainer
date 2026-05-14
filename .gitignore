@@ -27,3 +27,6 @@ go.work.sum
 # Internal design docs (not yet public)
 PRD.md
 design/
+
+# M6 apple-container spike (private until M6 starts / repo flips public)
+examples/applecontainer-spike/
