@@ -95,12 +95,22 @@ jobs:
       - run: go vet ./...
       - run: go test -race -count=1 ./...
 
-  # Integration tests against a live Apple `container` daemon. Apple's
-  # runtime is officially supported on macOS 26+; macos-15 is the
-  # newest hosted runner image GitHub Actions exposes today, and
-  # networking (vmnet) is known not to work pre-26. We still run this
-  # to get an empirical signal on what works — `continue-on-error`
-  # keeps it from blocking PR merges until the contract is stable.
+  # Integration tests against a live Apple `container` daemon.
+  #
+  # Empirical status on GH-hosted macos-15 (verified on this PR):
+  #   - pkg install  : OK
+  #   - system start : OK (just registers launchd services)
+  #   - kernel set   : OK
+  #   - builder start: FAILS with
+  #       "VZErrorDomain Code=2 Virtualization is not available on
+  #        this hardware."
+  # i.e. the hosted runner refuses to host a Linux guest VM, so any
+  # test that actually runs a container short-circuits.
+  #
+  # We keep the job in place with continue-on-error so the failure
+  # is visible (and easy to retry once GH exposes VZ, or once we add
+  # a self-hosted macOS runner with virtualization entitlements).
+  # When that day comes, drop continue-on-error and trust the gate.
   test-integration-darwin:
     runs-on: macos-15
     needs: [test-darwin]
