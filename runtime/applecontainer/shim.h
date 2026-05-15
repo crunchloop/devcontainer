@@ -52,4 +52,6 @@ const char* ac_exec_wait_p(uint64_t handle, int32_t timeout_seconds);
 const char* ac_exec_signal_p(uint64_t handle, int32_t signal);
 void ac_exec_release_p(uint64_t handle);
 
+const char* ac_logs_open_p(const char* id);
+
 #endif

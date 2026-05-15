@@ -253,4 +253,23 @@ const char* ac_exec_signal(uint64_t handle, int32_t signal);
 //   Blocking:     non-blocking; lock acquisition only.
 void ac_exec_release(uint64_t handle);
 
+// ---- PR-E: Logs streaming ------------------------------------------
+
+// ac_logs_open returns a dup'd file descriptor for the container's
+// stdio log. The fd is a regular file on disk; reads return 0 bytes
+// at EOF. Callers implement follow mode by polling on EOF; ctx
+// cancellation is signaled by closing the fd Go-side.
+//
+//   Ownership:    caller owns the returned fd and must close it with
+//                 close(2). The JSON envelope itself is freed with
+//                 ac_free as usual.
+//   Cancellation: external — close the fd from another thread to
+//                 unblock a Go read.
+//   Threading:    Swift Task + DispatchSemaphore wait on the cgo
+//                 thread.
+//   Encoding:     { "ok": true, "data": { "fd": int32 } } or
+//                 { "ok": false, "err": "..." }.
+//   Blocking:     up to 10s (one XPC round-trip + dup).
+const char* ac_logs_open(const char* id);
+
 #endif
