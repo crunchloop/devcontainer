@@ -97,15 +97,24 @@ jobs:
 
   # Integration tests against a live Apple `container` daemon.
   #
-  # Apple's `container` runtime is hardcoded to Virtualization.framework
-  # (no QEMU fallback like Colima/Lima). On macos-15 hosted runners VZ
-  # is not exposed for Linux guests — `container builder start` fails
-  # with "VZErrorDomain Code=2 Virtualization is not available on this
-  # hardware". macos-26 hosted runners are now GA; trying them here to
-  # see whether VZ is exposed on the newer image.
+  # Verified-on-CI status:
+  #   - pkg install     : OK on macos-15 and macos-26
+  #   - system start    : OK
+  #   - kernel set      : OK
+  #   - builder start   : FAILS on both macos-15 and macos-26 with
+  #       "VZErrorDomain Code=2 Virtualization is not available on
+  #        this hardware."
   #
-  # continue-on-error stays in place until we have a confirmed green
-  # run — drop it then.
+  # i.e. GitHub-hosted macOS runners do not expose
+  # Virtualization.framework for Linux guests, regardless of image
+  # version. Apple's `container` runtime is hardcoded to VZ (no QEMU
+  # fallback like Colima/Lima), so there is no workaround at the
+  # workflow level. The only paths to a passing job today are:
+  #   1. Self-hosted macOS runner with virtualization entitlements
+  #   2. GH exposing VZ on hosted runners (no announced timeline)
+  #
+  # continue-on-error keeps the failure visible without blocking
+  # merges. Drop it once a real green run is available.
   test-integration-darwin:
     runs-on: macos-26
     needs: [test-darwin]
