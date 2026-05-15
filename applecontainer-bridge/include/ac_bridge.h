@@ -293,4 +293,25 @@ const char* ac_logs_open(const char* id);
 //                 cases.
 const char* ac_pull_image(const char* reference);
 
+// ---- PR-G: Build (probe only) --------------------------------------
+
+// ac_build_probe checks whether Apple's buildkit container is up.
+// On success, the caller can attempt a real build; on failure, the
+// caller surfaces a typed BuilderUnavailableError. The full
+// BuildKit gRPC integration (Builder.BuildConfig, progress streaming,
+// SwiftNIO event loop, etc.) is intentionally deferred to a follow-up
+// PR — see applecontainer-bridge/Sources/ACBridge/build.swift for
+// the scope rationale.
+//
+//   Ownership:    caller frees with ac_free.
+//   Cancellation: not yet wired.
+//   Threading:    Swift Task + DispatchSemaphore wait on the cgo
+//                 thread.
+//   Encoding:     { "ok": true } or { "ok": false, "err": "..." }.
+//                 The error message includes Apple's error string,
+//                 which is descriptive enough that callers can
+//                 surface it to users without further interpretation.
+//   Blocking:     up to 5s (one XPC round-trip).
+const char* ac_build_probe(void);
+
 #endif

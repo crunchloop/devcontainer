@@ -139,11 +139,7 @@ func bridgeVersion() string {
 	return C.GoString(cstr)
 }
 
-// ---- runtime.Runtime stubs (filled in by later PRs) ------------------
-
-func (*Runtime) BuildImage(context.Context, runtime.BuildSpec, chan<- runtime.BuildEvent) (runtime.ImageRef, error) {
-	return runtime.ImageRef{}, runtime.ErrNotImplemented
-}
+// ---- runtime.Runtime method map -------------------------------------
 
 // InspectContainer, InspectImage, FindContainerByLabel — PR-B
 //   (inspect_darwin_arm64.go).
@@ -152,4 +148,6 @@ func (*Runtime) BuildImage(context.Context, runtime.BuildSpec, chan<- runtime.Bu
 // ExecContainer — PR-D (exec_darwin_arm64.go).
 // ContainerLogs — PR-E (logs_darwin_arm64.go).
 // PullImage — PR-F (pull_darwin_arm64.go).
+// BuildImage — PR-G (build_darwin_arm64.go, partial: builder probe +
+//   typed not-implemented error; full BuildKit wiring is a follow-up).
 

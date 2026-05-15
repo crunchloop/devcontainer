@@ -56,4 +56,6 @@ const char* ac_logs_open_p(const char* id);
 
 const char* ac_pull_image_p(const char* reference);
 
+const char* ac_build_probe_p(void);
+
 #endif

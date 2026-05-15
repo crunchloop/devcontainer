@@ -91,3 +91,24 @@ func (e *DaemonUnavailableError) Error() string {
 }
 
 func (e *DaemonUnavailableError) Unwrap() error { return e.Err }
+
+// BuilderUnavailableError indicates the container engine's image-build
+// component is missing or not running. Distinct from
+// DaemonUnavailableError because the build engine is typically a
+// separate process / VM that can be started independently (e.g.
+// Apple's `container builder start`, Docker's BuildKit daemon).
+type BuilderUnavailableError struct {
+	// Hint is a backend-specific message telling the user how to
+	// remediate (e.g. "run `container builder start`").
+	Hint string
+	Err  error
+}
+
+func (e *BuilderUnavailableError) Error() string {
+	if e.Hint != "" {
+		return fmt.Sprintf("image build engine unavailable (%s): %v", e.Hint, e.Err)
+	}
+	return fmt.Sprintf("image build engine unavailable: %v", e.Err)
+}
+
+func (e *BuilderUnavailableError) Unwrap() error { return e.Err }
