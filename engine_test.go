@@ -170,6 +170,54 @@ func (f *fakeRuntime) InspectImage(ctx context.Context, ref string) (*runtime.Im
 	return nil, &runtime.ImageNotFoundError{Ref: ref}
 }
 
+// ---- compose orchestrator primitives ---------------------------------
+// The engine's image / build / compose-shellout paths never reach these,
+// but the runtime.Runtime interface now declares them, so fakeRuntime
+// must answer. ErrNotImplemented signals "not exercised in this test";
+// any production code path that hits them through fakeRuntime would
+// surface that error in the test.
+
+func (f *fakeRuntime) CreateNetwork(ctx context.Context, spec runtime.NetworkSpec) (string, error) {
+	return "", runtime.ErrNotImplemented
+}
+
+func (f *fakeRuntime) RemoveNetwork(ctx context.Context, id string) error {
+	return runtime.ErrNotImplemented
+}
+
+func (f *fakeRuntime) CreateVolume(ctx context.Context, spec runtime.VolumeSpec) (string, error) {
+	return "", runtime.ErrNotImplemented
+}
+
+func (f *fakeRuntime) RemoveVolume(ctx context.Context, name string) error {
+	return runtime.ErrNotImplemented
+}
+
+func (f *fakeRuntime) ListContainers(ctx context.Context, filter runtime.LabelFilter) ([]runtime.Container, error) {
+	return nil, runtime.ErrNotImplemented
+}
+
+func (f *fakeRuntime) ListImages(ctx context.Context, filter runtime.LabelFilter) ([]runtime.ImageRef, error) {
+	return nil, runtime.ErrNotImplemented
+}
+
+func (f *fakeRuntime) RemoveImage(ctx context.Context, ref string) error {
+	return runtime.ErrNotImplemented
+}
+
+func (f *fakeRuntime) Capabilities() runtime.Capabilities {
+	// fakeRuntime advertises the docker baseline; non-compose tests
+	// never read this. Compose orchestrator tests live in compose/
+	// with their own purpose-built fake.
+	return runtime.Capabilities{
+		Healthchecks:     true,
+		ExitCodes:        true,
+		NamespaceSharing: true,
+		RestartPolicies:  true,
+		SharedVolumes:    true,
+	}
+}
+
 func (f *fakeRuntime) FindContainerByLabel(ctx context.Context, key, value string) (*runtime.Container, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

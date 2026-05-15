@@ -126,6 +126,60 @@ type Runtime interface {
 	// FindContainerByLabel returns the most recently created container
 	// matching the given label. Returns nil, nil if no match.
 	FindContainerByLabel(ctx context.Context, key, value string) (*Container, error)
+
+	// ---- compose orchestration primitives -----------------------------
+	//
+	// Methods below are consumed by the runtime-agnostic compose
+	// orchestrator under compose/ (see design/compose-native.md §4).
+	// Types live in runtime/compose_primitives.go. A backend that
+	// returns ErrNotImplemented from any of these effectively opts
+	// out of compose source — Plan.Validate(Capabilities()) catches
+	// such projects at validation time and refuses with a typed
+	// error before any side effect.
+
+	// CreateNetwork creates a network with the given name and
+	// labels. Returns the backend's network ID for later
+	// RemoveNetwork. Idempotent on (name, labels) match: if a
+	// network with the same name and matching label set already
+	// exists, return its ID without error (same shape as compose's
+	// own up behavior).
+	CreateNetwork(ctx context.Context, spec NetworkSpec) (string, error)
+
+	// RemoveNetwork removes a network by its backend ID. No-op if
+	// the network is already gone.
+	RemoveNetwork(ctx context.Context, id string) error
+
+	// CreateVolume creates a named volume. Idempotent on (name,
+	// labels). Returns the backend's volume identifier — usually
+	// the name itself, but backends may translate.
+	CreateVolume(ctx context.Context, spec VolumeSpec) (string, error)
+
+	// RemoveVolume removes a named volume. No-op if missing.
+	RemoveVolume(ctx context.Context, name string) error
+
+	// ListContainers returns containers matching every label in the
+	// filter. Empty filter is rejected — we never want to enumerate
+	// all containers. Implementations without server-side filtering
+	// (e.g. applecontainer per design probe R1b) filter client-side
+	// after a full enumeration.
+	ListContainers(ctx context.Context, filter LabelFilter) ([]Container, error)
+
+	// ListImages returns local images matching the filter. Used by
+	// Down --rmi local: built images are stamped with project labels
+	// so teardown can prune by label. Same empty-filter rule as
+	// ListContainers.
+	ListImages(ctx context.Context, filter LabelFilter) ([]ImageRef, error)
+
+	// RemoveImage removes a local image by ID or reference. No-op
+	// if missing.
+	RemoveImage(ctx context.Context, ref string) error
+
+	// Capabilities advertises optional features this backend
+	// supports. compose.Plan.Validate keys feature gates off this
+	// struct so per-backend conditionals stay out of the validator.
+	// The returned value should be a constant for the lifetime of
+	// the Runtime; callers may cache it.
+	Capabilities() Capabilities
 }
 
 // ImageRef identifies an image by digest and any associated tags.
