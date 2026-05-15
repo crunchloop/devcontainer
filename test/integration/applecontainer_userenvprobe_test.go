@@ -10,11 +10,13 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	devcontainer "github.com/crunchloop/devcontainer"
+	"github.com/crunchloop/devcontainer/runtime"
 )
 
 const appleBashImage = "docker.io/library/bash:5.2-alpine3.20"
@@ -122,7 +124,11 @@ RUN mkdir -p /opt/mytool/bin /etc/profile.d \
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	if _, err := rt.BuildImage(ctx, runtimeBuildSpec(dir, tag), nil); err != nil {
-		t.Skipf("BuildImage (builder likely not running): %v", err)
+		var unavail *runtime.BuilderUnavailableError
+		if errors.As(err, &unavail) {
+			t.Skipf("BuildImage (builder not running): %v", err)
+		}
+		t.Fatalf("BuildImage: %v", err)
 	}
 
 	ws := writeWorkspace(t, `{

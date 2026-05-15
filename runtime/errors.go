@@ -112,3 +112,16 @@ func (e *BuilderUnavailableError) Error() string {
 }
 
 func (e *BuilderUnavailableError) Unwrap() error { return e.Err }
+
+// UnsupportedOptionError indicates a RunSpec / BuildSpec field that
+// the chosen backend cannot honor. Returned at the boundary instead
+// of silently dropping the option, so callers fail fast rather than
+// observing apparent success with missing behavior.
+type UnsupportedOptionError struct {
+	Backend string
+	Option  string
+}
+
+func (e *UnsupportedOptionError) Error() string {
+	return fmt.Sprintf("%s: option %q is not supported on this backend", e.Backend, e.Option)
+}

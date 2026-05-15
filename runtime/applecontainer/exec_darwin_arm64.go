@@ -186,19 +186,14 @@ func (r *Runtime) ExecContainer(ctx context.Context, id string, opts runtime.Exe
 	waitRaw := goStringAndFree(C.ac_exec_wait_p(C.uint64_t(handle), 0))
 	close(doneSignal)
 
-	// Close the Go-facing ends of stdout/stderr so the io.Copy
-	// goroutines see EOF and return. (Their counterparts in the VM
-	// already closed when the process exited, but the fd to the
-	// in-VM end isn't directly accessible — closing ours is the
-	// equivalent of "we've seen enough.") The actual EOF should
-	// have already arrived from the apiserver-side fd closure when
-	// the process exited; this is a safety net.
-	pipes.closeGoFacingReaders()
-
 	// Always release the handle before we leave the function.
 	defer C.ac_exec_release_p(C.uint64_t(handle))
 
-	// Drain copy goroutines.
+	// Drain copy goroutines. The apiserver closes its fd when the
+	// process exits, which surfaces as EOF on our reader, so io.Copy
+	// returns naturally without us having to close anything. Closing
+	// the Go-facing ends BEFORE the drain (an earlier safety net)
+	// risked truncating buffered output, so it was removed.
 	wg.Wait()
 	close(copyErrCh)
 
@@ -302,15 +297,6 @@ func (p *execPipes) closeRemoteEnds() {
 	p.stdoutWrite = nil
 	closeIf(p.stderrWrite)
 	p.stderrWrite = nil
-}
-
-// closeGoFacingReaders closes the Go-facing read ends of stdout/stderr.
-// Triggers EOF in the io.Copy goroutines that are reading them.
-func (p *execPipes) closeGoFacingReaders() {
-	closeIf(p.stdoutRead)
-	p.stdoutRead = nil
-	closeIf(p.stderrRead)
-	p.stderrRead = nil
 }
 
 // closeLocal closes everything still open. Safe to call multiple

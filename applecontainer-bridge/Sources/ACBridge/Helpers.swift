@@ -63,13 +63,45 @@ func encodeOKNull() -> String {
 }
 
 // encodeErr serializes any Error into the failure envelope, escaping
-// quotes and newlines so the result is always valid JSON.
+// quotes and newlines so the result is always valid JSON. If the
+// error is a BridgeCodedError, its `code` is included so the Go side
+// can drive typed error mapping without depending on message text.
 func encodeErr(_ error: Error) -> String {
-    let msg = String(describing: error)
+    if let coded = error as? BridgeCodedError {
+        return encodeErrWithCode(coded.code, message: coded.message)
+    }
+    let msg = jsonEscape(String(describing: error))
+    return "{\"ok\":false,\"err\":\"\(msg)\"}"
+}
+
+// encodeErrWithCode emits the failure envelope with a machine-readable
+// `code` field alongside the human-readable `err`. The Go side keys
+// typed errors off `code`; `err` is retained for diagnostics and
+// log-friendliness.
+func encodeErrWithCode(_ code: String, message: String) -> String {
+    let codeEsc = jsonEscape(code)
+    let msgEsc = jsonEscape(message)
+    return "{\"ok\":false,\"code\":\"\(codeEsc)\",\"err\":\"\(msgEsc)\"}"
+}
+
+func encodeErrWithCode(_ code: String, error: Error) -> String {
+    return encodeErrWithCode(code, message: String(describing: error))
+}
+
+private func jsonEscape(_ s: String) -> String {
+    return s
         .replacingOccurrences(of: "\\", with: "\\\\")
         .replacingOccurrences(of: "\"", with: "\\\"")
         .replacingOccurrences(of: "\n", with: "\\n")
-    return "{\"ok\":false,\"err\":\"\(msg)\"}"
+}
+
+// BridgeCodedError attaches a stable `code` to an error so the Go
+// side can route on it without parsing free-form message text. Throw
+// this from any bridge handler where the caller benefits from a typed
+// error (e.g. BUILDER_UNAVAILABLE).
+struct BridgeCodedError: Error {
+    let code: String
+    let message: String
 }
 
 // readCString safely converts a possibly-null C string pointer into a

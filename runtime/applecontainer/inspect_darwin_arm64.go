@@ -28,6 +28,7 @@ import (
 type envelope[T any] struct {
 	OK   bool            `json:"ok"`
 	Err  string          `json:"err"`
+	Code string          `json:"code,omitempty"`
 	Data json.RawMessage `json:"data"`
 	// Decoded payload — populated by decodeEnvelope on success.
 	decoded T

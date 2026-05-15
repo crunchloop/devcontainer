@@ -55,16 +55,30 @@ func TestLogs_NonFollow(t *testing.T) {
 	// Emit two short lines then sleep so the log is bounded.
 	rt := chattyContainer(t, id, "echo hello-from-logs-1; echo hello-from-logs-2; sleep 60")
 
-	// Give the apiserver a beat to flush stdio to the log file.
-	time.Sleep(500 * time.Millisecond)
+	// Poll under a bounded timeout until both markers appear (or fail).
+	// Avoids a flaky fixed sleep on slow log-flush and an unbounded
+	// context.Background() on regressions.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	var buf bytes.Buffer
-	if err := rt.ContainerLogs(context.Background(), id, &buf, false); err != nil {
-		t.Fatalf("ContainerLogs: %v", err)
-	}
-	got := buf.String()
-	if !strings.Contains(got, "hello-from-logs-1") || !strings.Contains(got, "hello-from-logs-2") {
-		t.Errorf("logs missing markers; got %q", got)
+	var (
+		buf bytes.Buffer
+		got string
+	)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		buf.Reset()
+		if err := rt.ContainerLogs(ctx, id, &buf, false); err != nil {
+			t.Fatalf("ContainerLogs: %v", err)
+		}
+		got = buf.String()
+		if strings.Contains(got, "hello-from-logs-1") && strings.Contains(got, "hello-from-logs-2") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("logs missing markers; got %q", got)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 

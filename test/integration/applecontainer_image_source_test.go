@@ -149,6 +149,14 @@ func TestAppleContainer_ReattachStopped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Up: %v", err)
 	}
+	// If reattach worked, `second` and `first` are the same container
+	// and the existing defer on `first` will clean up. But if the ID
+	// changed (the very bug this test is pinning), `first`'s teardown
+	// leaves `second` running and contaminates later tests — so
+	// schedule its teardown unconditionally.
+	defer func() {
+		_ = eng.Down(context.Background(), second, devcontainer.DownOptions{Remove: true})
+	}()
 	if second.Container.ID != first.Container.ID {
 		t.Errorf("container id changed across reattach: first=%q second=%q",
 			first.Container.ID, second.Container.ID)

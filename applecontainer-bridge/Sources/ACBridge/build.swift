@@ -61,9 +61,12 @@ public func ac_build_probe() -> UnsafePointer<CChar>? {
             if snap.status == .running {
                 return "{\"ok\":true}"
             }
-            return "{\"ok\":false,\"err\":\"builder container exists but status is \(snap.status)\"}"
+            return encodeErrWithCode(
+                "BUILDER_UNAVAILABLE",
+                message: "builder container exists but status is \(snap.status)"
+            )
         } catch {
-            return encodeErr(error)
+            return encodeErrWithCode("BUILDER_UNAVAILABLE", error: error)
         }
     }
 }
@@ -109,8 +112,8 @@ private func runBuild(spec: BuildSpecJSON) async throws -> BuildResult {
     do {
         socketHandle = try await client.dial(id: buildkitContainerID, port: buildkitVsockPort)
     } catch {
-        throw ContainerizationError(
-            .notFound,
+        throw BridgeCodedError(
+            code: "BUILDER_UNAVAILABLE",
             message: "builder not running (run `container builder start`): \(error)"
         )
     }

@@ -63,16 +63,21 @@ func (r *Runtime) BuildImage(ctx context.Context, spec runtime.BuildSpec, events
 	}
 
 	// Builder-liveness probe. Cheap and gives us a clean typed error
-	// before we marshal the full spec.
+	// before we marshal the full spec. The bridge tags the
+	// builder-down case with code="BUILDER_UNAVAILABLE"; we key off
+	// that rather than message text.
 	probeRaw := goStringAndFree(C.ac_build_probe_p())
 	if probeRaw == "" {
 		return runtime.ImageRef{}, errors.New("applecontainer: bridge returned nil for BuildImage probe")
 	}
-	if _, err := decodeEnvelope[map[string]any](probeRaw); err != nil {
-		return runtime.ImageRef{}, &runtime.BuilderUnavailableError{
-			Hint: "run `container builder start` to start the build VM",
-			Err:  err,
+	if probeEnv, err := decodeEnvelope[map[string]any](probeRaw); err != nil {
+		if probeEnv.Code == bridgeCodeBuilderUnavailable {
+			return runtime.ImageRef{}, &runtime.BuilderUnavailableError{
+				Hint: "run `container builder start` to start the build VM",
+				Err:  err,
+			}
 		}
+		return runtime.ImageRef{}, err
 	}
 
 	emitBuildEvent(events, runtime.BuildEvent{
@@ -105,8 +110,9 @@ func (r *Runtime) BuildImage(ctx context.Context, spec runtime.BuildSpec, events
 	if err != nil {
 		// Apple's "builder not running" error path can surface here
 		// if the buildkit container vanished between probe and build.
-		// Detect by message text and remap to the typed error.
-		if isBuilderUnavailable(err) {
+		// Primary key is the bridge's machine-readable `code`; the
+		// message-text fallback covers older bridge builds.
+		if env.Code == bridgeCodeBuilderUnavailable || isBuilderUnavailable(err) {
 			return runtime.ImageRef{}, &runtime.BuilderUnavailableError{
 				Hint: "run `container builder start` to start the build VM",
 				Err:  err,
@@ -130,6 +136,12 @@ func (r *Runtime) BuildImage(ctx context.Context, spec runtime.BuildSpec, events
 		Tags: tags,
 	}, nil
 }
+
+// bridgeCodeBuilderUnavailable matches the `code` the Swift bridge
+// stamps on the failure envelope when Apple's buildkit container is
+// not running. Keep in sync with applecontainer-bridge/Sources/
+// ACBridge/build.swift.
+const bridgeCodeBuilderUnavailable = "BUILDER_UNAVAILABLE"
 
 func isBuilderUnavailable(err error) bool {
 	if err == nil {

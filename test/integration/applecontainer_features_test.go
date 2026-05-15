@@ -79,15 +79,7 @@ echo apple-feature-ran > /etc/feature-marker
 		SkipLifecycle:        true,
 	})
 	if err != nil {
-		// Probe failure: surface the error but don't fail the test
-		// — design contract is that features should work, but if
-		// PR-G2's build path has a feature-pipeline-specific bug
-		// (e.g. permissions, context streaming) we want to know
-		// WITHOUT blocking the rest of the integration suite.
-		// Convert to an explicit TODO if you intentionally want the
-		// CI failure as a signal.
-		t.Logf("FEATURE PROBE FAILED — pipeline integration needs work: %v", err)
-		t.Skip("feature install failed on apple-container (TODO: investigate)")
+		t.Fatalf("feature install failed on apple-container: %v", err)
 	}
 	defer func() {
 		_ = eng.Down(context.Background(), wsObj, devcontainer.DownOptions{Remove: true})

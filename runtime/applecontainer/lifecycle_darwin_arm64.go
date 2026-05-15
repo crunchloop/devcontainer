@@ -62,6 +62,9 @@ func (r *Runtime) RunContainer(ctx context.Context, spec runtime.RunSpec) (*runt
 	if err := ensureLoaded(); err != nil {
 		return nil, err
 	}
+	if err := rejectUnsupportedRunSpec(spec); err != nil {
+		return nil, err
+	}
 	wire := runSpecToWire(spec)
 	if wire.ID == "" {
 		return nil, errors.New("applecontainer: RunSpec.Name is required (used as container id)")
@@ -173,11 +176,30 @@ func (r *Runtime) RemoveContainer(ctx context.Context, id string, opts runtime.R
 	return nil
 }
 
+// rejectUnsupportedRunSpec fails fast on RunSpec fields that this
+// backend cannot honor. Documented in design §8 as not modeled on
+// Apple's `container` runtime; rather than silently dropping them
+// (which would let callers observe apparent success with the option
+// ignored), we surface a typed UnsupportedOptionError before crossing
+// the cgo boundary.
+func rejectUnsupportedRunSpec(spec runtime.RunSpec) error {
+	if len(spec.RunArgs) > 0 {
+		return &runtime.UnsupportedOptionError{Backend: "applecontainer", Option: "RunArgs"}
+	}
+	if spec.Privileged {
+		return &runtime.UnsupportedOptionError{Backend: "applecontainer", Option: "Privileged"}
+	}
+	if len(spec.SecurityOpt) > 0 {
+		return &runtime.UnsupportedOptionError{Backend: "applecontainer", Option: "SecurityOpt"}
+	}
+	return nil
+}
+
 // runSpecToWire projects runtime.RunSpec onto the JSON shape the
 // bridge expects. Fields the apple-container backend does not support
-// (RunArgs, Privileged, SecurityOpt) are dropped here, not in the
-// bridge — so the silent-drop is visible in one place during code
-// review.
+// (RunArgs, Privileged, SecurityOpt) are rejected by
+// rejectUnsupportedRunSpec before reaching this function, so they
+// don't appear in the wire type at all.
 func runSpecToWire(spec runtime.RunSpec) runSpecJSON {
 	out := runSpecJSON{
 		Image:           spec.Image,

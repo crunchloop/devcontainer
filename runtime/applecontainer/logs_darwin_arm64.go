@@ -33,6 +33,9 @@ func (r *Runtime) ContainerLogs(ctx context.Context, id string, w io.Writer, fol
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if w == nil {
+		return errors.New("applecontainer: log writer is nil")
+	}
 	if err := ensureLoaded(); err != nil {
 		return err
 	}
@@ -81,8 +84,19 @@ func copyLogs(ctx context.Context, src *os.File, dst io.Writer, follow bool) err
 	for {
 		n, err := src.Read(buf)
 		if n > 0 {
-			if _, werr := dst.Write(buf[:n]); werr != nil {
-				return fmt.Errorf("applecontainer: log writer: %w", werr)
+			// io.Writer is allowed to short-write without returning
+			// an error; loop until the chunk is fully drained so we
+			// never silently drop log bytes.
+			off := 0
+			for off < n {
+				written, werr := dst.Write(buf[off:n])
+				if werr != nil {
+					return fmt.Errorf("applecontainer: log writer: %w", werr)
+				}
+				if written == 0 {
+					return fmt.Errorf("applecontainer: log writer: %w", io.ErrShortWrite)
+				}
+				off += written
 			}
 		}
 		if err == nil {

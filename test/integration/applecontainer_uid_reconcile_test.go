@@ -15,6 +15,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	devcontainer "github.com/crunchloop/devcontainer"
+	"github.com/crunchloop/devcontainer/runtime"
 )
 
 func TestAppleContainer_UID_NotReconciled_MountStillWritable(t *testing.T) {
@@ -45,7 +47,11 @@ RUN addgroup -g 4321 vscode \
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	if _, err := rt.BuildImage(ctx, runtimeBuildSpec(dir, tag), nil); err != nil {
-		t.Skipf("BuildImage (builder likely not running): %v", err)
+		var unavail *runtime.BuilderUnavailableError
+		if errors.As(err, &unavail) {
+			t.Skipf("BuildImage (builder not running): %v", err)
+		}
+		t.Fatalf("BuildImage: %v", err)
 	}
 
 	ws := writeWorkspace(t, `{

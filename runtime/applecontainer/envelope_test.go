@@ -3,8 +3,11 @@
 package applecontainer
 
 import (
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/crunchloop/devcontainer/runtime"
 )
 
 // Pure-Go tests for the envelope decoder. No daemon, no cgo at
@@ -58,6 +61,47 @@ func TestDecodeEnvelope_Malformed(t *testing.T) {
 	_, err := decodeEnvelope[imageInspectPayload](`{not-json}`)
 	if err == nil {
 		t.Fatal("want error for malformed JSON")
+	}
+}
+
+// TestRejectUnsupportedRunSpec pins the contract that RunArgs,
+// Privileged, and SecurityOpt fail fast with a typed error rather
+// than being silently dropped at the bridge boundary.
+func TestRejectUnsupportedRunSpec(t *testing.T) {
+	cases := []struct {
+		name string
+		spec runtime.RunSpec
+		opt  string
+	}{
+		{name: "RunArgs", spec: runtime.RunSpec{RunArgs: []string{"--add-host=foo:1.2.3.4"}}, opt: "RunArgs"},
+		{name: "Privileged", spec: runtime.RunSpec{Privileged: true}, opt: "Privileged"},
+		{name: "SecurityOpt", spec: runtime.RunSpec{SecurityOpt: []string{"no-new-privileges"}}, opt: "SecurityOpt"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := rejectUnsupportedRunSpec(tc.spec)
+			if err == nil {
+				t.Fatalf("want error, got nil")
+			}
+			var unsup *runtime.UnsupportedOptionError
+			if !errors.As(err, &unsup) {
+				t.Fatalf("want *UnsupportedOptionError, got %T: %v", err, err)
+			}
+			if unsup.Option != tc.opt {
+				t.Errorf("Option = %q, want %q", unsup.Option, tc.opt)
+			}
+			if unsup.Backend != "applecontainer" {
+				t.Errorf("Backend = %q, want %q", unsup.Backend, "applecontainer")
+			}
+		})
+	}
+}
+
+// TestRejectUnsupportedRunSpec_AllowsZeroValue confirms the validator
+// is a no-op for the common case (all unsupported fields empty).
+func TestRejectUnsupportedRunSpec_AllowsZeroValue(t *testing.T) {
+	if err := rejectUnsupportedRunSpec(runtime.RunSpec{Image: "x", Name: "y"}); err != nil {
+		t.Errorf("want nil, got %v", err)
 	}
 }
 

@@ -142,8 +142,11 @@ const char* ac_find_container_by_label(const char* key, const char* value);
 //                   { "ok": true, "data": { "id": "<container-id>" } }
 //                 or { "ok": false, "err": "..." }.
 //                 RunSpec.RunArgs / Privileged / SecurityOpt are not
-//                 modeled on this backend per design §8; the bridge
-//                 silently drops them. Image must be pre-pulled.
+//                 modeled on this backend per design §8. The Go layer
+//                 rejects callers that populate them with a typed
+//                 UnsupportedOptionError before reaching this entry
+//                 point; the wire shape doesn't carry those fields.
+//                 Image must be pre-pulled.
 //   Blocking:     up to 60s (covers cold kernel + init-image fetch on
 //                 first run; cached after that).
 const char* ac_run(const char* spec_json);
@@ -304,7 +307,16 @@ const char* ac_pull_image(const char* reference);
 //   Cancellation: not yet wired.
 //   Threading:    Swift Task + DispatchSemaphore wait on the cgo
 //                 thread.
-//   Encoding:     { "ok": true } or { "ok": false, "err": "..." }.
+//   Encoding:     Success: { "ok": true }.
+//                 Failure with stable code:
+//                   { "ok": false,
+//                     "code": "BUILDER_UNAVAILABLE",
+//                     "err":  "<human-readable detail>" }
+//                 Failure without a known code:
+//                   { "ok": false, "err": "..." }
+//                 The `code` field is the machine-readable contract
+//                 the Go side keys typed errors off of; `err` is for
+//                 diagnostics only.
 //   Blocking:     up to 5s (one XPC round-trip).
 const char* ac_build_probe(void);
 
@@ -327,13 +339,18 @@ const char* ac_build_probe(void);
 //                   tag, args (map[string]string), target,
 //                   cacheFrom ([]string), noCache (bool),
 //                   platform (single platform string, e.g. linux/arm64).
-//                 Engine concepts we silently drop on this backend:
-//                 RunArgs, Privileged, SecurityOpt — same as
-//                 ac_run (design §8). Multi-platform builds are out
-//                 of scope; pass a single platform.
+//                 Engine concepts not modeled on this backend
+//                 (RunArgs, Privileged, SecurityOpt analogues) are
+//                 rejected by the Go layer before reaching this
+//                 entry point — same pattern as ac_run (design §8).
+//                 Multi-platform builds are out of scope; pass a
+//                 single platform.
 //                 Success:
 //                   { "ok": true, "data": { "reference": "...", "digest": "..." } }
-//                 Failure:
+//                 Failure with stable code (same contract as
+//                 ac_build_probe — currently BUILDER_UNAVAILABLE):
+//                   { "ok": false, "code": "...", "err": "..." }
+//                 Failure without a known code:
 //                   { "ok": false, "err": "..." }.
 //                 BuildKit progress goes to FileHandle.standardError
 //                 of the bridge process (which the Go process
