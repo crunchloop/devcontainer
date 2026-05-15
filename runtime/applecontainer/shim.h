@@ -54,4 +54,6 @@ void ac_exec_release_p(uint64_t handle);
 
 const char* ac_logs_open_p(const char* id);
 
+const char* ac_pull_image_p(const char* reference);
+
 #endif

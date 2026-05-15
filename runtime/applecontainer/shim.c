@@ -25,6 +25,7 @@ static const char* (*p_ac_exec_signal)(uint64_t, int32_t) = NULL;
 static void (*p_ac_exec_release)(uint64_t) = NULL;
 
 static const char* (*p_ac_logs_open)(const char*) = NULL;
+static const char* (*p_ac_pull_image)(const char*) = NULL;
 
 static void copy_err(char* errbuf, size_t errlen, const char* msg) {
     if (!errbuf || errlen == 0) {
@@ -69,6 +70,7 @@ int ac_load(const char* path, char* errbuf, size_t errlen) {
     p_ac_exec_signal             = (const char* (*)(uint64_t, int32_t)) dlsym(h, "ac_exec_signal");
     p_ac_exec_release            = (void (*)(uint64_t)) dlsym(h, "ac_exec_release");
     p_ac_logs_open               = (const char* (*)(const char*)) dlsym(h, "ac_logs_open");
+    p_ac_pull_image              = (const char* (*)(const char*)) dlsym(h, "ac_pull_image");
 
     if (!p_ac_version || !p_ac_ping || !p_ac_free
         || !p_ac_inspect_container || !p_ac_inspect_image
@@ -76,7 +78,7 @@ int ac_load(const char* path, char* errbuf, size_t errlen) {
         || !p_ac_run || !p_ac_start || !p_ac_stop || !p_ac_delete
         || !p_ac_exec_start || !p_ac_exec_wait
         || !p_ac_exec_signal || !p_ac_exec_release
-        || !p_ac_logs_open) {
+        || !p_ac_logs_open || !p_ac_pull_image) {
         const char* err = dlerror();
         copy_err(errbuf, errlen, err ? err : "dlsym returned null");
         // Reset any partial resolutions so a future retry sees a clean
@@ -97,6 +99,7 @@ int ac_load(const char* path, char* errbuf, size_t errlen) {
         p_ac_exec_signal = NULL;
         p_ac_exec_release = NULL;
         p_ac_logs_open = NULL;
+        p_ac_pull_image = NULL;
         dlclose(h);
         return -1;
     }
@@ -173,4 +176,8 @@ void ac_exec_release_p(uint64_t handle) {
 
 const char* ac_logs_open_p(const char* id) {
     return p_ac_logs_open ? p_ac_logs_open(id) : NULL;
+}
+
+const char* ac_pull_image_p(const char* reference) {
+    return p_ac_pull_image ? p_ac_pull_image(reference) : NULL;
 }

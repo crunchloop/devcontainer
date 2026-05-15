@@ -145,14 +145,11 @@ func (*Runtime) BuildImage(context.Context, runtime.BuildSpec, chan<- runtime.Bu
 	return runtime.ImageRef{}, runtime.ErrNotImplemented
 }
 
-func (*Runtime) PullImage(context.Context, string, chan<- runtime.BuildEvent) (runtime.ImageRef, error) {
-	return runtime.ImageRef{}, runtime.ErrNotImplemented
-}
-
 // InspectContainer, InspectImage, FindContainerByLabel — PR-B
 //   (inspect_darwin_arm64.go).
 // RunContainer, StartContainer, StopContainer, RemoveContainer — PR-C
 //   (lifecycle_darwin_arm64.go).
 // ExecContainer — PR-D (exec_darwin_arm64.go).
 // ContainerLogs — PR-E (logs_darwin_arm64.go).
+// PullImage — PR-F (pull_darwin_arm64.go).
 

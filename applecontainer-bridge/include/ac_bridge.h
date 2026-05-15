@@ -272,4 +272,25 @@ void ac_exec_release(uint64_t handle);
 //   Blocking:     up to 10s (one XPC round-trip + dup).
 const char* ac_logs_open(const char* id);
 
+// ---- PR-F: Pull ----------------------------------------------------
+
+// ac_pull_image fetches an image from a remote registry into the
+// local content store. Synchronous; returns when the image is fully
+// pulled and unpacked.
+//
+//   Ownership:    caller frees the returned JSON with ac_free.
+//   Cancellation: not yet wired. Apple's pull API doesn't expose a
+//                 cancellation token; aborting cleanly would require
+//                 deleting the partial image — left for a future PR.
+//                 Documented in design §8.
+//   Threading:    Swift Task + DispatchSemaphore wait on the cgo
+//                 thread.
+//   Encoding:     { "ok": true, "data": { "reference": "...", "digest": "..." } }
+//                 or { "ok": false, "err": "..." }.
+//   Blocking:     up to 30 min (covers a cold pull of a multi-GB
+//                 base image on a reasonable network). The bridge's
+//                 timeout will trip before this in most realistic
+//                 cases.
+const char* ac_pull_image(const char* reference);
+
 #endif
