@@ -7,10 +7,9 @@
 // backend.
 //
 // This file ships ONE probe test. If it passes, features work on
-// apple-container with no further changes. If it fails, the test is
-// marked as expected-to-fail with a TODO marker pointing at the
-// follow-up work, rather than blocking the rest of the integration
-// suite.
+// apple-container with no further changes. If it fails, it fails the
+// suite loudly — feature support is a design-level contract on this
+// backend, so a regression here is a real bug, not a "known TODO".
 
 package integration
 

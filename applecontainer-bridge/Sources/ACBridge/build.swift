@@ -131,11 +131,23 @@ private func runBuild(spec: BuildSpecJSON) async throws -> BuildResult {
     var logger = Logger(label: "applecontainer-bridge.build")
     logger.logLevel = .warning
 
-    let builder = try Builder(socket: socketHandle, group: eventLoopGroup, logger: logger)
-
-    // Verify the builder responds. The CLI does this same probe right
-    // after construction.
-    _ = try await builder.info()
+    // Builder construction + info probe must both clean up the
+    // event loop on failure, otherwise we leak NIO threads. Surface
+    // either failure as BUILDER_UNAVAILABLE so the Go layer maps it
+    // to the typed error (same code as the dial failure above).
+    let builder: Builder
+    do {
+        builder = try Builder(socket: socketHandle, group: eventLoopGroup, logger: logger)
+        // Verify the builder responds. The CLI does this same probe
+        // right after construction.
+        _ = try await builder.info()
+    } catch {
+        try? await eventLoopGroup.shutdownGracefully()
+        throw BridgeCodedError(
+            code: "BUILDER_UNAVAILABLE",
+            message: "builder not reachable (run `container builder start`): \(error)"
+        )
+    }
 
     // Export destination MUST live under the apiserver's appRoot at
     // <appRoot>/builder/<buildID>/, which the apiserver mounts into

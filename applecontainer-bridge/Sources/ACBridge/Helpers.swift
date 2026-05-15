@@ -88,11 +88,31 @@ func encodeErrWithCode(_ code: String, error: Error) -> String {
     return encodeErrWithCode(code, message: String(describing: error))
 }
 
+// jsonEscape produces a JSON-string-safe rendering of an arbitrary
+// Swift string. Per RFC 7159 §7, every control character in
+// U+0000–U+001F must be escaped; well-known shorthand forms are
+// used where they exist, the rest fall back to \u00XX. Without this,
+// an error message containing e.g. a tab or carriage return would
+// emit invalid JSON and break Go-side envelope decoding.
 private func jsonEscape(_ s: String) -> String {
-    return s
-        .replacingOccurrences(of: "\\", with: "\\\\")
-        .replacingOccurrences(of: "\"", with: "\\\"")
-        .replacingOccurrences(of: "\n", with: "\\n")
+    var out = ""
+    out.reserveCapacity(s.unicodeScalars.count)
+    for scalar in s.unicodeScalars {
+        switch scalar.value {
+        case 0x22: out += "\\\""
+        case 0x5C: out += "\\\\"
+        case 0x08: out += "\\b"
+        case 0x09: out += "\\t"
+        case 0x0A: out += "\\n"
+        case 0x0C: out += "\\f"
+        case 0x0D: out += "\\r"
+        case 0x00...0x1F:
+            out += String(format: "\\u%04X", scalar.value)
+        default:
+            out.unicodeScalars.append(scalar)
+        }
+    }
+    return out
 }
 
 // BridgeCodedError attaches a stable `code` to an error so the Go
