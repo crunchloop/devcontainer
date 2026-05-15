@@ -66,7 +66,7 @@ jobs:
   # daemon-free unit tests. Daemon-dependent tests skip cleanly via
   # runtimeOrSkip when Apple's `container` apiserver isn't running.
   test-darwin:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -97,22 +97,17 @@ jobs:
 
   # Integration tests against a live Apple `container` daemon.
   #
-  # Empirical status on GH-hosted macos-15 (verified on this PR):
-  #   - pkg install  : OK
-  #   - system start : OK (just registers launchd services)
-  #   - kernel set   : OK
-  #   - builder start: FAILS with
-  #       "VZErrorDomain Code=2 Virtualization is not available on
-  #        this hardware."
-  # i.e. the hosted runner refuses to host a Linux guest VM, so any
-  # test that actually runs a container short-circuits.
+  # Apple's `container` runtime is hardcoded to Virtualization.framework
+  # (no QEMU fallback like Colima/Lima). On macos-15 hosted runners VZ
+  # is not exposed for Linux guests — `container builder start` fails
+  # with "VZErrorDomain Code=2 Virtualization is not available on this
+  # hardware". macos-26 hosted runners are now GA; trying them here to
+  # see whether VZ is exposed on the newer image.
   #
-  # We keep the job in place with continue-on-error so the failure
-  # is visible (and easy to retry once GH exposes VZ, or once we add
-  # a self-hosted macOS runner with virtualization entitlements).
-  # When that day comes, drop continue-on-error and trust the gate.
+  # continue-on-error stays in place until we have a confirmed green
+  # run — drop it then.
   test-integration-darwin:
-    runs-on: macos-15
+    runs-on: macos-26
     needs: [test-darwin]
     continue-on-error: true
     steps:
