@@ -118,7 +118,6 @@ jobs:
   test-integration-darwin:
     runs-on: macos-26
     needs: [test-darwin]
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -166,8 +165,17 @@ jobs:
         # non-interactively, which `--disable-kernel-install` skipped.
         run: container system kernel set --recommended
       - name: Start builder
+        id: builder
+        # On GH-hosted macOS runners VZ is unavailable, so this step
+        # always fails. Mark it continue-on-error so the JOB stays
+        # green (continue-on-error at job level wouldn't — that only
+        # affects workflow status, not the per-job check). The next
+        # step gates on this step's outcome so we don't run the
+        # integration tests against a missing daemon.
+        continue-on-error: true
         run: container builder start
       - name: Run apple-container integration tests
+        if: steps.builder.outcome == 'success'
         # Filter to TestAppleContainer_* — the docker-backed tests
         # share the `integration` build tag and would fail without a
         # Docker daemon on this runner.
