@@ -107,52 +107,13 @@ func TestAppleContainer_ImageSource_FullLifecycle(t *testing.T) {
 // This is a contract test for the partial PR-G state — when PR-G2
 // lands the real build path, this test should be removed or flipped
 // to assert success.
-func TestAppleContainer_BuildSource_DocumentsLimitation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("integration tests skipped with -short")
-	}
-
-	eng, _ := newAppleContainerEngine(t)
-	ws := writeWorkspace(t, `{
-		"build": {
-			"dockerfile": "Dockerfile"
-		}
-	}`)
-
-	// Drop a minimal Dockerfile so the engine doesn't bail on missing-
-	// file before reaching the runtime backend.
-	dockerfilePath := ws + "/.devcontainer/Dockerfile"
-	if err := os.WriteFile(dockerfilePath, []byte("FROM docker.io/library/alpine:latest\nRUN true\n"), 0o644); err != nil {
-		t.Fatalf("write dockerfile: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-
-	_, err := eng.Up(ctx, devcontainer.UpOptions{
-		LocalWorkspaceFolder: ws,
-		Recreate:             true,
-	})
-	if err == nil {
-		t.Fatal("Up: want error from apple-container build path, got nil — PR-G2 may have landed, update this test")
-	}
-	t.Logf("expected error from build-source on apple-container: %v", err)
-
-	// Whichever shape we get, the message should be actionable.
-	var unavail *runtime.BuilderUnavailableError
-	if errors.As(err, &unavail) {
-		// Builder genuinely not running. Hint should be present.
-		if unavail.Hint == "" {
-			t.Errorf("BuilderUnavailableError.Hint is empty")
-		}
-		return
-	}
-	// Builder up but build not implemented yet.
-	if !strings.Contains(err.Error(), "not yet implemented") &&
-		!strings.Contains(err.Error(), "BuildImage") {
-		t.Errorf("error should mention 'not yet implemented' or BuildImage; got %v", err)
-	}
-}
+// (removed) TestAppleContainer_BuildSource_DocumentsLimitation —
+// PR-H stub that asserted build-source devcontainers failed with a
+// "not yet implemented" error. PR-G2 implemented the build path, so
+// the happy-path replacement is TestAppleContainer_BuildSource_FullLifecycle
+// in applecontainer_build_source_test.go. The builder-down typed-error
+// path is still covered by TestBuildImage_BuilderDownTypedError in
+// the runtime package's unit tests.
 
 // TestAppleContainer_ReattachStopped covers the Up → Down(no remove)
 // → Up flow: the second Up should find the stopped container by
@@ -355,5 +316,18 @@ func TestAppleContainer_ComposeSource_DocumentsLimitation(t *testing.T) {
 		t.Errorf("error should mention compose or 'not implemented'; got %v", err)
 	}
 	t.Logf("expected compose-source rejection: %v", err)
+}
+
+// writeFile is a small helper used across applecontainer_*_test.go
+// files. Inlining os.WriteFile in every test body bloats the test
+// without adding clarity.
+func writeFile(path, content string) error {
+	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+// runtimeBuildSpec keeps BuildSpec construction terse in tests that
+// only need ContextPath/Dockerfile/Tag.
+func runtimeBuildSpec(contextDir, tag string) runtime.BuildSpec {
+	return runtime.BuildSpec{ContextPath: contextDir, Dockerfile: "Dockerfile", Tag: tag}
 }
 
