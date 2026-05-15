@@ -170,18 +170,9 @@ func (*Runtime) ExecContainer(context.Context, string, runtime.ExecOptions) (run
 	return runtime.ExecResult{}, runtime.ErrNotImplemented
 }
 
-func (*Runtime) InspectContainer(context.Context, string) (*runtime.ContainerDetails, error) {
-	return nil, runtime.ErrNotImplemented
-}
-
-func (*Runtime) InspectImage(context.Context, string) (*runtime.ImageDetails, error) {
-	return nil, runtime.ErrNotImplemented
-}
+// InspectContainer, InspectImage, and FindContainerByLabel live in
+// inspect_darwin_arm64.go (PR-B).
 
 func (*Runtime) ContainerLogs(context.Context, string, io.Writer, bool) error {
 	return runtime.ErrNotImplemented
-}
-
-func (*Runtime) FindContainerByLabel(context.Context, string, string) (*runtime.Container, error) {
-	return nil, runtime.ErrNotImplemented
 }
