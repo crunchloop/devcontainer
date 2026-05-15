@@ -121,9 +121,15 @@ jobs:
       - name: Start container apiserver
         run: |
           # --disable-kernel-install skips the interactive kernel prompt
-          # that would otherwise hang in CI.
+          # that would otherwise hang in CI; we install the recommended
+          # kernel explicitly in the next step.
           container system start --disable-kernel-install
           container system status
+      - name: Install default kernel
+        # The builder (and any container) needs a configured kernel.
+        # `--from-recommended` pulls Apple's recommended binary
+        # non-interactively, which `--disable-kernel-install` skipped.
+        run: container system kernel set --from-recommended
       - name: Start builder
         run: container builder start
       - name: Run apple-container integration tests
