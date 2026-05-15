@@ -23,8 +23,17 @@ int ac_load(const char* path, char* errbuf, size_t errlen);
 // NULL means either (a) the dylib has not been loaded yet (programmer
 // error — must call ac_load first) or (b) the underlying export
 // returned NULL.
+//
+// Contract / encoding / blocking semantics for each wrapped export
+// live in applecontainer-bridge/include/ac_bridge.h. The `_p` suffix
+// is purely a Go-side reminder that these go through the dlsym
+// indirection.
 const char* ac_version_p(void);
 const char* ac_ping_p(int32_t timeout_seconds);
 void ac_free_p(void* p);
+
+const char* ac_inspect_container_p(const char* id);
+const char* ac_inspect_image_p(const char* reference);
+const char* ac_find_container_by_label_p(const char* key, const char* value);
 
 #endif

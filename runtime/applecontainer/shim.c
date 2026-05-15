@@ -10,6 +10,10 @@ static const char* (*p_ac_version)(void) = NULL;
 static const char* (*p_ac_ping)(int32_t) = NULL;
 static void (*p_ac_free)(void*) = NULL;
 
+static const char* (*p_ac_inspect_container)(const char*) = NULL;
+static const char* (*p_ac_inspect_image)(const char*) = NULL;
+static const char* (*p_ac_find_container_by_label)(const char*, const char*) = NULL;
+
 static void copy_err(char* errbuf, size_t errlen, const char* msg) {
     if (!errbuf || errlen == 0) {
         return;
@@ -38,11 +42,16 @@ int ac_load(const char* path, char* errbuf, size_t errlen) {
 
     // Cast through a generic function pointer to silence the warning
     // about converting void* (data) to a function-pointer type.
-    p_ac_version = (const char* (*)(void)) dlsym(h, "ac_version");
-    p_ac_ping    = (const char* (*)(int32_t)) dlsym(h, "ac_ping");
-    p_ac_free    = (void (*)(void*)) dlsym(h, "ac_free");
+    p_ac_version                 = (const char* (*)(void)) dlsym(h, "ac_version");
+    p_ac_ping                    = (const char* (*)(int32_t)) dlsym(h, "ac_ping");
+    p_ac_free                    = (void (*)(void*)) dlsym(h, "ac_free");
+    p_ac_inspect_container       = (const char* (*)(const char*)) dlsym(h, "ac_inspect_container");
+    p_ac_inspect_image           = (const char* (*)(const char*)) dlsym(h, "ac_inspect_image");
+    p_ac_find_container_by_label = (const char* (*)(const char*, const char*)) dlsym(h, "ac_find_container_by_label");
 
-    if (!p_ac_version || !p_ac_ping || !p_ac_free) {
+    if (!p_ac_version || !p_ac_ping || !p_ac_free
+        || !p_ac_inspect_container || !p_ac_inspect_image
+        || !p_ac_find_container_by_label) {
         const char* err = dlerror();
         copy_err(errbuf, errlen, err ? err : "dlsym returned null");
         // Reset any partial resolutions so a future retry sees a clean
@@ -51,6 +60,9 @@ int ac_load(const char* path, char* errbuf, size_t errlen) {
         p_ac_version = NULL;
         p_ac_ping = NULL;
         p_ac_free = NULL;
+        p_ac_inspect_container = NULL;
+        p_ac_inspect_image = NULL;
+        p_ac_find_container_by_label = NULL;
         dlclose(h);
         return -1;
     }
@@ -69,4 +81,16 @@ void ac_free_p(void* p) {
     if (p_ac_free) {
         p_ac_free(p);
     }
+}
+
+const char* ac_inspect_container_p(const char* id) {
+    return p_ac_inspect_container ? p_ac_inspect_container(id) : NULL;
+}
+
+const char* ac_inspect_image_p(const char* reference) {
+    return p_ac_inspect_image ? p_ac_inspect_image(reference) : NULL;
+}
+
+const char* ac_find_container_by_label_p(const char* key, const char* value) {
+    return p_ac_find_container_by_label ? p_ac_find_container_by_label(key, value) : NULL;
 }
