@@ -45,6 +45,13 @@ int ac_load(const char* path, char* errbuf, size_t errlen) {
     if (!p_ac_version || !p_ac_ping || !p_ac_free) {
         const char* err = dlerror();
         copy_err(errbuf, errlen, err ? err : "dlsym returned null");
+        // Reset any partial resolutions so a future retry sees a clean
+        // slate, and release the dlopen handle so the dylib refcount
+        // drops back to zero.
+        p_ac_version = NULL;
+        p_ac_ping = NULL;
+        p_ac_free = NULL;
+        dlclose(h);
         return -1;
     }
     return 0;
