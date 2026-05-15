@@ -58,3 +58,23 @@ jobs:
           docker compose version
       - name: Run integration tests
         run: make test-integration
+
+  # Apple-container backend lives in runtime/applecontainer and is
+  # darwin/arm64-only (see build tags). This job builds the Swift
+  # bridge and runs the Go test suite on macOS so we get coverage of
+  # cgo compilation, go:embed of libACBridge.dylib, and the
+  # daemon-free unit tests. Daemon-dependent tests skip cleanly when
+  # Apple's `container` apiserver isn't running (which it won't be on
+  # a GitHub-hosted runner without setup).
+  test-darwin:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Build Swift bridge
+        run: make bridge
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
