@@ -29,14 +29,20 @@ public func ac_inspect_container(_ idPtr: UnsafePointer<CChar>?) -> UnsafePointe
 // inspect — flattened from the OCI Image + ImageConfig so the Go side
 // gets a single object to unmarshal. Kept narrow (only the fields the
 // Runtime interface needs); add more as later PRs require them.
+//
+// `env` and `labels` are non-optional with empty-collection defaults
+// so the Go side always sees a non-nil map / slice. The engine's
+// `devcontainer.metadata` fast path looks up a key on `labels`;
+// guaranteeing a non-nil map keeps callers from having to special-
+// case nil at every read site.
 private struct ImageInspectPayload: Encodable {
     let reference: String
     let digest: String
     let architecture: String?
     let os: String?
     let user: String?
-    let env: [String]?
-    let labels: [String: String]?
+    let env: [String]
+    let labels: [String: String]
 }
 
 @_cdecl("ac_inspect_image")
@@ -52,8 +58,8 @@ public func ac_inspect_image(_ refPtr: UnsafePointer<CChar>?) -> UnsafePointer<C
                 architecture: ociImage.architecture,
                 os: ociImage.os,
                 user: ociImage.config?.user,
-                env: ociImage.config?.env,
-                labels: ociImage.config?.labels
+                env: ociImage.config?.env ?? [],
+                labels: ociImage.config?.labels ?? [:]
             )
             return encodeOK(payload)
         } catch {

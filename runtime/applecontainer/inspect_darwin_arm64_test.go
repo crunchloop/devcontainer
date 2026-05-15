@@ -39,15 +39,20 @@ func cliRun(t *testing.T, args ...string) {
 }
 
 // cliRunStrict logs full output unconditionally and fails the test
-// on a non-zero exit. Used for setup ops where a silent failure
-// would leave the test trying to operate on something that doesn't
-// exist.
+// on a non-zero exit. Skips (not fatals) only when the `container`
+// binary itself is missing — that's an env-setup mismatch, not a
+// regression. Any other non-zero exit is a real failure we want to
+// see, not silently bypass.
 func cliRunStrict(t *testing.T, args ...string) {
 	t.Helper()
 	out, err := exec.Command("container", args...).CombinedOutput()
-	if err != nil {
-		t.Skipf("`container %v` failed: %v\n%s", args, err, strings.TrimSpace(string(out)))
+	if err == nil {
+		return
 	}
+	if errors.Is(err, exec.ErrNotFound) {
+		t.Skipf("`container` CLI not on PATH: %v", err)
+	}
+	t.Fatalf("`container %v` failed: %v\n%s", args, err, strings.TrimSpace(string(out)))
 }
 
 // TestInspectContainer_RoundTrip seeds a container with a known label
@@ -122,6 +127,9 @@ func TestInspectImage_LabelsRoundTrip(t *testing.T) {
 	}
 	if len(details.Tags) == 0 {
 		t.Errorf("Tags is empty")
+	}
+	if details.Labels == nil {
+		t.Errorf("Labels is nil; bridge guarantees a non-nil map even when the image has no labels")
 	}
 	t.Logf("alpine: digest=%s tags=%v user=%q env=%v labels=%v",
 		details.ID, details.Tags, details.User, details.Env, details.Labels)
