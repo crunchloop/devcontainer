@@ -1,18 +1,15 @@
 //go:build darwin && arm64
 
-// PR-A links the Swift bridge at build time via cgo LDFLAGS pointing at
-// applecontainer-bridge/.build/.../release. Run `make bridge` before
-// `go build ./runtime/applecontainer/...` (or any consumer). The
-// embed-and-dlopen distribution path decided in
-// design/runtime-applecontainer.md §13.4 lands in a follow-up PR.
+// libACBridge.dylib is loaded at runtime via dlopen — see
+// embed_darwin_arm64.go for the embed-and-extract mechanic. This file
+// only links the cgo C shim (shim.c / shim.h) that wraps dlsym'd
+// function pointers. No build-time dependency on the SwiftPM output
+// directory; the dylib travels embedded in the binary.
 package applecontainer
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../../applecontainer-bridge/include
-#cgo LDFLAGS: -L${SRCDIR}/../../applecontainer-bridge/.build/arm64-apple-macosx/release -lACBridge -Wl,-rpath,${SRCDIR}/../../applecontainer-bridge/.build/arm64-apple-macosx/release
-
 #include <stdlib.h>
-#include "ac_bridge.h"
+#include "shim.h"
 */
 import "C"
 
@@ -58,11 +55,15 @@ type PingResult struct {
 	InstallRoot      string `json:"installRoot"`
 }
 
-// New constructs an apple-container runtime. The constructor probes
-// the daemon via ClientHealthCheck.ping and returns a
+// New constructs an apple-container runtime. The constructor extracts
+// the embedded bridge dylib (idempotent, hashed cache file), dlopens
+// it, then probes the daemon via ClientHealthCheck.ping. Returns a
 // *runtime.DaemonUnavailableError if the daemon is not reachable.
 func New(ctx context.Context, opts Options) (*Runtime, error) {
 	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := ensureLoaded(); err != nil {
 		return nil, err
 	}
 	r := &Runtime{bridgeVersion: bridgeVersion()}
@@ -84,6 +85,9 @@ func (r *Runtime) Ping(ctx context.Context, timeoutSeconds int) (*PingResult, er
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if err := ensureLoaded(); err != nil {
+		return nil, err
+	}
 	// Respect ctx.Deadline() by clamping timeoutSeconds to the
 	// remaining time. The bridge call itself is synchronous from Go's
 	// perspective, so we can't cancel it mid-flight — bounding the
@@ -99,12 +103,12 @@ func (r *Runtime) Ping(ctx context.Context, timeoutSeconds int) (*PingResult, er
 			effective = deadlineSec
 		}
 	}
-	cstr := C.ac_ping(C.int32_t(effective))
+	cstr := C.ac_ping_p(C.int32_t(effective))
 	if cstr == nil {
 		return nil, &runtime.DaemonUnavailableError{Err: errors.New("bridge returned nil")}
 	}
 	raw := C.GoString(cstr)
-	C.ac_free(unsafe.Pointer(cstr))
+	C.ac_free_p(unsafe.Pointer(cstr))
 
 	var payload struct {
 		OK  bool   `json:"ok"`
@@ -128,11 +132,11 @@ func (r *Runtime) BridgeVersion() string {
 }
 
 func bridgeVersion() string {
-	cstr := C.ac_version()
+	cstr := C.ac_version_p()
 	if cstr == nil {
 		return ""
 	}
-	defer C.ac_free(unsafe.Pointer(cstr))
+	defer C.ac_free_p(unsafe.Pointer(cstr))
 	return C.GoString(cstr)
 }
 

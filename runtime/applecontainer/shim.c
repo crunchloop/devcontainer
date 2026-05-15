@@ -1,0 +1,63 @@
+#include "shim.h"
+
+#include <dlfcn.h>
+#include <stdio.h>
+#include <string.h>
+
+static const char* (*p_ac_version)(void) = NULL;
+static const char* (*p_ac_ping)(int32_t) = NULL;
+static void (*p_ac_free)(void*) = NULL;
+
+static void copy_err(char* errbuf, size_t errlen, const char* msg) {
+    if (!errbuf || errlen == 0) {
+        return;
+    }
+    if (!msg) {
+        msg = "unknown";
+    }
+    size_t n = strnlen(msg, errlen - 1);
+    memcpy(errbuf, msg, n);
+    errbuf[n] = '\0';
+}
+
+int ac_load(const char* path, char* errbuf, size_t errlen) {
+    if (!path) {
+        copy_err(errbuf, errlen, "null path");
+        return -1;
+    }
+    // RTLD_LOCAL keeps the bridge's symbols isolated from the global
+    // namespace so we don't collide with anything else the Go binary
+    // might dlopen.
+    void* h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (!h) {
+        copy_err(errbuf, errlen, dlerror());
+        return -1;
+    }
+
+    // Cast through a generic function pointer to silence the warning
+    // about converting void* (data) to a function-pointer type.
+    p_ac_version = (const char* (*)(void)) dlsym(h, "ac_version");
+    p_ac_ping    = (const char* (*)(int32_t)) dlsym(h, "ac_ping");
+    p_ac_free    = (void (*)(void*)) dlsym(h, "ac_free");
+
+    if (!p_ac_version || !p_ac_ping || !p_ac_free) {
+        const char* err = dlerror();
+        copy_err(errbuf, errlen, err ? err : "dlsym returned null");
+        return -1;
+    }
+    return 0;
+}
+
+const char* ac_version_p(void) {
+    return p_ac_version ? p_ac_version() : NULL;
+}
+
+const char* ac_ping_p(int32_t t) {
+    return p_ac_ping ? p_ac_ping(t) : NULL;
+}
+
+void ac_free_p(void* p) {
+    if (p_ac_free) {
+        p_ac_free(p);
+    }
+}

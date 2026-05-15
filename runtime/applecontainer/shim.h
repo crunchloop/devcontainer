@@ -1,0 +1,30 @@
+#ifndef AC_SHIM_H
+#define AC_SHIM_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+// ac_load opens the bridge dylib via dlopen and resolves every exported
+// symbol via dlsym. Returns 0 on success, non-zero on failure.
+//
+// `path` is the absolute filesystem path to libACBridge.dylib (the
+// caller is expected to have extracted the embedded bytes to a stable
+// location first — see embed_darwin_arm64.go).
+//
+// On failure the shim writes a null-terminated error message into
+// `errbuf` (truncated to `errlen-1` chars). On success errbuf is left
+// untouched.
+//
+// Idempotency: calling ac_load more than once is undefined; the Go
+// side guards via sync.Once.
+int ac_load(const char* path, char* errbuf, size_t errlen);
+
+// Wrappers that call through the resolved function pointers. Returning
+// NULL means either (a) the dylib has not been loaded yet (programmer
+// error — must call ac_load first) or (b) the underlying export
+// returned NULL.
+const char* ac_version_p(void);
+const char* ac_ping_p(int32_t timeout_seconds);
+void ac_free_p(void* p);
+
+#endif
