@@ -300,6 +300,18 @@ func isImageNotFound(err error) bool {
 		containsAny(err.Error(), "No such image", "no such image", "manifest unknown")
 }
 
+// isNotFoundErr is a generic "the resource the daemon was asked
+// about doesn't exist" check, used by compose orchestrator
+// primitives (network/volume remove) where the resource kind isn't
+// container or image. Pattern-match by message text, same approach
+// as isContainerNotFound / isImageNotFound.
+func isNotFoundErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	return containsAny(err.Error(), "No such", "no such", "not found")
+}
+
 var (
 	errContainerNotFoundSentinel = errors.New("container not found sentinel")
 	errImageNotFoundSentinel     = errors.New("image not found sentinel")
