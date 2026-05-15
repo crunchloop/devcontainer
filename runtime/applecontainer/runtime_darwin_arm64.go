@@ -150,14 +150,11 @@ func (*Runtime) PullImage(context.Context, string, chan<- runtime.BuildEvent) (r
 	return runtime.ImageRef{}, runtime.ErrNotImplemented
 }
 
-func (*Runtime) ExecContainer(context.Context, string, runtime.ExecOptions) (runtime.ExecResult, error) {
-	return runtime.ExecResult{}, runtime.ErrNotImplemented
-}
-
 // InspectContainer, InspectImage, FindContainerByLabel — PR-B
 //   (inspect_darwin_arm64.go).
 // RunContainer, StartContainer, StopContainer, RemoveContainer — PR-C
 //   (lifecycle_darwin_arm64.go).
+// ExecContainer — PR-D (exec_darwin_arm64.go).
 
 func (*Runtime) ContainerLogs(context.Context, string, io.Writer, bool) error {
 	return runtime.ErrNotImplemented

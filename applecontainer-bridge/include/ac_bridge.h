@@ -181,4 +181,76 @@ const char* ac_stop(const char* id, int32_t timeout_seconds);
 //   Blocking:     up to 60s.
 const char* ac_delete(const char* id, int32_t force);
 
+// ---- PR-D: Exec (stdin/TTY + cancellation) -------------------------
+
+// ac_exec_start launches an exec process inside a running container.
+// stdio fds are caller-supplied via os.Pipe() on the Go side: caller
+// passes the apiserver-facing end (read-end for stdin, write-end for
+// stdout/stderr); -1 disables that stream. XPC dup's the fds when the
+// XPCMessage is serialized, so the caller may close its passed fd
+// immediately after this call returns (the process keeps the dup'd
+// copy).
+//
+//   Ownership:    caller frees the returned JSON with ac_free.
+//   Cancellation: returned `handle` is the cancellation token. Pass
+//                 it to ac_exec_signal with SIGTERM (or any signal)
+//                 to deliver to the in-VM process.
+//   Threading:    Swift Task + DispatchSemaphore wait on the cgo
+//                 thread. The launched process runs on its own VM
+//                 thread; this call returns once createProcess +
+//                 start have settled at the apiserver.
+//   Encoding:     opts_json = { "cmd":[..], "env":[..], "user":"",
+//                                "workingDir":"", "tty":false }.
+//                 Response on success:
+//                   { "ok": true, "data": { "handle": uint64 } }
+//                 On failure: { "ok": false, "err": "..." }. After
+//                 this returns ok, the caller MUST eventually call
+//                 ac_exec_release(handle) to free the registry slot.
+//   Blocking:     up to 30s (createProcess XPC + start).
+const char* ac_exec_start(
+    const char* id,
+    const char* opts_json,
+    int32_t stdin_read_fd,
+    int32_t stdout_write_fd,
+    int32_t stderr_write_fd
+);
+
+// ac_exec_wait blocks until the exec process exits, returning its
+// exit code. timeout_seconds <= 0 disables the timeout (capped to
+// ~Int32.max/1000 internally to avoid Duration overflow).
+//
+//   Ownership:    caller frees the returned JSON with ac_free.
+//   Cancellation: external — call ac_exec_signal from another thread
+//                 to send SIGTERM; this wait then returns the
+//                 resulting exit code naturally.
+//   Threading:    Swift Task + DispatchSemaphore wait on the cgo
+//                 thread.
+//   Encoding:     { "ok": true, "data": { "exitCode": int32 } } or
+//                 { "ok": false, "err": "..." }.
+//   Blocking:     unbounded by design (modulo timeout_seconds).
+const char* ac_exec_wait(uint64_t handle, int32_t timeout_seconds);
+
+// ac_exec_signal delivers a signal to the in-VM process. The
+// cancellation contract: Go's ctx.Done() goroutine calls this with
+// SIGTERM; ac_exec_wait then returns naturally as the process exits.
+//
+//   Ownership:    caller frees the returned JSON with ac_free.
+//   Cancellation: n/a (this IS the cancellation primitive).
+//   Threading:    Swift Task + DispatchSemaphore wait on the cgo
+//                 thread.
+//   Encoding:     { "ok": true } or { "ok": false, "err": "..." }.
+//   Blocking:     up to 5s (the apiserver's kill XPC is fast).
+const char* ac_exec_signal(uint64_t handle, int32_t signal);
+
+// ac_exec_release frees the handle's registry slot. Idempotent —
+// calling on an unknown handle is a no-op. Must be called after
+// ac_exec_wait returns to avoid leaking ClientProcess instances.
+//
+//   Ownership:    n/a; no return value.
+//   Cancellation: n/a.
+//   Threading:    safe from any thread.
+//   Encoding:     n/a.
+//   Blocking:     non-blocking; lock acquisition only.
+void ac_exec_release(uint64_t handle);
+
 #endif

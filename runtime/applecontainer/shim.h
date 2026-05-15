@@ -41,4 +41,15 @@ const char* ac_start_p(const char* id);
 const char* ac_stop_p(const char* id, int32_t timeout_seconds);
 const char* ac_delete_p(const char* id, int32_t force);
 
+const char* ac_exec_start_p(
+    const char* id,
+    const char* opts_json,
+    int32_t stdin_read_fd,
+    int32_t stdout_write_fd,
+    int32_t stderr_write_fd
+);
+const char* ac_exec_wait_p(uint64_t handle, int32_t timeout_seconds);
+const char* ac_exec_signal_p(uint64_t handle, int32_t signal);
+void ac_exec_release_p(uint64_t handle);
+
 #endif
