@@ -58,3 +58,67 @@ jobs:
           docker compose version
       - name: Run integration tests
         run: make test-integration
+
+  # Apple-container backend lives in runtime/applecontainer and is
+  # darwin/arm64-only (see build tags). This job builds the Swift
+  # bridge and runs the Go test suite on macOS so we get coverage of
+  # cgo compilation, go:embed of libACBridge.dylib, and the
+  # daemon-free unit tests. Daemon-dependent tests skip cleanly via
+  # runtimeOrSkip when Apple's `container` apiserver isn't running.
+  test-darwin:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Build Swift bridge
+        run: make bridge
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+
+  # Integration tests against a live Apple `container` daemon. Apple's
+  # runtime is officially supported on macOS 26+; macos-15 is the
+  # newest hosted runner image GitHub Actions exposes today, and
+  # networking (vmnet) is known not to work pre-26. We still run this
+  # to get an empirical signal on what works — `continue-on-error`
+  # keeps it from blocking PR merges until the contract is stable.
+  test-integration-darwin:
+    runs-on: macos-15
+    needs: [test-darwin]
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Install apple/container
+        run: |
+          PKG_URL=$(curl -fsSL https://api.github.com/repos/apple/container/releases/latest \
+            | grep -o 'https://[^"]*installer-signed\.pkg' | head -n1)
+          echo "Installing from: $PKG_URL"
+          curl -fsSL -o /tmp/container.pkg "$PKG_URL"
+          sudo installer -pkg /tmp/container.pkg -target /
+          container --version
+      - name: Build Swift bridge
+        run: make bridge
+      - name: Start container apiserver
+        run: |
+          # --disable-kernel-install skips the interactive kernel prompt
+          # that would otherwise hang in CI.
+          container system start --disable-kernel-install
+          container system status
+      - name: Start builder
+        run: container builder start
+      - name: Run apple-container integration tests
+        # Filter to TestAppleContainer_* — the docker-backed tests
+        # share the `integration` build tag and would fail without a
+        # Docker daemon on this runner.
+        run: go test -race -count=1 -tags=integration -timeout=15m -run '^TestAppleContainer_' ./test/integration/...
+      - name: Stop container services
+        if: always()
+        run: |
+          container builder stop || true
+          container system stop || true
