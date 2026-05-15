@@ -28,6 +28,7 @@ import (
 type envelope[T any] struct {
 	OK   bool            `json:"ok"`
 	Err  string          `json:"err"`
+	Code string          `json:"code,omitempty"`
 	Data json.RawMessage `json:"data"`
 	// Decoded payload — populated by decodeEnvelope on success.
 	decoded T
@@ -89,18 +90,41 @@ type containerInitProcess struct {
 }
 
 // containerMount mirrors the subset of Apple's Filesystem we need for
-// MountInspect. Apple's full shape has more variants (volumes, tmpfs
-// sub-cases, etc.); for PR-B we surface the bind-host case and leave
-// the rest as opaque defaults.
+// MountInspect. Apple's Filesystem.type is a Codable enum-with-
+// associated-values rendered as `{"virtiofs":{}}` / `{"tmpfs":{}}` /
+// `{"block":{...}}` / `{"volume":{...}}`; mountTypeWire decodes
+// either that object shape or a bare string so the rest of the file
+// keeps treating Type as a kind tag.
 type containerMount struct {
-	// Apple's Filesystem is an enum-with-associated-values from a
-	// Codable perspective; we read whichever shape arrives via the
-	// optional fields below.
-	Type        string `json:"type"`
-	Source      string `json:"source"`
-	Destination string `json:"destination"`
-	ReadOnly    bool   `json:"readonly"`
-	Options     []string `json:"options"`
+	Type        mountTypeWire `json:"type"`
+	Source      string        `json:"source"`
+	Destination string        `json:"destination"`
+	Options     []string      `json:"options"`
+}
+
+// mountTypeWire decodes Apple's FSType. Always lands as the variant
+// name in lowercase ("virtiofs", "tmpfs", "block", "volume", ...).
+type mountTypeWire string
+
+func (m *mountTypeWire) UnmarshalJSON(data []byte) error {
+	// Compatibility path: an older bridge or a test fixture might emit
+	// the kind as a plain string ("virtiofs"). Accept it first.
+	var asString string
+	if err := json.Unmarshal(data, &asString); err == nil {
+		*m = mountTypeWire(asString)
+		return nil
+	}
+	// Object form. The single key is the variant name; the value is
+	// the associated-values payload, which we don't need yet.
+	var asObject map[string]json.RawMessage
+	if err := json.Unmarshal(data, &asObject); err != nil {
+		return fmt.Errorf("mountTypeWire: %w (raw=%s)", err, string(data))
+	}
+	for k := range asObject {
+		*m = mountTypeWire(k)
+		return nil
+	}
+	return errors.New("mountTypeWire: empty FSType object")
 }
 
 type imageInspectPayload struct {
@@ -114,6 +138,32 @@ type imageInspectPayload struct {
 }
 
 // ---- mapping helpers -------------------------------------------------
+
+// mountKindToRuntime maps Apple's FSType variant name to the canonical
+// runtime.MountType string. Apple uses `virtiofs` for bind-style host
+// mounts; we surface that as "bind" since callers (engine, tests)
+// reason about mounts in Docker-style terms.
+func mountKindToRuntime(kind string) string {
+	switch kind {
+	case "virtiofs":
+		return string(runtime.MountBind)
+	case "tmpfs":
+		return string(runtime.MountTmpfs)
+	case "volume":
+		return string(runtime.MountVolume)
+	default:
+		return kind
+	}
+}
+
+func containsOption(opts []string, target string) bool {
+	for _, o := range opts {
+		if o == target {
+			return true
+		}
+	}
+	return false
+}
 
 func mapState(s string) runtime.State {
 	switch s {
@@ -141,10 +191,10 @@ func snapshotToDetails(s containerSnapshot) *runtime.ContainerDetails {
 	mounts := make([]runtime.MountInspect, 0, len(s.Configuration.Mounts))
 	for _, m := range s.Configuration.Mounts {
 		mounts = append(mounts, runtime.MountInspect{
-			Type:     m.Type,
+			Type:     mountKindToRuntime(string(m.Type)),
 			Source:   m.Source,
 			Target:   m.Destination,
-			ReadOnly: m.ReadOnly,
+			ReadOnly: containsOption(m.Options, "ro"),
 		})
 	}
 	var startedAt time.Time

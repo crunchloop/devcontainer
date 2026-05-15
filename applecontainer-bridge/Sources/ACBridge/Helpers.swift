@@ -63,13 +63,65 @@ func encodeOKNull() -> String {
 }
 
 // encodeErr serializes any Error into the failure envelope, escaping
-// quotes and newlines so the result is always valid JSON.
+// quotes and newlines so the result is always valid JSON. If the
+// error is a BridgeCodedError, its `code` is included so the Go side
+// can drive typed error mapping without depending on message text.
 func encodeErr(_ error: Error) -> String {
-    let msg = String(describing: error)
-        .replacingOccurrences(of: "\\", with: "\\\\")
-        .replacingOccurrences(of: "\"", with: "\\\"")
-        .replacingOccurrences(of: "\n", with: "\\n")
+    if let coded = error as? BridgeCodedError {
+        return encodeErrWithCode(coded.code, message: coded.message)
+    }
+    let msg = jsonEscape(String(describing: error))
     return "{\"ok\":false,\"err\":\"\(msg)\"}"
+}
+
+// encodeErrWithCode emits the failure envelope with a machine-readable
+// `code` field alongside the human-readable `err`. The Go side keys
+// typed errors off `code`; `err` is retained for diagnostics and
+// log-friendliness.
+func encodeErrWithCode(_ code: String, message: String) -> String {
+    let codeEsc = jsonEscape(code)
+    let msgEsc = jsonEscape(message)
+    return "{\"ok\":false,\"code\":\"\(codeEsc)\",\"err\":\"\(msgEsc)\"}"
+}
+
+func encodeErrWithCode(_ code: String, error: Error) -> String {
+    return encodeErrWithCode(code, message: String(describing: error))
+}
+
+// jsonEscape produces a JSON-string-safe rendering of an arbitrary
+// Swift string. Per RFC 7159 §7, every control character in
+// U+0000–U+001F must be escaped; well-known shorthand forms are
+// used where they exist, the rest fall back to \u00XX. Without this,
+// an error message containing e.g. a tab or carriage return would
+// emit invalid JSON and break Go-side envelope decoding.
+private func jsonEscape(_ s: String) -> String {
+    var out = ""
+    out.reserveCapacity(s.unicodeScalars.count)
+    for scalar in s.unicodeScalars {
+        switch scalar.value {
+        case 0x22: out += "\\\""
+        case 0x5C: out += "\\\\"
+        case 0x08: out += "\\b"
+        case 0x09: out += "\\t"
+        case 0x0A: out += "\\n"
+        case 0x0C: out += "\\f"
+        case 0x0D: out += "\\r"
+        case 0x00...0x1F:
+            out += String(format: "\\u%04X", scalar.value)
+        default:
+            out.unicodeScalars.append(scalar)
+        }
+    }
+    return out
+}
+
+// BridgeCodedError attaches a stable `code` to an error so the Go
+// side can route on it without parsing free-form message text. Throw
+// this from any bridge handler where the caller benefits from a typed
+// error (e.g. BUILDER_UNAVAILABLE).
+struct BridgeCodedError: Error {
+    let code: String
+    let message: String
 }
 
 // readCString safely converts a possibly-null C string pointer into a
