@@ -58,3 +58,130 @@ jobs:
           docker compose version
       - name: Run integration tests
         run: make test-integration
+
+  # Apple-container backend lives in runtime/applecontainer and is
+  # darwin/arm64-only (see build tags). This job builds the Swift
+  # bridge and runs the Go test suite on macOS so we get coverage of
+  # cgo compilation, go:embed of libACBridge.dylib, and the
+  # daemon-free unit tests. Daemon-dependent tests skip cleanly via
+  # runtimeOrSkip when Apple's `container` apiserver isn't running.
+  test-darwin:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Select Xcode with Swift 6.2
+        # apple/container 0.12.3 declares swift-tools-version 6.2;
+        # the macos-15 image ships an older Xcode by default. Pick
+        # the newest installed so SwiftPM can resolve the package.
+        run: sudo xcode-select -s /Applications/Xcode_latest.app || sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+      - name: Cache SwiftPM artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            applecontainer-bridge/.build
+            ~/Library/Caches/org.swift.swiftpm
+          # Key on Package.resolved so the cache busts when dependency
+          # versions move. Bump the `v1` prefix to force a full miss
+          # after a toolchain change that breaks artifact compat.
+          key: swiftpm-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('applecontainer-bridge/Package.resolved') }}
+          restore-keys: |
+            swiftpm-v1-${{ runner.os }}-${{ runner.arch }}-
+      - name: Build Swift bridge
+        run: make bridge
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+
+  # Integration tests against a live Apple `container` daemon.
+  #
+  # Verified-on-CI status:
+  #   - pkg install     : OK on macos-15 and macos-26
+  #   - system start    : OK
+  #   - kernel set      : OK
+  #   - builder start   : FAILS on both macos-15 and macos-26 with
+  #       "VZErrorDomain Code=2 Virtualization is not available on
+  #        this hardware."
+  #
+  # i.e. GitHub-hosted macOS runners do not expose
+  # Virtualization.framework for Linux guests, regardless of image
+  # version. Apple's `container` runtime is hardcoded to VZ (no QEMU
+  # fallback like Colima/Lima), so there is no workaround at the
+  # workflow level. The only paths to a passing job today are:
+  #   1. Self-hosted macOS runner with virtualization entitlements
+  #   2. GH exposing VZ on hosted runners (no announced timeline)
+  #
+  # continue-on-error keeps the failure visible without blocking
+  # merges. Drop it once a real green run is available.
+  test-integration-darwin:
+    runs-on: macos-26
+    needs: [test-darwin]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Install apple/container
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # `gh release download` authenticates with GH_TOKEN, dodging
+          # the strict anonymous rate limit on api.github.com that
+          # bit us when curling the unauth'd releases endpoint.
+          gh release download --repo apple/container \
+            --pattern '*installer-signed.pkg' \
+            --output /tmp/container.pkg
+          sudo installer -pkg /tmp/container.pkg -target /
+          container --version
+      - name: Select Xcode with Swift 6.2
+        # apple/container 0.12.3 declares swift-tools-version 6.2;
+        # the macos-15 image ships an older Xcode by default. Pick
+        # the newest installed so SwiftPM can resolve the package.
+        run: sudo xcode-select -s /Applications/Xcode_latest.app || sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+      - name: Cache SwiftPM artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            applecontainer-bridge/.build
+            ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('applecontainer-bridge/Package.resolved') }}
+          restore-keys: |
+            swiftpm-v1-${{ runner.os }}-${{ runner.arch }}-
+      - name: Build Swift bridge
+        run: make bridge
+      - name: Start container apiserver
+        run: |
+          # --disable-kernel-install skips the interactive kernel prompt
+          # that would otherwise hang in CI; we install the recommended
+          # kernel explicitly in the next step.
+          container system start --disable-kernel-install
+          container system status
+      - name: Install default kernel
+        # The builder (and any container) needs a configured kernel.
+        # `--recommended` pulls Apple's recommended binary
+        # non-interactively, which `--disable-kernel-install` skipped.
+        run: container system kernel set --recommended
+      - name: Start builder
+        id: builder
+        # On GH-hosted macOS runners VZ is unavailable, so this step
+        # always fails. Mark it continue-on-error so the JOB stays
+        # green (continue-on-error at job level wouldn't — that only
+        # affects workflow status, not the per-job check). The next
+        # step gates on this step's outcome so we don't run the
+        # integration tests against a missing daemon.
+        continue-on-error: true
+        run: container builder start
+      - name: Run apple-container integration tests
+        if: steps.builder.outcome == 'success'
+        # Filter to TestAppleContainer_* — the docker-backed tests
+        # share the `integration` build tag and would fail without a
+        # Docker daemon on this runner.
+        run: go test -race -count=1 -tags=integration -timeout=15m -run '^TestAppleContainer_' ./test/integration/...
+      - name: Stop container services
+        if: always()
+        run: |
+          container builder stop || true
+          container system stop || true
