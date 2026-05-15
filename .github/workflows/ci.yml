@@ -78,6 +78,18 @@ jobs:
         # the macos-15 image ships an older Xcode by default. Pick
         # the newest installed so SwiftPM can resolve the package.
         run: sudo xcode-select -s /Applications/Xcode_latest.app || sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+      - name: Cache SwiftPM artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            applecontainer-bridge/.build
+            ~/Library/Caches/org.swift.swiftpm
+          # Key on Package.resolved so the cache busts when dependency
+          # versions move. Bump the `v1` prefix to force a full miss
+          # after a toolchain change that breaks artifact compat.
+          key: swiftpm-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('applecontainer-bridge/Package.resolved') }}
+          restore-keys: |
+            swiftpm-v1-${{ runner.os }}-${{ runner.arch }}-
       - name: Build Swift bridge
         run: make bridge
       - run: go vet ./...
@@ -116,6 +128,15 @@ jobs:
         # the macos-15 image ships an older Xcode by default. Pick
         # the newest installed so SwiftPM can resolve the package.
         run: sudo xcode-select -s /Applications/Xcode_latest.app || sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+      - name: Cache SwiftPM artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            applecontainer-bridge/.build
+            ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('applecontainer-bridge/Package.resolved') }}
+          restore-keys: |
+            swiftpm-v1-${{ runner.os }}-${{ runner.arch }}-
       - name: Build Swift bridge
         run: make bridge
       - name: Start container apiserver
@@ -127,9 +148,9 @@ jobs:
           container system status
       - name: Install default kernel
         # The builder (and any container) needs a configured kernel.
-        # `--from-recommended` pulls Apple's recommended binary
+        # `--recommended` pulls Apple's recommended binary
         # non-interactively, which `--disable-kernel-install` skipped.
-        run: container system kernel set --from-recommended
+        run: container system kernel set --recommended
       - name: Start builder
         run: container builder start
       - name: Run apple-container integration tests
