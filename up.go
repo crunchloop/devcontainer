@@ -455,14 +455,28 @@ func composeWorkingDir(cfg *config.ResolvedConfig, opts UpOptions) string {
 
 // createFreshCompose handles the *ComposeSource path of Up. It loads
 // the user's compose project, picks the primary service, prepares the
-// service's base image (pull or build), layers features atop it, writes
-// our two override files, and runs `docker compose up -d` against the
-// combined file list. Returns a Workspace whose Container is the
-// primary service's container as resolved via `docker compose ps -q`.
+// service's base image (pull or build), layers features atop it, and
+// — depending on EngineOptions.ComposeBackend — either:
+//
+//   - Shellout (default): writes our two override files and runs
+//     `docker compose up -d` via runtime.ComposeRuntime.
+//   - Native: mutates the loaded *types.Project in memory via
+//     ApplyBuildOverride / ApplyRunOverride, then drives
+//     compose.Orchestrator.Up against runtime.Runtime primitives.
+//
+// Returns a Workspace whose Container is the primary service's
+// container.
 func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedConfig, opts UpOptions) (*Workspace, error) {
-	cr, ok := e.runtime.(runtime.ComposeRuntime)
-	if !ok {
-		return nil, fmt.Errorf("compose source: runtime does not support compose: %w", runtime.ErrNotImplemented)
+	// Shellout backend requires the runtime to satisfy
+	// ComposeRuntime. Check before any project load / image work so a
+	// missing capability fails fast with ErrNotImplemented instead of
+	// after parse errors. Native backend uses runtime.Runtime
+	// directly; primitive support is enforced by Plan.Validate +
+	// surface-level ErrNotImplemented from the backend.
+	if e.opts.ComposeBackend == ComposeBackendShellout {
+		if _, ok := e.runtime.(runtime.ComposeRuntime); !ok {
+			return nil, fmt.Errorf("compose source: runtime does not support compose: %w", runtime.ErrNotImplemented)
+		}
 	}
 
 	src := cfg.Source.(*config.ComposeSource)
@@ -510,6 +524,43 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 		return nil, err
 	}
 
+	bindMounts := composeBindMounts(cfg, opts)
+
+	overrideLabels := map[string]string{
+		LabelDevcontainerID:       cfg.DevcontainerID,
+		LabelLocalWorkspaceFolder: cfg.LocalWorkspaceFolder,
+		LabelEngine:               engineIdent,
+	}
+	overrideEnv := mergeEnv(cfg.ContainerEnv, extraEnv)
+
+	switch e.opts.ComposeBackend {
+	case ComposeBackendNative:
+		return e.upComposeNative(ctx, cfg, opts, project, src, projectName,
+			finalImage, bindMounts, overrideEnv, overrideLabels)
+	default:
+		return e.upComposeShellout(ctx, cfg, opts, project, src, projectName,
+			workingDir, finalImage, bindMounts, overrideEnv, overrideLabels)
+	}
+}
+
+// upComposeShellout is the legacy path: write the two override files
+// and shell out via runtime.ComposeRuntime. Unchanged from M4.
+func (e *Engine) upComposeShellout(
+	ctx context.Context,
+	cfg *config.ResolvedConfig,
+	opts UpOptions,
+	project *composetypes.Project,
+	src *config.ComposeSource,
+	projectName, workingDir, finalImage string,
+	bindMounts []compose.BindMount,
+	overrideEnv map[string]string,
+	overrideLabels map[string]string,
+) (*Workspace, error) {
+	cr, ok := e.runtime.(runtime.ComposeRuntime)
+	if !ok {
+		return nil, fmt.Errorf("compose source: runtime does not support compose: %w", runtime.ErrNotImplemented)
+	}
+
 	tmp, err := os.MkdirTemp("", "dc-go-compose-*")
 	if err != nil {
 		return nil, fmt.Errorf("create compose override tmpdir: %w", err)
@@ -526,40 +577,11 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 		return nil, err
 	}
 
-	bindMounts := []compose.BindMount{
-		{Source: cfg.LocalWorkspaceFolder, Target: cfg.ContainerWorkspaceFolder},
-	}
-	for _, m := range cfg.Mounts {
-		if m.Type == config.MountBind && m.Source != "" && m.Target != "" {
-			bindMounts = append(bindMounts, compose.BindMount{
-				Source:   m.Source,
-				Target:   m.Target,
-				ReadOnly: m.ReadOnly,
-			})
-		}
-	}
-	// Extra mounts: only bind types are expressible in compose overrides.
-	// Other types (volume, tmpfs) are silently dropped, mirroring how
-	// devcontainer.json `mounts` are filtered above.
-	for _, m := range opts.ExtraMounts {
-		if m.Type == runtime.MountBind && m.Source != "" && m.Target != "" {
-			bindMounts = append(bindMounts, compose.BindMount{
-				Source:   m.Source,
-				Target:   m.Target,
-				ReadOnly: m.ReadOnly,
-			})
-		}
-	}
-
 	if err := compose.WriteRunOverride(runOverridePath, project, compose.Override{
 		Service:          src.Service,
 		ExtraBindMounts:  bindMounts,
-		ExtraEnvironment: mergeEnv(cfg.ContainerEnv, extraEnv),
-		Labels: map[string]string{
-			LabelDevcontainerID:       cfg.DevcontainerID,
-			LabelLocalWorkspaceFolder: cfg.LocalWorkspaceFolder,
-			LabelEngine:               engineIdent,
-		},
+		ExtraEnvironment: overrideEnv,
+		Labels:           overrideLabels,
 	}); err != nil {
 		return nil, err
 	}
@@ -589,6 +611,82 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 	}
 
 	return e.buildWorkspace(ctx, containerID, cfg, opts.LocalEnv)
+}
+
+// upComposeNative is the new path: mutate the project in-memory via
+// the Apply* override helpers, then drive compose.Orchestrator.Up
+// against the runtime's primitive surface. No tmpfile, no docker
+// compose plugin, no runtime.ComposeRuntime assertion.
+func (e *Engine) upComposeNative(
+	ctx context.Context,
+	cfg *config.ResolvedConfig,
+	opts UpOptions,
+	project *composetypes.Project,
+	src *config.ComposeSource,
+	projectName, finalImage string,
+	bindMounts []compose.BindMount,
+	overrideEnv map[string]string,
+	overrideLabels map[string]string,
+) (*Workspace, error) {
+	if err := compose.ApplyBuildOverride(project, src.Service, finalImage); err != nil {
+		return nil, err
+	}
+	if err := compose.ApplyRunOverride(project, src.Service, compose.Override{
+		Service:          src.Service,
+		ExtraBindMounts:  bindMounts,
+		ExtraEnvironment: overrideEnv,
+		Labels:           overrideLabels,
+	}); err != nil {
+		return nil, err
+	}
+
+	orch := compose.NewOrchestrator(e.runtime, "")
+	res, err := orch.Up(ctx, &compose.Plan{
+		Project:     project,
+		ProjectName: projectName,
+		Services:    src.RunServices,
+		Labels: map[string]string{
+			LabelDevcontainerID: cfg.DevcontainerID,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	containerID := res.ContainerIDs[src.Service]
+	if containerID == "" {
+		return nil, fmt.Errorf("compose primary service %q was not started by orchestrator", src.Service)
+	}
+	return e.buildWorkspace(ctx, containerID, cfg, opts.LocalEnv)
+}
+
+// composeBindMounts assembles the workspace + cfg + extra mounts in
+// the order the engine has always used them, kept as a helper so
+// both compose backends share the exact same set. Only bind mounts
+// are expressible in compose overrides; other types are silently
+// dropped — same as the legacy path.
+func composeBindMounts(cfg *config.ResolvedConfig, opts UpOptions) []compose.BindMount {
+	out := []compose.BindMount{
+		{Source: cfg.LocalWorkspaceFolder, Target: cfg.ContainerWorkspaceFolder},
+	}
+	for _, m := range cfg.Mounts {
+		if m.Type == config.MountBind && m.Source != "" && m.Target != "" {
+			out = append(out, compose.BindMount{
+				Source:   m.Source,
+				Target:   m.Target,
+				ReadOnly: m.ReadOnly,
+			})
+		}
+	}
+	for _, m := range opts.ExtraMounts {
+		if m.Type == runtime.MountBind && m.Source != "" && m.Target != "" {
+			out = append(out, compose.BindMount{
+				Source:   m.Source,
+				Target:   m.Target,
+				ReadOnly: m.ReadOnly,
+			})
+		}
+	}
+	return out
 }
 
 // prepareComposeServiceImage resolves the base image for a compose

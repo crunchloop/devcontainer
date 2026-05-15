@@ -304,6 +304,49 @@ func TestUp_ComposeSourceErrors(t *testing.T) {
 	}
 }
 
+// TestUp_ComposeBackendNative_DispatchesToOrchestrator confirms that
+// EngineOptions.ComposeBackend = ComposeBackendNative routes through
+// the in-process orchestrator instead of asserting ComposeRuntime.
+// fakeRuntime does NOT implement ComposeRuntime; on the shellout
+// path the request would fail with ErrNotImplemented before any
+// project load. On native, the request should proceed past the
+// type-assertion check and surface a different failure mode (here:
+// the orchestrator's RunContainer hits BuildImage → ErrNotImplemented).
+// The point is the dispatch reached the native path at all.
+func TestUp_ComposeBackendNative_DispatchesToOrchestrator(t *testing.T) {
+	rt := newFakeRuntime()
+	eng, _ := New(EngineOptions{
+		Runtime:        rt,
+		ComposeBackend: ComposeBackendNative,
+	})
+
+	dir := t.TempDir()
+	dc := filepath.Join(dir, ".devcontainer")
+	if err := os.MkdirAll(dc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dc, "devcontainer.json"),
+		[]byte(`{"dockerComposeFile":"compose.yml","service":"app"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Minimal compose project so compose.Load succeeds.
+	if err := os.WriteFile(filepath.Join(dc, "compose.yml"),
+		[]byte("services:\n  app:\n    image: alpine:3.20\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := eng.Up(context.Background(), UpOptions{LocalWorkspaceFolder: dir})
+	if err == nil {
+		t.Fatal("expected an error from fakeRuntime hitting unimplemented primitive paths")
+	}
+	// The error must NOT be "runtime does not support compose" — that
+	// would mean we dispatched to shellout. Native dispatch routes
+	// past the ComposeRuntime assertion entirely.
+	if strings.Contains(err.Error(), "runtime does not support compose") {
+		t.Errorf("native dispatch fell through to shellout assertion: %v", err)
+	}
+}
+
 func TestUp_ReattachStopped(t *testing.T) {
 	rt := newFakeRuntime()
 	eng, _ := New(EngineOptions{Runtime: rt})
