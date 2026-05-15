@@ -100,11 +100,15 @@ jobs:
           go-version: "1.25"
           cache: true
       - name: Install apple/container
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PKG_URL=$(curl -fsSL https://api.github.com/repos/apple/container/releases/latest \
-            | grep -o 'https://[^"]*installer-signed\.pkg' | head -n1)
-          echo "Installing from: $PKG_URL"
-          curl -fsSL -o /tmp/container.pkg "$PKG_URL"
+          # `gh release download` authenticates with GH_TOKEN, dodging
+          # the strict anonymous rate limit on api.github.com that
+          # bit us when curling the unauth'd releases endpoint.
+          gh release download --repo apple/container \
+            --pattern '*installer-signed.pkg' \
+            --output /tmp/container.pkg
           sudo installer -pkg /tmp/container.pkg -target /
           container --version
       - name: Select Xcode with Swift 6.2
