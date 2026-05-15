@@ -15,6 +15,12 @@ let package = Package(
             name: "ACBridge",
             dependencies: [
                 .product(name: "ContainerAPIClient", package: "container"),
+                // PR-G2: BuildKit gRPC build flow.
+                .product(name: "ContainerBuild", package: "container"),
+                // ContainerImagesService exposes RemoteContentStoreClient
+                // (BuildKit's ContentStore implementation backed by the
+                // local images service). Required by Builder.BuildConfig.
+                .product(name: "ContainerImagesService", package: "container"),
             ],
             path: "Sources/ACBridge"
         ),

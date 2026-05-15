@@ -293,25 +293,55 @@ const char* ac_logs_open(const char* id);
 //                 cases.
 const char* ac_pull_image(const char* reference);
 
-// ---- PR-G: Build (probe only) --------------------------------------
+// ---- PR-G2: Build --------------------------------------------------
 
 // ac_build_probe checks whether Apple's buildkit container is up.
-// On success, the caller can attempt a real build; on failure, the
-// caller surfaces a typed BuilderUnavailableError. The full
-// BuildKit gRPC integration (Builder.BuildConfig, progress streaming,
-// SwiftNIO event loop, etc.) is intentionally deferred to a follow-up
-// PR — see applecontainer-bridge/Sources/ACBridge/build.swift for
-// the scope rationale.
+// Callers use this to short-circuit with a typed
+// BuilderUnavailableError before paying the cost of marshaling a
+// full BuildSpec.
 //
 //   Ownership:    caller frees with ac_free.
 //   Cancellation: not yet wired.
 //   Threading:    Swift Task + DispatchSemaphore wait on the cgo
 //                 thread.
 //   Encoding:     { "ok": true } or { "ok": false, "err": "..." }.
-//                 The error message includes Apple's error string,
-//                 which is descriptive enough that callers can
-//                 surface it to users without further interpretation.
 //   Blocking:     up to 5s (one XPC round-trip).
 const char* ac_build_probe(void);
+
+// ac_build performs the actual BuildKit build. Dials the buildkit
+// container over vsock (must be running; we surface a clear error
+// otherwise), constructs a SwiftNIO-backed Builder, runs the build
+// to an OCI tarball export, then loads + unpacks + tags the result
+// in the local content store.
+//
+//   Ownership:    caller frees with ac_free.
+//   Cancellation: not yet wired. Build is long-running; callers
+//                 should treat it as best-effort uninterruptible
+//                 until a follow-up PR adds streaming cancellation.
+//   Threading:    Swift Task + DispatchSemaphore wait on the cgo
+//                 thread. Internally spins up a NIO
+//                 MultiThreadedEventLoopGroup for the duration of
+//                 the build and shuts it down on the way out.
+//   Encoding:     spec_json fields (omitempty unless noted):
+//                   contextPath (required), dockerfile,
+//                   tag, args (map[string]string), target,
+//                   cacheFrom ([]string), noCache (bool),
+//                   platform (single platform string, e.g. linux/arm64).
+//                 Engine concepts we silently drop on this backend:
+//                 RunArgs, Privileged, SecurityOpt — same as
+//                 ac_run (design §8). Multi-platform builds are out
+//                 of scope; pass a single platform.
+//                 Success:
+//                   { "ok": true, "data": { "reference": "...", "digest": "..." } }
+//                 Failure:
+//                   { "ok": false, "err": "..." }.
+//                 BuildKit progress goes to FileHandle.standardError
+//                 of the bridge process (which the Go process
+//                 inherits). Typed BuildEvent streaming is a future
+//                 PR — for now callers see raw output on stderr.
+//   Blocking:     up to 30 min (covers a cold cache pull + multi-
+//                 layer build). The bridge's internal timeout fires
+//                 at the same horizon.
+const char* ac_build(const char* spec_json);
 
 #endif

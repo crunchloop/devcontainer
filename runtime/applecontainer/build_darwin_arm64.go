@@ -3,37 +3,57 @@
 package applecontainer
 
 /*
+#include <stdlib.h>
 #include "shim.h"
 */
 import "C"
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"unsafe"
 
 	"github.com/crunchloop/devcontainer/runtime"
 )
 
-// BuildImage on the apple-container backend is partially implemented
-// for M6 v0.1:
+// buildSpecWire mirrors applecontainer-bridge/Sources/ACBridge/build.swift's
+// BuildSpecJSON. Engine concepts we don't model on this backend
+// (RunArgs/Privileged/SecurityOpt analogs) are intentionally absent
+// from this wire type — same pattern as runSpecJSON in lifecycle.
+type buildSpecWire struct {
+	ContextPath string            `json:"contextPath"`
+	Dockerfile  string            `json:"dockerfile,omitempty"`
+	Tag         string            `json:"tag,omitempty"`
+	Args        map[string]string `json:"args,omitempty"`
+	Target      string            `json:"target,omitempty"`
+	CacheFrom   []string          `json:"cacheFrom,omitempty"`
+	NoCache     bool              `json:"noCache,omitempty"`
+	Platform    string            `json:"platform,omitempty"`
+}
+
+type buildResultData struct {
+	Reference string `json:"reference"`
+	Digest    string `json:"digest"`
+}
+
+// BuildImage performs a Dockerfile build via Apple's BuildKit
+// container. Requires the user to have run `container builder start`
+// beforehand — auto-start would require reimplementing
+// BuilderStart.start which is module-internal to ContainerCommands.
 //
-//   - The "builder not running" failure mode is detected and surfaced
-//     as a typed *runtime.BuilderUnavailableError so callers can
-//     prompt the user with `container builder start`.
-//   - The actual Dockerfile build path is intentionally NOT
-//     implemented in this PR. Apple's BuildKit-over-vsock integration
-//     (dial buildkit container → Builder(socket:) → BuildConfig with
-//     ~17 fields → SwiftNIO event loop → progress event translation)
-//     is substantial enough to warrant its own focused PR. Callers
-//     attempting a build receive a clear "not implemented" error
-//     rather than a faked success.
+// Behavior:
+//   - If the builder is not running, returns
+//     *runtime.BuilderUnavailableError with a hint.
+//   - Otherwise dials buildkit over vsock, runs the BuildKit build,
+//     loads the resulting OCI tarball into the local content store,
+//     tags it with spec.Tag, and returns a runtime.ImageRef.
 //
-// Engine impact: the docker runtime supports build natively; this
-// backend doesn't yet, so consumers steering toward apple-container
-// must currently use `image:` source devcontainers (which only need
-// PullImage from PR-F). Dockerfile + features paths require this
-// PR's follow-up.
+// Progress events: PR-G2 ships without streaming events. BuildKit's
+// progress output goes to the bridge's stderr (which the Go process
+// inherits). Callers see raw build output on the console. A future
+// PR can swap in a pipe-fd capture and emit typed BuildEvents.
 func (r *Runtime) BuildImage(ctx context.Context, spec runtime.BuildSpec, events chan<- runtime.BuildEvent) (runtime.ImageRef, error) {
 	if err := ctx.Err(); err != nil {
 		return runtime.ImageRef{}, err
@@ -42,9 +62,8 @@ func (r *Runtime) BuildImage(ctx context.Context, spec runtime.BuildSpec, events
 		return runtime.ImageRef{}, err
 	}
 
-	// Probe the builder. If it isn't running, surface a typed error
-	// so callers can prompt the user (DAP, an interactive CLI) with
-	// the right remediation.
+	// Builder-liveness probe. Cheap and gives us a clean typed error
+	// before we marshal the full spec.
 	probeRaw := goStringAndFree(C.ac_build_probe_p())
 	if probeRaw == "" {
 		return runtime.ImageRef{}, errors.New("applecontainer: bridge returned nil for BuildImage probe")
@@ -56,12 +75,70 @@ func (r *Runtime) BuildImage(ctx context.Context, spec runtime.BuildSpec, events
 		}
 	}
 
-	// Builder is up, but the actual build path isn't wired through
-	// yet. Return a clear, actionable error rather than ErrNotImplemented
-	// so callers don't conflate "this backend permanently lacks
-	// builds" with "this backend's build is still landing."
-	return runtime.ImageRef{}, fmt.Errorf(
-		"applecontainer: Dockerfile builds are not yet implemented on this backend (image=%q tag=%q); use a pre-built `image:` source devcontainer",
-		spec.Dockerfile, spec.Tag,
+	emitBuildEvent(events, runtime.BuildEvent{
+		Kind:    runtime.BuildEventLog,
+		Message: "applecontainer: building " + spec.Tag,
+	})
+
+	wire := buildSpecWire{
+		ContextPath: spec.ContextPath,
+		Dockerfile:  spec.Dockerfile,
+		Tag:         spec.Tag,
+		Args:        spec.Args,
+		Target:      spec.Target,
+		CacheFrom:   spec.CacheFrom,
+		NoCache:     spec.NoCache,
+		Platform:    spec.Platform,
+	}
+	specBytes, err := json.Marshal(wire)
+	if err != nil {
+		return runtime.ImageRef{}, fmt.Errorf("applecontainer: marshal BuildSpec: %w", err)
+	}
+	cSpec := C.CString(string(specBytes))
+	defer C.free(unsafe.Pointer(cSpec))
+
+	raw := goStringAndFree(C.ac_build_p(cSpec))
+	if raw == "" {
+		return runtime.ImageRef{}, errors.New("applecontainer: bridge returned nil for BuildImage")
+	}
+	env, err := decodeEnvelope[buildResultData](raw)
+	if err != nil {
+		// Apple's "builder not running" error path can surface here
+		// if the buildkit container vanished between probe and build.
+		// Detect by message text and remap to the typed error.
+		if isBuilderUnavailable(err) {
+			return runtime.ImageRef{}, &runtime.BuilderUnavailableError{
+				Hint: "run `container builder start` to start the build VM",
+				Err:  err,
+			}
+		}
+		return runtime.ImageRef{}, err
+	}
+
+	emitBuildEvent(events, runtime.BuildEvent{
+		Kind:    runtime.BuildEventCompleted,
+		Digest:  env.decoded.Digest,
+		Message: "applecontainer: built " + env.decoded.Reference,
+	})
+
+	tags := []string{}
+	if env.decoded.Reference != "" {
+		tags = append(tags, env.decoded.Reference)
+	}
+	return runtime.ImageRef{
+		ID:   env.decoded.Digest,
+		Tags: tags,
+	}, nil
+}
+
+func isBuilderUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return containsAny(msg,
+		"builder not running",
+		"container buildkit not found",
+		"buildkit container",
 	)
 }
