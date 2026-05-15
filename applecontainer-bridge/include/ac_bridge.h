@@ -127,4 +127,58 @@ const char* ac_inspect_image(const char* reference);
 //   Blocking:     blocks until ContainerClient.list() returns.
 const char* ac_find_container_by_label(const char* key, const char* value);
 
+// ---- PR-C: Run / Start / Stop / Delete -----------------------------
+
+// ac_run creates a container from a JSON-encoded RunSpec. Wraps
+// ContainerClient.create + ClientKernel.getDefaultKernel. Image must
+// already be in the local content store (PullImage handled by PR-F).
+//
+//   Ownership:    caller frees with ac_free.
+//   Cancellation: not yet wired (PR-D).
+//   Threading:    Swift Task + DispatchSemaphore wait on the cgo thread.
+//   Encoding:     spec_json is the canonical RunSpec wire shape (see
+//                 applecontainer/lifecycle_darwin_arm64.go for the Go
+//                 marshaller). Response:
+//                   { "ok": true, "data": { "id": "<container-id>" } }
+//                 or { "ok": false, "err": "..." }.
+//                 RunSpec.RunArgs / Privileged / SecurityOpt are not
+//                 modeled on this backend per design §8; the bridge
+//                 silently drops them. Image must be pre-pulled.
+//   Blocking:     up to 60s (covers cold kernel + init-image fetch on
+//                 first run; cached after that).
+const char* ac_run(const char* spec_json);
+
+// ac_start bootstraps and starts a previously created container in
+// detached mode (no stdio attachment). Idempotent: a running
+// container is a no-op success. Wraps ContainerClient.bootstrap +
+// ClientProcess.start.
+//
+//   Ownership:    caller frees with ac_free.
+//   Cancellation: not yet wired (PR-D).
+//   Threading:    Swift Task + DispatchSemaphore wait on the cgo thread.
+//   Encoding:     { "ok": true } | { "ok": false, "err": "..." }.
+//   Blocking:     up to 60s; bootstrap is fast but `process.start()`
+//                 spawns the in-VM init.
+const char* ac_start(const char* id);
+
+// ac_stop stops a running container. Wraps ContainerClient.stop with
+// the given grace-period; timeout_seconds <= 0 uses Apple's default.
+//
+//   Ownership:    caller frees with ac_free.
+//   Cancellation: not yet wired (PR-D).
+//   Threading:    Swift Task + DispatchSemaphore wait on the cgo thread.
+//   Encoding:     { "ok": true } | { "ok": false, "err": "..." }.
+//   Blocking:     up to 60s (covers the grace period + SIGKILL fallback).
+const char* ac_stop(const char* id, int32_t timeout_seconds);
+
+// ac_delete removes a container. `force != 0` deletes even if the
+// container is running. Wraps ContainerClient.delete.
+//
+//   Ownership:    caller frees with ac_free.
+//   Cancellation: not yet wired (PR-D).
+//   Threading:    Swift Task + DispatchSemaphore wait on the cgo thread.
+//   Encoding:     { "ok": true } | { "ok": false, "err": "..." }.
+//   Blocking:     up to 60s.
+const char* ac_delete(const char* id, int32_t force);
+
 #endif

@@ -36,4 +36,9 @@ const char* ac_inspect_container_p(const char* id);
 const char* ac_inspect_image_p(const char* reference);
 const char* ac_find_container_by_label_p(const char* key, const char* value);
 
+const char* ac_run_p(const char* spec_json);
+const char* ac_start_p(const char* id);
+const char* ac_stop_p(const char* id, int32_t timeout_seconds);
+const char* ac_delete_p(const char* id, int32_t force);
+
 #endif

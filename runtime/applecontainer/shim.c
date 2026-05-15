@@ -14,6 +14,11 @@ static const char* (*p_ac_inspect_container)(const char*) = NULL;
 static const char* (*p_ac_inspect_image)(const char*) = NULL;
 static const char* (*p_ac_find_container_by_label)(const char*, const char*) = NULL;
 
+static const char* (*p_ac_run)(const char*) = NULL;
+static const char* (*p_ac_start)(const char*) = NULL;
+static const char* (*p_ac_stop)(const char*, int32_t) = NULL;
+static const char* (*p_ac_delete)(const char*, int32_t) = NULL;
+
 static void copy_err(char* errbuf, size_t errlen, const char* msg) {
     if (!errbuf || errlen == 0) {
         return;
@@ -48,10 +53,15 @@ int ac_load(const char* path, char* errbuf, size_t errlen) {
     p_ac_inspect_container       = (const char* (*)(const char*)) dlsym(h, "ac_inspect_container");
     p_ac_inspect_image           = (const char* (*)(const char*)) dlsym(h, "ac_inspect_image");
     p_ac_find_container_by_label = (const char* (*)(const char*, const char*)) dlsym(h, "ac_find_container_by_label");
+    p_ac_run                     = (const char* (*)(const char*)) dlsym(h, "ac_run");
+    p_ac_start                   = (const char* (*)(const char*)) dlsym(h, "ac_start");
+    p_ac_stop                    = (const char* (*)(const char*, int32_t)) dlsym(h, "ac_stop");
+    p_ac_delete                  = (const char* (*)(const char*, int32_t)) dlsym(h, "ac_delete");
 
     if (!p_ac_version || !p_ac_ping || !p_ac_free
         || !p_ac_inspect_container || !p_ac_inspect_image
-        || !p_ac_find_container_by_label) {
+        || !p_ac_find_container_by_label
+        || !p_ac_run || !p_ac_start || !p_ac_stop || !p_ac_delete) {
         const char* err = dlerror();
         copy_err(errbuf, errlen, err ? err : "dlsym returned null");
         // Reset any partial resolutions so a future retry sees a clean
@@ -63,6 +73,10 @@ int ac_load(const char* path, char* errbuf, size_t errlen) {
         p_ac_inspect_container = NULL;
         p_ac_inspect_image = NULL;
         p_ac_find_container_by_label = NULL;
+        p_ac_run = NULL;
+        p_ac_start = NULL;
+        p_ac_stop = NULL;
+        p_ac_delete = NULL;
         dlclose(h);
         return -1;
     }
@@ -93,4 +107,20 @@ const char* ac_inspect_image_p(const char* reference) {
 
 const char* ac_find_container_by_label_p(const char* key, const char* value) {
     return p_ac_find_container_by_label ? p_ac_find_container_by_label(key, value) : NULL;
+}
+
+const char* ac_run_p(const char* spec_json) {
+    return p_ac_run ? p_ac_run(spec_json) : NULL;
+}
+
+const char* ac_start_p(const char* id) {
+    return p_ac_start ? p_ac_start(id) : NULL;
+}
+
+const char* ac_stop_p(const char* id, int32_t timeout_seconds) {
+    return p_ac_stop ? p_ac_stop(id, timeout_seconds) : NULL;
+}
+
+const char* ac_delete_p(const char* id, int32_t force) {
+    return p_ac_delete ? p_ac_delete(id, force) : NULL;
 }

@@ -140,7 +140,7 @@ func bridgeVersion() string {
 	return C.GoString(cstr)
 }
 
-// ---- runtime.Runtime stubs (filled in PR-B onward) -------------------
+// ---- runtime.Runtime stubs (filled in by later PRs) ------------------
 
 func (*Runtime) BuildImage(context.Context, runtime.BuildSpec, chan<- runtime.BuildEvent) (runtime.ImageRef, error) {
 	return runtime.ImageRef{}, runtime.ErrNotImplemented
@@ -150,28 +150,14 @@ func (*Runtime) PullImage(context.Context, string, chan<- runtime.BuildEvent) (r
 	return runtime.ImageRef{}, runtime.ErrNotImplemented
 }
 
-func (*Runtime) RunContainer(context.Context, runtime.RunSpec) (*runtime.Container, error) {
-	return nil, runtime.ErrNotImplemented
-}
-
-func (*Runtime) StartContainer(context.Context, string) error {
-	return runtime.ErrNotImplemented
-}
-
-func (*Runtime) StopContainer(context.Context, string, runtime.StopOptions) error {
-	return runtime.ErrNotImplemented
-}
-
-func (*Runtime) RemoveContainer(context.Context, string, runtime.RemoveOptions) error {
-	return runtime.ErrNotImplemented
-}
-
 func (*Runtime) ExecContainer(context.Context, string, runtime.ExecOptions) (runtime.ExecResult, error) {
 	return runtime.ExecResult{}, runtime.ErrNotImplemented
 }
 
-// InspectContainer, InspectImage, and FindContainerByLabel live in
-// inspect_darwin_arm64.go (PR-B).
+// InspectContainer, InspectImage, FindContainerByLabel — PR-B
+//   (inspect_darwin_arm64.go).
+// RunContainer, StartContainer, StopContainer, RemoveContainer — PR-C
+//   (lifecycle_darwin_arm64.go).
 
 func (*Runtime) ContainerLogs(context.Context, string, io.Writer, bool) error {
 	return runtime.ErrNotImplemented
