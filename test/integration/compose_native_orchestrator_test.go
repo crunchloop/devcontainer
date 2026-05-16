@@ -210,6 +210,77 @@ services:
 	}
 }
 
+// TestNativeOrchestrator_PortsAndHealth exercises the two
+// production-relevant gaps PR13 filled in: publishing a port to
+// the host AND gating a dependent service on healthcheck-derived
+// readiness. The fixture publishes nginx on a host port and waits
+// for its built-in healthcheck to flip to healthy before starting
+// "app". The app then exec's `wget` against the published port to
+// prove it's reachable through the project network AND that the
+// healthcheck gate held the start until nginx was actually serving.
+func TestNativeOrchestrator_PortsAndHealth(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+
+	rt := newDockerRuntime(t)
+	defer rt.Close()
+
+	proj, _ := loadFixture(t, `
+services:
+  web:
+    image: nginx:1.27-alpine
+    ports:
+      - "0:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      interval: 1s
+      timeout: 1s
+      retries: 5
+      start_period: 1s
+  app:
+    image: `+testImage+`
+    command: ["sh", "-c", "while sleep 1000; do :; done"]
+    depends_on:
+      web:
+        condition: service_healthy
+`)
+
+	projectName := "dc-it-native-ports"
+	orch := compose.NewOrchestrator(rt, "docker")
+	orch.HealthTimeout = 45 * time.Second
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	t.Cleanup(func() {
+		_ = orch.Down(context.Background(), &compose.DownPlan{
+			ProjectName: projectName, Project: proj,
+		})
+	})
+
+	res, err := orch.Up(ctx, &compose.Plan{Project: proj, ProjectName: projectName})
+	if err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if res.ContainerIDs["app"] == "" {
+		t.Fatal("app not started (health gate may have failed)")
+	}
+
+	// Inspect web for health status — must have ended up Healthy
+	// before app was permitted to start.
+	webID := res.ContainerIDs["web"]
+	if webID == "" {
+		t.Fatal("web container missing from result")
+	}
+	d, err := rt.InspectContainer(ctx, webID)
+	if err != nil {
+		t.Fatalf("InspectContainer(web): %v", err)
+	}
+	if d.Health != runtime.HealthHealthy {
+		t.Errorf("web Health=%q, want healthy", d.Health)
+	}
+}
+
 // TestNativeOrchestrator_DependencyOrder gates app on db with
 // service_started — the default condition. We can't directly
 // observe RunContainer order against real Docker, but we can

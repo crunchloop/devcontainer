@@ -28,6 +28,7 @@ package compose
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -342,7 +343,19 @@ func (o *Orchestrator) ensureService(
 	spec := serviceToRunSpec(plan, svc, projectLabels, hash)
 	c, err := o.rt.RunContainer(ctx, spec)
 	if err != nil {
-		return "", fmt.Errorf("RunContainer(%s): %w", svc.Name, err)
+		// Compose's `up -d` pulls missing images implicitly. Mirror
+		// that here: on the first attempt's image-not-found, pull
+		// then retry once. Anything else propagates.
+		var nf *runtime.ImageNotFoundError
+		if errors.As(err, &nf) && svc.Image != "" {
+			if _, perr := o.rt.PullImage(ctx, svc.Image, nil); perr != nil {
+				return "", fmt.Errorf("PullImage(%s) for service %q: %w", svc.Image, svc.Name, perr)
+			}
+			c, err = o.rt.RunContainer(ctx, spec)
+		}
+		if err != nil {
+			return "", fmt.Errorf("RunContainer(%s): %w", svc.Name, err)
+		}
 	}
 	if err := o.rt.StartContainer(ctx, c.ID); err != nil {
 		return c.ID, fmt.Errorf("StartContainer(%s): %w", svc.Name, err)
@@ -409,16 +422,24 @@ func (o *Orchestrator) waitFor(
 		if err == nil && details != nil {
 			switch cond {
 			case "service_healthy":
-				// ContainerDetails doesn't carry a typed Health
-				// field yet; in production this slot is filled by
-				// the runtime exposing Inspect.Health.Status via
-				// the Labels map under a documented key. For the
-				// orchestrator's first pass we treat any State =
-				// running as "satisfied" — the docker runtime
-				// will gain the proper field in PR14 and this
-				// switch becomes a real status read.
-				if details.State == runtime.StateRunning {
+				// Treat HealthNone as satisfied: a container with
+				// no HEALTHCHECK directive can still be a
+				// service_healthy gate target (compose's behavior),
+				// so falling back to State=Running keeps that case
+				// working. For services that DO declare a
+				// healthcheck, require Healthy explicitly.
+				switch details.Health {
+				case runtime.HealthHealthy:
 					return nil
+				case runtime.HealthNone:
+					if details.State == runtime.StateRunning {
+						return nil
+					}
+				case runtime.HealthUnhealthy:
+					return fmt.Errorf(
+						"compose: service %q reported unhealthy while waiting on service_healthy",
+						svc,
+					)
 				}
 			case "service_completed_successfully":
 				if details.State == runtime.StateExited && details.ExitCode == 0 {
@@ -493,17 +514,82 @@ func serviceToRunSpec(
 	}
 
 	return runtime.RunSpec{
-		Image:      svc.Image,
-		Name:       plan.ProjectName + "-" + svc.Name + "-1",
-		Cmd:        []string(svc.Command),
-		Entrypoint: []string(svc.Entrypoint),
-		User:       svc.User,
-		WorkingDir: svc.WorkingDir,
-		Env:        env,
-		Labels:     labels,
-		Mounts:     mounts,
-		Init:       svc.Init != nil && *svc.Init,
-		CapAdd:     []string(svc.CapAdd),
+		Image:         svc.Image,
+		Name:          plan.ProjectName + "-" + svc.Name + "-1",
+		Cmd:           []string(svc.Command),
+		Entrypoint:    []string(svc.Entrypoint),
+		User:          svc.User,
+		WorkingDir:    svc.WorkingDir,
+		Env:           env,
+		Labels:        labels,
+		Mounts:        mounts,
+		Ports:         portsOf(svc.Ports),
+		RestartPolicy: restartPolicyOf(svc.Restart),
+		HealthCheck:   healthCheckOf(svc.HealthCheck),
+		Init:          svc.Init != nil && *svc.Init,
+		CapAdd:        []string(svc.CapAdd),
+	}
+}
+
+// healthCheckOf translates compose's HealthCheckConfig pointer into
+// our runtime-neutral spec. Returns nil if the service didn't
+// declare one (image's HEALTHCHECK applies as-is).
+func healthCheckOf(in *composetypes.HealthCheckConfig) *runtime.HealthCheckSpec {
+	if in == nil {
+		return nil
+	}
+	out := &runtime.HealthCheckSpec{
+		Test:    append([]string(nil), in.Test...),
+		Disable: in.Disable,
+	}
+	if in.Interval != nil {
+		out.Interval = time.Duration(*in.Interval)
+	}
+	if in.Timeout != nil {
+		out.Timeout = time.Duration(*in.Timeout)
+	}
+	if in.Retries != nil {
+		out.Retries = int(*in.Retries)
+	}
+	if in.StartPeriod != nil {
+		out.StartPeriod = time.Duration(*in.StartPeriod)
+	}
+	if in.StartInterval != nil {
+		out.StartInterval = time.Duration(*in.StartInterval)
+	}
+	return out
+}
+
+// portsOf translates compose's ServicePortConfig list into our
+// runtime-neutral PortBinding shape.
+func portsOf(in []composetypes.ServicePortConfig) []runtime.PortBinding {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]runtime.PortBinding, 0, len(in))
+	for _, p := range in {
+		out = append(out, runtime.PortBinding{
+			HostIP:        p.HostIP,
+			HostPort:      p.Published,
+			ContainerPort: int(p.Target),
+			Protocol:      p.Protocol,
+		})
+	}
+	return out
+}
+
+// restartPolicyOf maps compose's restart: string onto our typed
+// runtime.RestartPolicy. Unknown / empty values map to RestartNo.
+func restartPolicyOf(s string) runtime.RestartPolicy {
+	switch s {
+	case "always":
+		return runtime.RestartAlways
+	case "on-failure":
+		return runtime.RestartOnFailure
+	case "unless-stopped":
+		return runtime.RestartUnlessStopped
+	default:
+		return runtime.RestartNo
 	}
 }
 

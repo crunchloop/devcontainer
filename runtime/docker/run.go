@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 
 	"github.com/crunchloop/devcontainer/runtime"
@@ -26,14 +29,21 @@ import (
 var keepAliveCmd = []string{"tail", "-f", "/dev/null"}
 
 func (r *Runtime) RunContainer(ctx context.Context, spec runtime.RunSpec) (*runtime.Container, error) {
+	exposed, bindings, err := toPortBindings(spec.Ports)
+	if err != nil {
+		return nil, fmt.Errorf("RunContainer: %w", err)
+	}
+
 	cfg := &container.Config{
-		Image:      spec.Image,
-		User:       spec.User,
-		WorkingDir: spec.WorkingDir,
-		Env:        envMapToList(spec.Env),
-		Labels:     spec.Labels,
-		Entrypoint: spec.Entrypoint,
-		Cmd:        spec.Cmd,
+		Image:        spec.Image,
+		User:         spec.User,
+		WorkingDir:   spec.WorkingDir,
+		Env:          envMapToList(spec.Env),
+		Labels:       spec.Labels,
+		Entrypoint:   spec.Entrypoint,
+		Cmd:          spec.Cmd,
+		ExposedPorts: exposed,
+		Healthcheck:  toHealthcheck(spec.HealthCheck),
 	}
 	if spec.OverrideCommand {
 		cfg.Entrypoint = nil
@@ -41,10 +51,12 @@ func (r *Runtime) RunContainer(ctx context.Context, spec runtime.RunSpec) (*runt
 	}
 
 	hostCfg := &container.HostConfig{
-		Mounts:      toMobyMounts(spec.Mounts),
-		Privileged:  spec.Privileged,
-		CapAdd:      spec.CapAdd,
-		SecurityOpt: spec.SecurityOpt,
+		Mounts:        toMobyMounts(spec.Mounts),
+		Privileged:    spec.Privileged,
+		CapAdd:        spec.CapAdd,
+		SecurityOpt:   spec.SecurityOpt,
+		PortBindings:  bindings,
+		RestartPolicy: toRestartPolicy(spec.RestartPolicy),
 	}
 	if spec.Init {
 		t := true
@@ -279,6 +291,82 @@ func toMobyMounts(in []runtime.MountSpec) []mount.Mount {
 		out = append(out, mm)
 	}
 	return out
+}
+
+// toPortBindings translates runtime.PortBinding entries into the
+// moby PortSet + PortMap pair the container API expects.
+// Returns nil maps if spec.Ports is empty.
+func toPortBindings(in []runtime.PortBinding) (network.PortSet, network.PortMap, error) {
+	if len(in) == 0 {
+		return nil, nil, nil
+	}
+	exposed := make(network.PortSet, len(in))
+	bindings := make(network.PortMap, len(in))
+	for _, p := range in {
+		if p.ContainerPort <= 0 {
+			return nil, nil, fmt.Errorf("invalid port binding: ContainerPort must be > 0")
+		}
+		proto := p.Protocol
+		if proto == "" {
+			proto = "tcp"
+		}
+		port, err := network.ParsePort(strconv.Itoa(p.ContainerPort) + "/" + proto)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid port binding: %w", err)
+		}
+		exposed[port] = struct{}{}
+
+		var hostIP netip.Addr
+		if p.HostIP != "" {
+			ip, ipErr := netip.ParseAddr(p.HostIP)
+			if ipErr != nil {
+				return nil, nil, fmt.Errorf("invalid HostIP %q: %w", p.HostIP, ipErr)
+			}
+			hostIP = ip
+		}
+		bindings[port] = append(bindings[port], network.PortBinding{
+			HostIP:   hostIP,
+			HostPort: p.HostPort,
+		})
+	}
+	return exposed, bindings, nil
+}
+
+// toHealthcheck translates a runtime.HealthCheckSpec into docker's
+// container.HealthConfig. Returns nil to mean "inherit from image"
+// (the common case where no override is requested). Disable=true
+// uses docker's NONE sentinel to short-circuit the image's
+// HEALTHCHECK.
+func toHealthcheck(h *runtime.HealthCheckSpec) *container.HealthConfig {
+	if h == nil {
+		return nil
+	}
+	if h.Disable {
+		return &container.HealthConfig{Test: []string{"NONE"}}
+	}
+	return &container.HealthConfig{
+		Test:          append([]string(nil), h.Test...),
+		Interval:      h.Interval,
+		Timeout:       h.Timeout,
+		Retries:       h.Retries,
+		StartPeriod:   h.StartPeriod,
+		StartInterval: h.StartInterval,
+	}
+}
+
+// toRestartPolicy maps runtime.RestartPolicy onto docker's
+// HostConfig.RestartPolicy. Empty maps to "no" (docker's default).
+func toRestartPolicy(p runtime.RestartPolicy) container.RestartPolicy {
+	switch p {
+	case runtime.RestartAlways:
+		return container.RestartPolicy{Name: container.RestartPolicyAlways}
+	case runtime.RestartOnFailure:
+		return container.RestartPolicy{Name: container.RestartPolicyOnFailure}
+	case runtime.RestartUnlessStopped:
+		return container.RestartPolicy{Name: container.RestartPolicyUnlessStopped}
+	default:
+		return container.RestartPolicy{Name: container.RestartPolicyDisabled}
+	}
 }
 
 // Daemon errors don't expose typed error values for "not found"; we
