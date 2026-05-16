@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/crunchloop/devcontainer/compose"
 	"github.com/crunchloop/devcontainer/config"
 	"github.com/crunchloop/devcontainer/events"
 	"github.com/crunchloop/devcontainer/runtime"
@@ -89,29 +90,26 @@ func isComposeWorkspace(ws *Workspace) bool {
 }
 
 // downCompose tears down the compose project by reading the project
-// name off the workspace container's labels and invoking
-// ComposeRuntime.ComposeDown. Without Remove, falls back to a per-
-// container stop (compose has no native "stop the whole project
-// without removing" command in its stable API surface; we approximate).
+// name off the workspace container's labels. Dispatches to either
+// the shellout path (ComposeRuntime.ComposeDown) or the native
+// orchestrator (compose.Orchestrator.Down) depending on
+// EngineOptions.ComposeBackend, matching the Up dispatch.
+//
+// Without Remove, falls back to a per-container stop on the primary
+// (compose has no native "stop the whole project without removing"
+// command in its stable API surface; we approximate). Same shape
+// across both backends so the user-visible behavior is identical.
 func (e *Engine) downCompose(ctx context.Context, ws *Workspace, opts DownOptions, bus *eventBus) error {
-	cr, ok := e.runtime.(runtime.ComposeRuntime)
-	if !ok {
-		// Shouldn't happen — we couldn't have created a compose
-		// workspace without a ComposeRuntime — but stay defensive.
-		return fmt.Errorf("Down: workspace was created by compose but runtime no longer satisfies ComposeRuntime")
-	}
 	projectName := ws.Container.Labels["com.docker.compose.project"]
 	if projectName == "" {
 		return fmt.Errorf("Down: compose workspace missing com.docker.compose.project label")
 	}
 
 	if !opts.Remove {
-		// `compose stop` — keeps containers around for fast restart.
-		// We approximate by stopping each container individually since
-		// our ComposeRuntime interface doesn't expose Stop separately.
-		// In practice, callers wanting "stop without remove" on compose
-		// will set Remove=false; for now we just stop the primary and
-		// document the asymmetry.
+		// Stop-without-remove: stop the primary only. The same
+		// approximation applies to both backends — we don't have a
+		// "compose stop" equivalent on either path that doesn't
+		// involve enumerating every container.
 		if err := e.runtime.StopContainer(ctx, ws.Container.ID, runtime.StopOptions{}); err != nil && !isNotFound(err) {
 			return fmt.Errorf("stop compose primary %s: %w", ws.Container.ID, err)
 		}
@@ -119,11 +117,28 @@ func (e *Engine) downCompose(ctx context.Context, ws *Workspace, opts DownOption
 		return nil
 	}
 
-	if err := cr.ComposeDown(ctx, runtime.ComposeDownSpec{
-		ProjectName:   projectName,
-		RemoveVolumes: opts.RemoveVolumes,
-	}); err != nil {
-		return fmt.Errorf("compose down: %w", err)
+	switch e.opts.ComposeBackend {
+	case ComposeBackendNative:
+		orch := compose.NewOrchestrator(e.runtime, "")
+		if err := orch.Down(ctx, &compose.DownPlan{
+			ProjectName:   projectName,
+			RemoveVolumes: opts.RemoveVolumes,
+		}); err != nil {
+			return fmt.Errorf("compose down (native): %w", err)
+		}
+	default:
+		cr, ok := e.runtime.(runtime.ComposeRuntime)
+		if !ok {
+			// Shouldn't happen — we couldn't have created a compose
+			// workspace via shellout without a ComposeRuntime.
+			return fmt.Errorf("Down: workspace was created by compose but runtime no longer satisfies ComposeRuntime")
+		}
+		if err := cr.ComposeDown(ctx, runtime.ComposeDownSpec{
+			ProjectName:   projectName,
+			RemoveVolumes: opts.RemoveVolumes,
+		}); err != nil {
+			return fmt.Errorf("compose down: %w", err)
+		}
 	}
 	bus.Emit(events.ContainerRemovedEvent{ContainerID: ws.Container.ID})
 	return nil
