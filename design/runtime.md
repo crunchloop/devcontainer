@@ -7,8 +7,8 @@ the `Runtime` interface, the `Workspace` value object, the high-level
 `Engine`, container-context substitution, lifecycle idempotency, and the M2
 shipping subset.
 
-Companion to `design/resolved-config.md`. PRD §7 fixes the high-level
-shape; this doc fills in the operational details.
+Companion to `design/resolved-config.md`. The high-level Runtime / Engine
+shape is fixed; this doc fills in the operational details.
 
 ---
 
@@ -244,8 +244,8 @@ neither works). Markers are mode 0644.
 
 Buffered `chan<- Event` supplied via `EngineOptions.Events` or per-call.
 The Engine drops events on full channel rather than blocking — caller
-guarantees consumption pace. M2 emits the lifecycle and container events
-from PRD §7.1; build/feature/exec events arrive in M3 and beyond.
+guarantees consumption pace. M2 emits the lifecycle and container events;
+build/feature/exec events arrive in M3 and beyond.
 
 Event ordering: monotonic `Seq uint64` field, allocated under a single
 atomic counter on the Engine. Consumers can sort/replay if they multiplex.
@@ -278,7 +278,7 @@ Every Runtime method returns concrete error types where useful:
 - `*runtime.ExecFailedError{ExitCode int, Stderr string}`
 - `*runtime.DaemonUnavailableError` — when the Docker daemon socket is unreachable
 
-Engine wraps with phase-aware types per PRD §7:
+Engine wraps with phase-aware types (see `design/structured-errors.md`):
 
 - `*LifecycleError{Phase LifecyclePhase, Cmd, ExitCode, Stderr}`
 - `*ContainerStartFailedError`

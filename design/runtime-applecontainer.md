@@ -8,9 +8,11 @@ Defines the cgo + Swift bridge architecture, the daemon dependency, version
 pinning discipline, build constraints, and the M6 shipping subset.
 
 Companion to `design/runtime.md` (Runtime / Engine layering, locked
-decisions). PRD §12.8 records this backend as in-scope post-M5. Inherits
-the `Runtime` interface verbatim from `runtime/runtime.go` — no engine-side
-changes are required by this design.
+decisions). The backend implements the existing `Runtime` interface
+from `runtime/runtime.go` without changing its shape; one planned
+engine-side adjustment is the `updateRemoteUserUID` short-circuit
+described in §13.8 (driven by a small capability flag on `Runtime`,
+not a new method).
 
 ---
 

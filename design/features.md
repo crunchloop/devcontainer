@@ -16,7 +16,7 @@ the spec-rich middle layer between them.
 
 ## 1. Pipeline overview
 
-```
+```text
 devcontainer.json (features map)
         │
         ▼
@@ -227,7 +227,7 @@ chmod +x ./install.sh
 
 Build context layout (passed as `BuildSpec.ContextPath`):
 
-```
+```text
 <engine-managed tmp dir>/
   Dockerfile                # the file above
   build-context/
@@ -300,7 +300,7 @@ two builds tagged `:1` actually have the same bytes.
 `os.UserCacheDir()/devcontainer-go/features/` (overridable via
 `EngineOptions.FeatureCacheDir`):
 
-```
+```text
 features/
   oci/
     sha256-<digest>/
@@ -367,7 +367,7 @@ Resolved during feature design review (2026-05-06):
 
 3. **Version match: permissive-newer-wins by default; opt-in strict.**
    Default: feature is "already installed" if `id` matches and baked
-   version `>= ` requested via semver. Opt-in:
+   version `>=` requested via semver. Opt-in:
    `EngineOptions.StrictFeatureVersionMatch: true` requires byte-level
    `ResolvedRef` (digest) equality. Non-semver versions are **always**
    treated as strict-match-only — safer than guessing.

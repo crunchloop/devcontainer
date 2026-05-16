@@ -11,8 +11,9 @@ compose plugin and no Docker-API socket.
 Companion to `design/compose.md` (the existing shell-out path, kept as the
 historical record and the §13 "future Go-native" sketch that this design
 supersedes) and `design/runtime-applecontainer.md` (the second backend whose
-introduction makes this work load-bearing). PRD §12.3 (compose v2 spec) and
-§12.5 (project name = `dc-<devcontainerId>`) are inherited unchanged.
+introduction makes this work load-bearing). The compose v2 spec and the
+project-name convention (`dc-<devcontainerId>`) are inherited from prior
+design without change.
 
 This design triggers `compose.md` §13.6 criterion #4 — "drop the `docker compose`
 dependency for a packaging reason" — concretely, the Apple container backend
@@ -167,7 +168,8 @@ com.docker.compose.volume  = <volName>     # on volumes
 
 ### 3.2 Project name
 
-`dc-<devcontainerId>` (PRD §12.5, unchanged). Resource naming follows
+`dc-<devcontainerId>` (the project-wide naming convention, unchanged from
+the shell-out design). Resource naming follows
 compose v2 conventions so the user's existing tooling keeps working:
 
 - Container name: `<project>-<service>-<index>` (e.g. `dc-abc123-app-1`)
@@ -928,11 +930,12 @@ struct.
 These are integration details to resolve during PR13–17, not blockers
 for the design itself (mirroring `runtime-applecontainer.md` §11):
 
-1. **Apple-container service-name DNS resolution.** §7 + §11.1 probe 3.
-   If a hard "no," compose-source is Docker-only and the M7 roadmap
-   item is "fix Apple networking upstream," not "ship native compose."
-   The orchestrator code is still useful (Docker-side) but the
-   runtime-agnostic justification weakens significantly.
+1. **Long-term fix for Apple-container service-name DNS.** §7 + §11.1
+   probe 3 resolved the v1 path: Apple has no built-in service-name
+   DNS, but the post-start `/etc/hosts` patching workaround is viable
+   and is what M7 ships (see §14.10). Open question is whether to
+   pursue upstream support so we can drop the workaround later — a
+   nice-to-have, not a blocker.
 
 2. **`config-hash` interop with externally-run `docker compose`.** §3.3
    decision is to use our own label, not compose's. Confirm with one
@@ -992,9 +995,10 @@ Out of scope for M7:
 - `develop: watch:` (file sync). Cross-cutting with workspace mount
   semantics; separate design.
 - Multi-replica services (`scale > 1`). Devcontainer use case absent.
-- Apple-container compose if §11.1 probes 3 or 4 fail — feature-gated
-  off with a typed `ErrComposeUnsupportedOnBackend` and a documented
-  follow-up.
+- Compose features the Apple backend can't honor (health-gated
+  `depends_on`, namespace-sharing modes, shared volumes) — refused at
+  Plan time via typed errors per §14.11 / §14.12. The compose path
+  itself ships on Apple via the `/etc/hosts` workaround (§14.10).
 
 ## 14. Decisions
 
