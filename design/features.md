@@ -84,6 +84,14 @@ Cache key is the sha256 of the response body so the same content at two
 URLs dedupes. Custom headers (auth) supplied by callers via
 `EngineOptions.FeatureDownloadHeaders map[string]string`.
 
+Security posture for the HTTPS client:
+
+- TLS certificates validated against system root CAs; `EngineOptions.HTTPSRootCAs *x509.CertPool` lets callers add private CAs for internal mirrors. `InsecureSkipVerify` is never set.
+- Redirects: follow up to 5 hops; cross-host redirects re-apply `FeatureDownloadHeaders` only if the original Host header allows it (matches Go's default `http.Client` policy). Reject `http://` targets even on redirect.
+- Response size cap: 100 MB by default (`EngineOptions.FeatureDownloadMaxBytes`). Body is streamed with a `LimitReader`; overflow returns `*FeatureTooLargeError`.
+- Timeouts: 30s connect, 5min overall (`EngineOptions.FeatureDownloadTimeout`). No retry — features are large enough that retries mostly mask deeper problems; callers can re-run.
+- All network failures surface as `*FeatureFetchError{Ref, Cause}`; the cache write is atomic (extract to tmp dir, rename on success) so a partial download never poisons the cache.
+
 **Local mechanics:** `filepath.Abs(filepath.Join(configDir, ref))`. No
 caching (the directory is the cache).
 
@@ -132,9 +140,18 @@ file as `UPPERCASED_KEY="value"`, sorted lexicographically. Key transform:
 - leading digit → prefix with `_`
 - uppercase
 
-We **validate enum/proposals at parse time** (devpod defers this to
-`install.sh`). Rejecting typos before image build is worth the small
-duplication.
+We **validate enum/proposals at fetch time** — specifically, inside
+`feature.Store.Resolve()` once `devcontainer-feature.json` has been
+fetched and `Metadata` is populated (see §10 decision #5 for the
+two-layer Resolve split). Devpod defers this to `install.sh`; rejecting
+typos before image build is worth the small duplication.
+
+`Engine.Up` performs the same check as a backstop for any feature whose
+metadata wasn't resolved earlier (e.g. injected mutations). On the
+pre-baked-image hot path, features marked `AlreadyInstalled` from the
+base image's `devcontainer.metadata` label skip resolution entirely;
+their options were validated when the image was originally built, so
+re-validating without remote metadata would force unnecessary fetches.
 
 ## 5. DAG ordering
 
@@ -170,11 +187,13 @@ USER root
 COPY ./build-context/ /tmp/dc-features/
 RUN chmod -R 0755 /tmp/dc-features
 
+ARG _DEV_CONTAINERS_IMAGE_USER=root
+
 # --- per-feature layers (in install order) ---
 RUN \
   echo "_CONTAINER_USER_HOME=$(getent passwd root | cut -d: -f6)" \
     >> /tmp/dc-features/builtin.env && \
-  echo "_REMOTE_USER_HOME=$(getent passwd $(whoami) | cut -d: -f6)" \
+  echo "_REMOTE_USER_HOME=$(getent passwd ${_DEV_CONTAINERS_IMAGE_USER:-root} | cut -d: -f6)" \
     >> /tmp/dc-features/builtin.env
 
 # Feature 0: ghcr.io/devcontainers/features/node:1
@@ -189,7 +208,6 @@ RUN cd /tmp/dc-features/1 \
 # --- accumulated metadata ---
 LABEL devcontainer.metadata='[<merged JSON, see §7>]'
 
-ARG _DEV_CONTAINERS_IMAGE_USER=root
 USER $_DEV_CONTAINERS_IMAGE_USER
 ```
 
@@ -358,12 +376,19 @@ Resolved during feature design review (2026-05-06):
    `feature.Order`. Warning surfaces as `WarnDeepFeatureChain`; error
    surfaces as `*FeatureDAGTooDeepError{Depth, Path}`.
 
-5. **`Resolve` populates partial `Features`; `Engine.Up` does fetch +
-   full DAG.** `Resolve` parses the features map, applies
-   `overrideFeatureInstallOrder`, merges user options with what's
-   defaultable without fetching; leaves `Metadata`, `Dir`, `ResolvedRef`
-   empty and `AlreadyInstalled` false. `Engine.Up` reads the base
-   image's `devcontainer.metadata` label, marks `AlreadyInstalled` for
-   matching features, and fetches only the rest — preserving the consumer's
+5. **Two layers of "Resolve"; `Engine.Up` orchestrates them.** Two
+   distinct operations share the name and should not be conflated:
+   - **Config-level** `devcontainer.Resolve` parses the features map,
+     applies `overrideFeatureInstallOrder`, and merges user options with
+     what's defaultable without fetching. It intentionally leaves each
+     `ResolvedFeature`'s `Metadata`, `Dir`, `ResolvedRef` empty and
+     `AlreadyInstalled` false.
+   - **Feature-level** `feature.Store.Resolve` (§3) performs the actual
+     fetch for one ref and returns a `*Resolved` with `Metadata`, `Dir`,
+     and `ResolvedRef` populated.
+
+   `Engine.Up` reads the base image's `devcontainer.metadata` label,
+   marks `AlreadyInstalled` for matching features, and then calls
+   `feature.Store.Resolve` only for the rest — preserving the consumer's
    pre-baked-image hot path. M1's stubbed `WarnUnsupportedFeatureField`
    warning goes away in PR6.

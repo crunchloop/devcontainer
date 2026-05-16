@@ -16,7 +16,7 @@ changes are required by this design.
 
 ## 1. Layering
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────┐
 │ Engine (devcontainer pkg)                                        │
 │   selects runtime.Runtime impl by EngineOptions                  │
@@ -158,9 +158,11 @@ and source-level breakage between minor versions:
   0.12.x exports product `ContainerAPIClient` with type
   `ContainerClient`.
 
-**Rule:** `Package.swift` uses `.package(url: ..., exact: "0.12.x")`.
-Bumps are their own PRs, gated by re-running the parity integration
-suite (PR-H) against the new version. We do NOT use `from:` or `branch:`.
+**Rule:** `Package.swift` uses `.package(url: ..., exact: "0.12.3")` —
+SwiftPM's `exact:` requires a fully-qualified semver and rejects
+wildcards. Bumps are their own PRs, gated by re-running the parity
+integration suite (PR-H) against the new version. We do NOT use `from:`
+or `branch:`.
 
 ## 6. Build & distribution
 
@@ -255,7 +257,7 @@ the load-bearing assumptions before writing this design:
 4. **Round-trip on 0.12.3 returns the full `SystemHealth` schema.**
    `ClientHealthCheck.ping` from a cgo-linked Go binary:
 
-   ```
+   ```text
    ping ok: SystemHealth(
      appRoot: file:///.../Application Support/com.apple.container/,
      installRoot: file:///opt/homebrew/Cellar/container/0.12.3/,

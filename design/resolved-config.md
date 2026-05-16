@@ -12,7 +12,7 @@ Getting this right is the single most important early decision.
 
 Four conceptual stages:
 
-```
+```text
 ┌─────────┐  parse   ┌─────────┐  merge   ┌─────────┐  substitute  ┌──────────┐
 │  files  │ ───────▶ │   raw   │ ───────▶ │ merged  │ ───────────▶ │ resolved │
 └─────────┘          └─────────┘          └─────────┘              └──────────┘
@@ -303,7 +303,7 @@ mutate the `ResolvedConfig`.
 
 Stable hash of `(LocalWorkspaceFolder, configPath)`:
 
-```
+```text
 devcontainerId = base32(sha256(localWorkspaceFolder + "\x00" + configPath))[:16]
 ```
 

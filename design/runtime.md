@@ -14,7 +14,7 @@ shape; this doc fills in the operational details.
 
 ## 1. Layering
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────┐
 │ Caller (your application, CLI, tests, ...)                               │
 │   eng.Up(ctx, UpOptions{...}) → *Workspace                       │
@@ -64,6 +64,7 @@ type Runtime interface {
 
     ExecContainer(ctx context.Context, id string, opts ExecOptions) (ExecResult, error)
     InspectContainer(ctx context.Context, id string) (*ContainerDetails, error)
+    InspectImage(ctx context.Context, ref string) (*ImageDetails, error)
     ContainerLogs(ctx context.Context, id string, w io.Writer, follow bool) error
 
     // FindContainerByLabel returns the most recently created container
@@ -83,6 +84,8 @@ Notes:
 - `ExecOptions` carries Cmd, Env, User, WorkingDir, Tty, Stdin/out/err.
   Returns `ExecResult{ExitCode, Stdout, Stderr}` for the buffered case;
   streaming is via the io.Writers in options.
+- `InspectImage` returns labels, env, and other image config — load-bearing
+  for the `devcontainer.metadata` pre-baked-image hot path (features.md §7).
 
 ## 3. `Container` and `ContainerDetails`
 

@@ -89,7 +89,7 @@ Compose is a 100+ page spec. We do not reimplement it. We reimplement the
 | `services.<name>.restart` | Passthrough to `RunSpec.RestartPolicy`. |
 | `services.<name>.labels` | Merged with our project-scoping labels (§3.1). |
 | `services.<name>.networks` (default network only) | Project gets one network (`<project>_default`); services join it. |
-| `services.<name>.network_mode: service:<other>` | Single edge case; needed for sidecars sharing network namespace. |
+| `services.<name>.network_mode: service:<other>` | Single edge case; needed for sidecars sharing network namespace. **Docker backend only** — Apple's VM-per-container model cannot share namespaces (see §11.3 R4). |
 | `volumes:` top-level | Named volume creation with project-scoped names. |
 | Variable interpolation (`${VAR}`) | Handled by compose-go; we never touch the substituted output. |
 | `extends:` (local files) | Handled by compose-go. |
