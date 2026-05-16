@@ -24,9 +24,11 @@ go.work.sum
 .env
 .env.local
 
-# Internal design docs (not yet public)
+# Internal planning docs (not public). The published architectural
+# design records live in design/; design/private/ is reserved for
+# work-in-progress drafts, milestone trackers, etc.
 PRD.md
-design/
+design/private/
 
-# M6 apple-container spike (private until M6 starts / repo flips public)
+# Local applecontainer working directory (not committed).
 examples/applecontainer-spike/

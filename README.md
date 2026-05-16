@@ -286,6 +286,13 @@ apiserver — skipped when the daemon isn't running. CI runs both the
 Linux + Docker suite and a `macos-26` job that builds the Swift
 bridge and runs the applecontainer unit tests.
 
+## Design
+
+Architectural notes — the choices behind the public API and why
+they were made — live under [`design/`](design/README.md). Useful
+when contributing or when embedding the library in a non-trivial
+way; not required reading for normal use.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports welcome via
