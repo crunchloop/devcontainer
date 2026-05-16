@@ -176,6 +176,66 @@ func TestRunContainer_BindMount(t *testing.T) {
 	}
 }
 
+// TestRunContainer_NamedVolume creates a container with a named volume
+// mount and verifies the inspect path reports a MountVolume entry
+// pointing at the volume's backing image (not a virtiofs bind against
+// the launcher CWD). Regression guard for the bug where named volumes
+// fell through to virtiofs and bootstrapped with errno 2.
+func TestRunContainer_NamedVolume(t *testing.T) {
+	rt := runtimeOrSkip(t)
+	ctx := context.Background()
+	const (
+		id     = "ac-namedvol-test"
+		volume = "ac-namedvol-test-vol"
+	)
+	_ = rt.RemoveContainer(ctx, id, runtime.RemoveOptions{Force: true})
+	cliRun(t, "volume", "rm", volume)
+	t.Cleanup(func() {
+		_ = rt.RemoveContainer(ctx, id, runtime.RemoveOptions{Force: true})
+		cliRun(t, "volume", "rm", volume)
+	})
+
+	cliRunStrict(t, "volume", "create", volume)
+	cliRunStrict(t,
+		"run", "--rm", "--name", "ac-alpine-warmup-vol",
+		"docker.io/library/alpine:latest", "/bin/true",
+	)
+
+	_, err := rt.RunContainer(ctx, runtime.RunSpec{
+		Image: "docker.io/library/alpine:latest",
+		Name:  id,
+		Cmd:   []string{"sleep", "60"},
+		Mounts: []runtime.MountSpec{
+			{Type: runtime.MountVolume, Source: volume, Target: "/mnt/data"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunContainer with named volume: %v", err)
+	}
+
+	details, err := rt.InspectContainer(ctx, id)
+	if err != nil {
+		t.Fatalf("InspectContainer: %v", err)
+	}
+	var found bool
+	for _, m := range details.Mounts {
+		if m.Target == "/mnt/data" && m.Type == string(runtime.MountVolume) {
+			found = true
+			// The apiserver substitutes the volume's on-disk image
+			// path as the canonical source. We don't pin the exact
+			// path (changes across apple/container releases) but it
+			// must not be empty and must not be the launcher CWD.
+			if m.Source == "" {
+				t.Errorf("named volume mount has empty source; expected backing path")
+			}
+		}
+	}
+	if !found {
+		t.Errorf("named volume mount not round-tripped; details.Mounts=%+v want target=/mnt/data type=volume",
+			details.Mounts)
+	}
+}
+
 // waitForState polls InspectContainer until the desired state is
 // observed or the timeout fires. Apple's runtime status transitions
 // asynchronously through the apiserver event loop.

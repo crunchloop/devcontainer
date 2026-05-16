@@ -103,7 +103,11 @@ private func runContainer(spec: RunSpecJSON) async throws {
     var cfg = ContainerConfiguration(id: spec.id, image: img.description, process: process)
     cfg.platform = platform
     cfg.labels = spec.labels ?? [:]
-    cfg.mounts = try (spec.mounts ?? []).map(toFilesystem)
+    var resolvedMounts: [Filesystem] = []
+    for m in spec.mounts ?? [] {
+        resolvedMounts.append(try await toFilesystem(m))
+    }
+    cfg.mounts = resolvedMounts
     cfg.capAdd = spec.capAdd ?? []
     cfg.useInit = spec.initProcess ?? false
     // Enable Rosetta when running an amd64 container on an arm64
@@ -232,7 +236,7 @@ private func imageConfigUser(_ cfg: ImageConfig?) -> ProcessConfiguration.User {
     return .id(uid: 0, gid: 0)
 }
 
-private func toFilesystem(_ m: MountJSON) throws -> Filesystem {
+private func toFilesystem(_ m: MountJSON) async throws -> Filesystem {
     var options: MountOptions = []
     if m.readOnly ?? false {
         options.append("ro")
@@ -246,13 +250,23 @@ private func toFilesystem(_ m: MountJSON) throws -> Filesystem {
     case "tmpfs":
         return .tmpfs(destination: m.target, options: options)
     case "volume":
-        // PR-C scope decision: treat named volumes as virtiofs binds
-        // against the supplied source. Real named-volume support (with
-        // the apiserver pre-creating the volume) is a later PR.
-        guard let src = m.source, !src.isEmpty else {
-            throw BridgeError.invalidArgument("volume mount on this backend currently requires source (named-volume support is deferred)")
+        // Named volume: source carries the volume name. Resolve it
+        // through ClientVolume.inspect to fetch the backing image
+        // path + filesystem format the apiserver expects, then build
+        // a proper Filesystem.volume. Treating the spec as a virtiofs
+        // bind (PR-C's interim shape) makes the apiserver resolve the
+        // name against CWD and fail with errno 2 at bootstrap.
+        guard let name = m.source, !name.isEmpty else {
+            throw BridgeError.invalidArgument("named volume mount requires source (volume name)")
         }
-        return .virtiofs(source: src, destination: m.target, options: options)
+        let vol = try await ClientVolume.inspect(name)
+        return .volume(
+            name: vol.name,
+            format: vol.format,
+            source: vol.source,
+            destination: m.target,
+            options: options
+        )
     default:
         throw BridgeError.invalidArgument("unknown mount type \"\(m.type)\"")
     }
