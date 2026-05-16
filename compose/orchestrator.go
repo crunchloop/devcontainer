@@ -647,6 +647,7 @@ func serviceToRunSpec(
 		Env:           env,
 		Labels:        labels,
 		Mounts:        mounts,
+		Networks:      []string{plan.ProjectName + "_default"},
 		Ports:         portsOf(svc.Ports),
 		RestartPolicy: restartPolicyOf(svc.Restart),
 		HealthCheck:   healthCheckOf(svc.HealthCheck),

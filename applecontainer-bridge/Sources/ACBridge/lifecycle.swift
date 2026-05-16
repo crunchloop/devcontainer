@@ -20,6 +20,13 @@ private struct RunSpecJSON: Decodable {
     var env: [String]?
     var labels: [String: String]?
     var mounts: [MountJSON]?
+    // Network IDs the container should be attached to. Empty / nil
+    // means "no explicit attachment" — apple's apiserver auto-joins
+    // the built-in default network when the field is unset. The
+    // compose orchestrator passes <project>_default here so its
+    // services land on the project network it created via
+    // NetworkClient.create.
+    var networks: [String]?
     var initProcess: Bool?
     var capAdd: [String]?
     var overrideCommand: Bool?
@@ -84,6 +91,15 @@ private func runContainer(spec: RunSpecJSON) async throws {
     cfg.mounts = try (spec.mounts ?? []).map(toFilesystem)
     cfg.capAdd = spec.capAdd ?? []
     cfg.useInit = spec.initProcess ?? false
+    // Attach explicitly to any networks the caller requested. The
+    // hostname per attachment defaults to the container id, matching
+    // apple/container CLI's behavior. Empty Networks => no override:
+    // the apiserver attaches to the built-in default automatically.
+    if let nets = spec.networks, !nets.isEmpty {
+        cfg.networks = nets.map {
+            AttachmentConfiguration(network: $0, options: AttachmentOptions(hostname: spec.id))
+        }
+    }
 
     let kernel = try await ClientKernel.getDefaultKernel(for: .current)
     let options = ContainerCreateOptions(autoRemove: false)

@@ -319,6 +319,13 @@ type RunSpec struct {
 	// the compose orchestrator to translate `healthcheck:` directives.
 	HealthCheck *HealthCheckSpec
 
+	// Networks lists project networks the container joins. Empty
+	// means "backend default" — docker assigns the default bridge;
+	// apple assigns the built-in vmnet network. Used by the compose
+	// orchestrator to attach services to the project network it
+	// just created via CreateNetwork.
+	Networks []string
+
 	// Ports lists the ports this container publishes to the host.
 	// Empty means no publishing (the container's ports are reachable
 	// inside the project network but not from the host). Used by
