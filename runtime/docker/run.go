@@ -67,7 +67,7 @@ func (r *Runtime) RunContainer(ctx context.Context, spec runtime.RunSpec) (*runt
 		Name:             spec.Name,
 		Config:           cfg,
 		HostConfig:       hostCfg,
-		NetworkingConfig: toNetworkingConfig(spec.Networks, spec.Name),
+		NetworkingConfig: toNetworkingConfig(spec.Networks, spec.Name, spec.Labels),
 	})
 	if err != nil {
 		if isImageNotFound(err) {
@@ -357,19 +357,28 @@ func toHealthcheck(h *runtime.HealthCheckSpec) *container.HealthConfig {
 
 // toNetworkingConfig builds the per-network endpoint map for
 // docker's ContainerCreate. Empty Networks returns nil so the
-// daemon uses its default behavior (bridge). The container name
-// is registered as an alias so compose's service-name DNS resolves
-// when this container is reached from peers on the project network.
-func toNetworkingConfig(networks []string, containerName string) *network.NetworkingConfig {
+// daemon uses its default behavior (bridge).
+//
+// Aliases on each endpoint are populated with both the container
+// name and, when present, the compose service name (read off the
+// labels). Compose's project network resolves services by their
+// service name — without that alias, getent hosts <service> from a
+// peer returns NXDOMAIN. The container-name alias preserves
+// docker's default behavior for callers that aren't using compose.
+func toNetworkingConfig(networks []string, containerName string, labels map[string]string) *network.NetworkingConfig {
 	if len(networks) == 0 {
 		return nil
+	}
+	aliases := []string{containerName}
+	if svc := labels["com.docker.compose.service"]; svc != "" && svc != containerName {
+		aliases = append(aliases, svc)
 	}
 	out := &network.NetworkingConfig{
 		EndpointsConfig: make(map[string]*network.EndpointSettings, len(networks)),
 	}
 	for _, n := range networks {
 		out.EndpointsConfig[n] = &network.EndpointSettings{
-			Aliases: []string{containerName},
+			Aliases: append([]string(nil), aliases...),
 		}
 	}
 	return out

@@ -65,13 +65,27 @@ func ApplyRunOverride(project *composetypes.Project, primaryService string, ov O
 		return fmt.Errorf("ApplyRunOverride: primary service %q not found in project", primaryService)
 	}
 
+	// Dedupe by target. The user's compose file may already declare
+	// the workspace bind mount (a common idiom for compose-source
+	// devcontainers), in which case appending ours produces a
+	// duplicate-mount-point error at ContainerCreate time. If the
+	// target is already present, leave the user's source as-is; our
+	// declarations override only when the target wasn't declared.
+	existingTargets := make(map[string]struct{}, len(svc.Volumes))
+	for _, v := range svc.Volumes {
+		existingTargets[v.Target] = struct{}{}
+	}
 	for _, b := range ov.ExtraBindMounts {
+		if _, exists := existingTargets[b.Target]; exists {
+			continue
+		}
 		svc.Volumes = append(svc.Volumes, composetypes.ServiceVolumeConfig{
 			Type:     composetypes.VolumeTypeBind,
 			Source:   b.Source,
 			Target:   b.Target,
 			ReadOnly: b.ReadOnly,
 		})
+		existingTargets[b.Target] = struct{}{}
 	}
 
 	if len(ov.ExtraEnvironment) > 0 {
