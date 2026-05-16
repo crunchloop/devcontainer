@@ -5,6 +5,8 @@ package applecontainer
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -217,6 +219,11 @@ func TestRunContainer_NamedVolume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InspectContainer: %v", err)
 	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	cwd = filepath.Clean(cwd)
 	var found bool
 	for _, m := range details.Mounts {
 		if m.Target == "/mnt/data" && m.Type == string(runtime.MountVolume) {
@@ -224,9 +231,15 @@ func TestRunContainer_NamedVolume(t *testing.T) {
 			// The apiserver substitutes the volume's on-disk image
 			// path as the canonical source. We don't pin the exact
 			// path (changes across apple/container releases) but it
-			// must not be empty and must not be the launcher CWD.
+			// must not be empty and must not be the launcher CWD —
+			// the original bug had a non-empty source rooted at the
+			// launcher's working directory (apple's virtiofs path
+			// resolution), so empty-source alone wouldn't catch it.
 			if m.Source == "" {
 				t.Errorf("named volume mount has empty source; expected backing path")
+			}
+			if strings.HasPrefix(filepath.Clean(m.Source), cwd+string(filepath.Separator)) {
+				t.Errorf("named volume mount source rooted at launcher CWD: source=%q cwd=%q", m.Source, cwd)
 			}
 		}
 	}
