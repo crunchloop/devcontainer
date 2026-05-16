@@ -119,4 +119,17 @@ type Capabilities struct {
 	//
 	// Apple 0.12.x: false (apple/container #889).
 	SharedVolumes bool
+
+	// ServiceNameDNS: containers on the project network can resolve
+	// peers by service name out of the box (compose's default
+	// behavior). When false, the orchestrator falls back to a
+	// post-start /etc/hosts patch driven by InspectContainer +
+	// ExecContainer to seed the service→IP map.
+	//
+	// Apple 0.12.x: false (probe 3; apple/container #856 / 856
+	// resolution upstream is open). The hosts-patch workaround
+	// covers depends_on-declared edges; intra-level peers without a
+	// depends_on edge race and may miss the patch on first DNS
+	// lookup — documented limitation on this backend.
+	ServiceNameDNS bool
 }

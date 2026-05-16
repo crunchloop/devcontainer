@@ -16,6 +16,7 @@ func dockerCaps() runtime.Capabilities {
 		NamespaceSharing: true,
 		RestartPolicies:  true,
 		SharedVolumes:    true,
+		ServiceNameDNS:   true,
 	}
 }
 

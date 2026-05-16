@@ -57,7 +57,7 @@ type mockContainer struct {
 
 func newMockRuntime() *mockRuntime {
 	return &mockRuntime{
-		Caps:       runtime.Capabilities{Healthchecks: true, ExitCodes: true, NamespaceSharing: true, RestartPolicies: true, SharedVolumes: true},
+		Caps:       runtime.Capabilities{Healthchecks: true, ExitCodes: true, NamespaceSharing: true, RestartPolicies: true, SharedVolumes: true, ServiceNameDNS: true},
 		networks:   map[string]map[string]string{},
 		volumes:    map[string]map[string]string{},
 		containers: map[string]*mockContainer{},

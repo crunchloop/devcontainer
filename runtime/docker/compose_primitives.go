@@ -199,6 +199,7 @@ func (r *Runtime) Capabilities() runtime.Capabilities {
 		NamespaceSharing: true,
 		RestartPolicies:  true,
 		SharedVolumes:    true,
+		ServiceNameDNS:   true,
 	}
 }
 

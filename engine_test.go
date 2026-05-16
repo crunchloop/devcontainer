@@ -215,6 +215,7 @@ func (f *fakeRuntime) Capabilities() runtime.Capabilities {
 		NamespaceSharing: true,
 		RestartPolicies:  true,
 		SharedVolumes:    true,
+		ServiceNameDNS:   true,
 	}
 }
 

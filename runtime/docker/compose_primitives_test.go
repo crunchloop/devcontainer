@@ -60,6 +60,7 @@ func TestCapabilities(t *testing.T) {
 		NamespaceSharing: true,
 		RestartPolicies:  true,
 		SharedVolumes:    true,
+		ServiceNameDNS:   true,
 	}
 	if got != want {
 		t.Errorf("Capabilities = %+v, want %+v", got, want)
