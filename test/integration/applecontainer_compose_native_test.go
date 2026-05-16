@@ -66,7 +66,6 @@ func TestAppleContainer_Compose_Native_FullFlow(t *testing.T) {
 	// Reuse the apple-container engine constructor but layer in the
 	// ComposeBackend flag. Skips if the apiserver isn't running.
 	_, rt := newAppleContainerEngine(t)
-	defer func() {}()
 	eng, err := devcontainer.New(devcontainer.EngineOptions{
 		Runtime:        rt,
 		ComposeBackend: devcontainer.ComposeBackendNative,

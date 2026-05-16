@@ -275,7 +275,16 @@ func refuseSharedVolumes(proj *composetypes.Project) error {
 			set[svcName] = struct{}{}
 		}
 	}
-	for volName, set := range users {
+	// Iterate volume names in sorted order so that when multiple
+	// volumes are shared, the error consistently reports the same
+	// one (test stability + better user experience on repeat runs).
+	volNames := make([]string, 0, len(users))
+	for volName := range users {
+		volNames = append(volNames, volName)
+	}
+	sort.Strings(volNames)
+	for _, volName := range volNames {
+		set := users[volName]
 		if len(set) < 2 {
 			continue
 		}

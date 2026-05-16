@@ -537,9 +537,14 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 	case ComposeBackendNative:
 		return e.upComposeNative(ctx, cfg, opts, project, src, projectName,
 			finalImage, bindMounts, overrideEnv, overrideLabels)
-	default:
+	case ComposeBackendShellout:
 		return e.upComposeShellout(ctx, cfg, opts, project, src, projectName,
 			workingDir, finalImage, bindMounts, overrideEnv, overrideLabels)
+	default:
+		// Reject unknown values explicitly so a typo in
+		// EngineOptions.ComposeBackend doesn't silently route to
+		// shellout and require a compose-plugin install at runtime.
+		return nil, fmt.Errorf("compose source: unknown ComposeBackend value %d", e.opts.ComposeBackend)
 	}
 }
 
@@ -792,19 +797,39 @@ func mapToEnvList(m map[string]string) []string {
 // composeDownExisting tears down a running compose project found by
 // label scan during a Recreate-mode Up. We extract the project name
 // from the existing container's compose label.
+//
+// Dispatches to the same backend as Up: native callers MUST NOT
+// fall through to ComposeRuntime.ComposeDown (it would shell out to
+// docker compose, which the native flag is meant to avoid, AND it
+// won't see services the orchestrator created without the shellout
+// path's project layout).
 func (e *Engine) composeDownExisting(ctx context.Context, existing *runtime.Container) error {
-	cr, ok := e.runtime.(runtime.ComposeRuntime)
-	if !ok {
-		// Fallback: just remove the single container we found.
-		return e.removeContainer(ctx, existing.ID)
-	}
-	// Inspect to read labels — Container struct doesn't carry them.
+	// Inspect to read labels — Container struct populates them on
+	// the FindContainerByLabel path but not all callers.
 	details, err := e.runtime.InspectContainer(ctx, existing.ID)
 	if err != nil {
 		return e.removeContainer(ctx, existing.ID)
 	}
 	projectName := details.Labels["com.docker.compose.project"]
 	if projectName == "" {
+		return e.removeContainer(ctx, existing.ID)
+	}
+
+	if e.opts.ComposeBackend == ComposeBackendNative {
+		orch := compose.NewOrchestrator(e.runtime, "")
+		if err := orch.Down(ctx, &compose.DownPlan{
+			ProjectName: projectName,
+		}); err != nil {
+			return fmt.Errorf("compose down for recreate (native): %w", err)
+		}
+		return nil
+	}
+
+	cr, ok := e.runtime.(runtime.ComposeRuntime)
+	if !ok {
+		// Shellout backend selected but runtime doesn't support it;
+		// fall back to removing the single container we saw rather
+		// than failing the whole Recreate.
 		return e.removeContainer(ctx, existing.ID)
 	}
 	if err := cr.ComposeDown(ctx, runtime.ComposeDownSpec{

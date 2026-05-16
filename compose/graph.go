@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"fmt"
 	"sort"
 
 	composetypes "github.com/compose-spec/compose-go/v2/types"
@@ -27,6 +28,9 @@ type Level []string
 // dependency edge for ordering even though compose-go does not put
 // it in DependsOn.
 func TopoSort(project *composetypes.Project) ([]Level, error) {
+	if project == nil {
+		return nil, fmt.Errorf("compose.TopoSort: nil project")
+	}
 	services := project.Services
 
 	// Build the dependency graph: each service -> set of services it

@@ -110,8 +110,13 @@ func (e *Engine) downCompose(ctx context.Context, ws *Workspace, opts DownOption
 		// approximation applies to both backends — we don't have a
 		// "compose stop" equivalent on either path that doesn't
 		// involve enumerating every container.
-		if err := e.runtime.StopContainer(ctx, ws.Container.ID, runtime.StopOptions{}); err != nil && !isNotFound(err) {
-			return fmt.Errorf("stop compose primary %s: %w", ws.Container.ID, err)
+		if err := e.runtime.StopContainer(ctx, ws.Container.ID, runtime.StopOptions{}); err != nil {
+			if !isNotFound(err) {
+				return fmt.Errorf("stop compose primary %s: %w", ws.Container.ID, err)
+			}
+			// Container already gone — don't synthesize a stop
+			// transition for event consumers.
+			return nil
 		}
 		bus.Emit(events.ContainerStoppedEvent{ContainerID: ws.Container.ID, ExitCode: -1})
 		return nil

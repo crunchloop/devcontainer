@@ -209,7 +209,12 @@ func (r *Runtime) Capabilities() runtime.Capabilities {
 // CreateNetwork / CreateVolume idempotency checks.
 func labelsMatch(have, want map[string]string) bool {
 	for k, v := range want {
-		if have[k] != v {
+		// Explicit existence check: have[k] returns "" for missing
+		// keys, which would falsely match want[k] == "" and let
+		// CreateNetwork / CreateVolume reuse a label-less resource
+		// when the caller actually requested an empty-valued label.
+		hv, ok := have[k]
+		if !ok || hv != v {
 			return false
 		}
 	}
