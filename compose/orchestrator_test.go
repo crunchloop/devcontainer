@@ -29,9 +29,9 @@ type mockRuntime struct {
 	Caps runtime.Capabilities
 
 	// Resources
-	networks map[string]map[string]string // name -> labels
-	volumes  map[string]map[string]string // name -> labels
-	containers map[string]*mockContainer  // id -> container
+	networks   map[string]map[string]string // name -> labels
+	volumes    map[string]map[string]string // name -> labels
+	containers map[string]*mockContainer    // id -> container
 
 	// Call log for assertions
 	createNetworkCalls int
@@ -42,8 +42,8 @@ type mockRuntime struct {
 	removeCalls        int
 
 	// Hooks (set to override default behavior).
-	OnRunContainer  func(spec runtime.RunSpec) (*runtime.Container, error)
-	OnInspect       func(id string, base *runtime.ContainerDetails) *runtime.ContainerDetails
+	OnRunContainer func(spec runtime.RunSpec) (*runtime.Container, error)
+	OnInspect      func(id string, base *runtime.ContainerDetails) *runtime.ContainerDetails
 }
 
 type mockContainer struct {
@@ -391,7 +391,7 @@ func TestUp_HealthGateTimesOut(t *testing.T) {
 
 	// app depends on db with service_healthy.
 	svcs := composetypes.Services{
-		"db":  composetypes.ServiceConfig{Name: "db", Image: "alpine"},
+		"db": composetypes.ServiceConfig{Name: "db", Image: "alpine"},
 		"app": composetypes.ServiceConfig{
 			Name: "app", Image: "alpine",
 			DependsOn: composetypes.DependsOnConfig{

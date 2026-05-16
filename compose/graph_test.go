@@ -28,7 +28,7 @@ func projectWith(deps map[string][]string) *composetypes.Project {
 
 func TestTopoSort_NoDeps(t *testing.T) {
 	proj := projectWith(map[string][]string{
-		"app":    nil,
+		"app":     nil,
 		"sidecar": nil,
 	})
 	levels, err := TopoSort(proj)

@@ -67,9 +67,9 @@ func goStringAndFree(c *C.char) string {
 // ContainerSnapshot.Codable emits. Only the fields we use are listed;
 // extras are ignored by encoding/json.
 type containerSnapshot struct {
-	Configuration containerConfiguration  `json:"configuration"`
-	Status        string                  `json:"status"`
-	StartedDate   *time.Time              `json:"startedDate,omitempty"`
+	Configuration containerConfiguration   `json:"configuration"`
+	Status        string                   `json:"status"`
+	StartedDate   *time.Time               `json:"startedDate,omitempty"`
 	Networks      []containerNetworkAttach `json:"networks,omitempty"`
 }
 
@@ -81,11 +81,11 @@ type containerNetworkAttach struct {
 }
 
 type containerConfiguration struct {
-	ID          string                 `json:"id"`
-	Image       imageDescription       `json:"image"`
-	Mounts      []containerMount       `json:"mounts"`
-	Labels      map[string]string      `json:"labels"`
-	InitProcess containerInitProcess   `json:"initProcess"`
+	ID          string               `json:"id"`
+	Image       imageDescription     `json:"image"`
+	Mounts      []containerMount     `json:"mounts"`
+	Labels      map[string]string    `json:"labels"`
+	InitProcess containerInitProcess `json:"initProcess"`
 }
 
 type imageDescription struct {
@@ -93,9 +93,9 @@ type imageDescription struct {
 }
 
 type containerInitProcess struct {
-	Environment      []string                `json:"environment"`
-	WorkingDirectory string                  `json:"workingDirectory"`
-	User             json.RawMessage         `json:"user"`
+	Environment      []string        `json:"environment"`
+	WorkingDirectory string          `json:"workingDirectory"`
+	User             json.RawMessage `json:"user"`
 }
 
 // containerMount mirrors the subset of Apple's Filesystem we need for
@@ -230,12 +230,12 @@ func snapshotToDetails(s containerSnapshot) *runtime.ContainerDetails {
 	}
 
 	return &runtime.ContainerDetails{
-		Container:  *snapshotToContainer(s),
-		StartedAt:  startedAt,
-		User:       decodeUserString(s.Configuration.InitProcess.User),
-		Env:        s.Configuration.InitProcess.Environment,
-		Mounts:     mounts,
-		Labels:     labels,
+		Container: *snapshotToContainer(s),
+		StartedAt: startedAt,
+		User:      decodeUserString(s.Configuration.InitProcess.User),
+		Env:       s.Configuration.InitProcess.Environment,
+		Mounts:    mounts,
+		Labels:    labels,
 		// Created / FinishedAt / ExitCode are not in Apple's
 		// ContainerSnapshot. Left as zero values; later PRs can
 		// surface them via an additional XPC call if exposed.

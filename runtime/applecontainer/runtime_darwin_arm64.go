@@ -150,4 +150,3 @@ func bridgeVersion() string {
 // PullImage — PR-F (pull_darwin_arm64.go).
 // BuildImage — PR-G (build_darwin_arm64.go, partial: builder probe +
 //   typed not-implemented error; full BuildKit wiring is a follow-up).
-

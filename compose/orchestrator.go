@@ -355,21 +355,10 @@ func (o *Orchestrator) Down(ctx context.Context, plan *DownPlan) error {
 		}
 	}
 
-	// Project network.
-	nets, err := o.rt.ListContainers(ctx, runtime.LabelFilter{
-		Match: map[string]string{LabelComposeProject: plan.ProjectName},
-	})
-	_ = nets // ListNetworks would be needed for full parity; the
-	// network's name follows our naming convention, so we look it
-	// up via the spec the same way we created it. Skipping for v1:
-	// RemoveNetwork by name isn't on the interface — backends use
-	// IDs. The orchestrator therefore doesn't try to clean up the
-	// network in Down today. Production callers that want network
-	// cleanup pass the project, in which case we know the network
-	// name; the backend's NetworkList(name=<...>) would surface it.
-	// For minimal C6 scope this is a documented limitation; C8
-	// flips on RemoveNetwork once the engine's Down call site is
-	// wired.
+	// Project network removal is handled in a follow-up commit
+	// (RemoveNetwork by name requires a backend-side lookup that
+	// isn't yet on the interface). Documented limitation; see
+	// down_network_test.go once it lands.
 
 	if plan.RemoveVolumes {
 		if plan.Project != nil {
@@ -652,7 +641,7 @@ func serviceToRunSpec(
 		RestartPolicy: restartPolicyOf(svc.Restart),
 		HealthCheck:   healthCheckOf(svc.HealthCheck),
 		Init:          svc.Init != nil && *svc.Init,
-		CapAdd:        []string(svc.CapAdd),
+		CapAdd:        svc.CapAdd,
 	}
 }
 

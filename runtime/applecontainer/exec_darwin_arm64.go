@@ -121,12 +121,12 @@ func (r *Runtime) ExecContainer(ctx context.Context, id string, opts runtime.Exe
 	// copies drain before we return — losing stdout because the
 	// reader goroutine hadn't finished would be a silent footgun.
 	var (
-		wg          sync.WaitGroup
-		stdoutBuf   strings.Builder
-		stderrBuf   strings.Builder
-		stdoutSink  = pickWriter(opts.Stdout, &stdoutBuf)
-		stderrSink  = pickWriter(opts.Stderr, &stderrBuf)
-		copyErrCh   = make(chan error, 3)
+		wg         sync.WaitGroup
+		stdoutBuf  strings.Builder
+		stderrBuf  strings.Builder
+		stdoutSink = pickWriter(opts.Stdout, &stdoutBuf)
+		stderrSink = pickWriter(opts.Stderr, &stderrBuf)
+		copyErrCh  = make(chan error, 3)
 	)
 
 	if pipes.stdinWriter() != nil {
@@ -280,7 +280,7 @@ func openExecPipes(opts runtime.ExecOptions) (*execPipes, error) {
 	return p, nil
 }
 
-func (p *execPipes) stdinReadFd() int  { return fdOrMinusOne(p.stdinRead) }
+func (p *execPipes) stdinReadFd() int   { return fdOrMinusOne(p.stdinRead) }
 func (p *execPipes) stdoutWriteFd() int { return fdOrMinusOne(p.stdoutWrite) }
 func (p *execPipes) stderrWriteFd() int { return fdOrMinusOne(p.stderrWrite) }
 

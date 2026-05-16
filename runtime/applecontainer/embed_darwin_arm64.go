@@ -10,8 +10,8 @@ import "C"
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
 	_ "embed"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"

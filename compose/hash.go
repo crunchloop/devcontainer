@@ -34,8 +34,8 @@ import (
 // determinism across 1000 iterations + 500 shuffle trials.
 func ConfigHash(imageID string, svc composetypes.ServiceConfig) string {
 	type hashInput struct {
-		ImageID string                      `json:"image_id"`
-		Svc     composetypes.ServiceConfig  `json:"svc"`
+		ImageID string                     `json:"image_id"`
+		Svc     composetypes.ServiceConfig `json:"svc"`
 	}
 	b, err := json.Marshal(hashInput{ImageID: imageID, Svc: svc})
 	if err != nil {

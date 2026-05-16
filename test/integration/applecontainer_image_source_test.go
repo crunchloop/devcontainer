@@ -338,4 +338,3 @@ func writeFile(path, content string) error {
 func runtimeBuildSpec(contextDir, tag string) runtime.BuildSpec {
 	return runtime.BuildSpec{ContextPath: contextDir, Dockerfile: "Dockerfile", Tag: tag}
 }
-
