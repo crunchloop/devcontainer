@@ -217,6 +217,12 @@ func (m *mockRuntime) RemoveVolume(ctx context.Context, name string) error {
 }
 
 func (m *mockRuntime) ListContainers(ctx context.Context, filter runtime.LabelFilter) ([]runtime.Container, error) {
+	// Mirror the real Runtime contract: empty filters are rejected.
+	// Lets orchestrator regressions that drop the filter surface
+	// here instead of silently returning every container.
+	if len(filter.Match) == 0 {
+		return nil, errors.New("mockRuntime: ListContainers requires a non-empty filter")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []runtime.Container
@@ -230,6 +236,9 @@ func (m *mockRuntime) ListContainers(ctx context.Context, filter runtime.LabelFi
 }
 
 func (m *mockRuntime) ListImages(ctx context.Context, filter runtime.LabelFilter) ([]runtime.ImageRef, error) {
+	if len(filter.Match) == 0 {
+		return nil, errors.New("mockRuntime: ListImages requires a non-empty filter")
+	}
 	return nil, nil
 }
 
