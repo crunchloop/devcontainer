@@ -57,6 +57,10 @@ func (r *Runtime) RunContainer(ctx context.Context, spec runtime.RunSpec) (*runt
 		SecurityOpt:   spec.SecurityOpt,
 		PortBindings:  bindings,
 		RestartPolicy: toRestartPolicy(spec.RestartPolicy),
+		Resources: container.Resources{
+			Memory:   spec.MemoryBytes,
+			NanoCPUs: spec.NanoCPUs,
+		},
 	}
 	if spec.Init {
 		t := true

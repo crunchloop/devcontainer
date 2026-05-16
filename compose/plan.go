@@ -138,10 +138,7 @@ func refuseUnsupportedFields(proj *composetypes.Project) error {
 			})
 		}
 		if svc.Deploy != nil {
-			found = append(found, UnsupportedField{
-				Service: name, Field: "deploy",
-				Reason: "Swarm orchestration; not implemented",
-			})
+			found = append(found, deployUnsupported(name, svc.Deploy)...)
 		}
 		if svc.Develop != nil {
 			found = append(found, UnsupportedField{
@@ -299,4 +296,103 @@ func refuseSharedVolumes(proj *composetypes.Project) error {
 		}
 	}
 	return nil
+}
+
+// deployUnsupported collects refusals for sub-fields of deploy: that
+// this orchestrator can't honor. We accept deploy when it only carries
+// resources.limits with memory/cpus — that's how compose v3+ users
+// express per-service resource limits and it maps cleanly onto
+// RunSpec.MemoryBytes / RunSpec.NanoCPUs. Everything else inside
+// deploy: (replicas, mode, placement, update_config, rollback_config,
+// restart_policy, endpoint_mode, labels, resources.reservations,
+// non-memory/cpu limits) is Swarm-flavored and refused with a specific
+// reason so the user sees what they need to drop.
+func deployUnsupported(service string, d *composetypes.DeployConfig) []UnsupportedField {
+	var out []UnsupportedField
+	if m := d.Mode; m != "" && m != "replicated" {
+		out = append(out, UnsupportedField{
+			Service: service, Field: "deploy.mode",
+			Reason: "only the implicit single-replica mode is supported",
+		})
+	}
+	if r := d.Replicas; r != nil && *r != 1 {
+		out = append(out, UnsupportedField{
+			Service: service, Field: "deploy.replicas",
+			Reason: "multi-replica services are not supported",
+		})
+	}
+	if len(d.Labels) > 0 {
+		out = append(out, UnsupportedField{
+			Service: service, Field: "deploy.labels",
+			Reason: "use service-level labels instead",
+		})
+	}
+	if d.UpdateConfig != nil {
+		out = append(out, UnsupportedField{
+			Service: service, Field: "deploy.update_config",
+			Reason: "Swarm rolling-update; not implemented",
+		})
+	}
+	if d.RollbackConfig != nil {
+		out = append(out, UnsupportedField{
+			Service: service, Field: "deploy.rollback_config",
+			Reason: "Swarm rolling-update; not implemented",
+		})
+	}
+	if d.RestartPolicy != nil {
+		out = append(out, UnsupportedField{
+			Service: service, Field: "deploy.restart_policy",
+			Reason: "use the top-level restart: field instead",
+		})
+	}
+	if d.EndpointMode != "" {
+		out = append(out, UnsupportedField{
+			Service: service, Field: "deploy.endpoint_mode",
+			Reason: "Swarm load balancing; not implemented",
+		})
+	}
+	if len(d.Placement.Constraints) > 0 || len(d.Placement.Preferences) > 0 || d.Placement.MaxReplicas != 0 {
+		out = append(out, UnsupportedField{
+			Service: service, Field: "deploy.placement",
+			Reason: "Swarm scheduling; not implemented",
+		})
+	}
+	out = append(out, resourcesUnsupported(service, d.Resources)...)
+	return out
+}
+
+// resourcesUnsupported refuses anything inside deploy.resources beyond
+// limits.memory and limits.cpus. Reservations are silently dropped on
+// our runtimes today (apple has no equivalent; docker honors them but
+// we don't currently translate them), so refusing them surfaces the
+// silent loss to the user.
+func resourcesUnsupported(service string, r composetypes.Resources) []UnsupportedField {
+	var out []UnsupportedField
+	if r.Reservations != nil {
+		out = append(out, UnsupportedField{
+			Service: service, Field: "deploy.resources.reservations",
+			Reason: "soft-limit reservations are not honored on this runtime",
+		})
+	}
+	if r.Limits != nil {
+		if r.Limits.Pids != 0 {
+			out = append(out, UnsupportedField{
+				Service: service, Field: "deploy.resources.limits.pids",
+				Reason: "pids limit is not implemented",
+			})
+		}
+		if len(r.Limits.Devices) > 0 {
+			out = append(out, UnsupportedField{
+				Service: service, Field: "deploy.resources.limits.devices",
+				Reason: "device requests are not implemented",
+			})
+		}
+		if len(r.Limits.GenericResources) > 0 {
+			out = append(out, UnsupportedField{
+				Service: service, Field: "deploy.resources.limits.generic_resources",
+				Reason: "generic resources are not implemented",
+			})
+		}
+	}
+	return out
 }

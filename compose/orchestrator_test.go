@@ -521,7 +521,7 @@ func TestUp_RefusesUnsupportedFields(t *testing.T) {
 	orch := NewOrchestrator(rt, "docker")
 	proj := &composetypes.Project{
 		Services: composetypes.Services{
-			"app": composetypes.ServiceConfig{Name: "app", Image: "alpine", Deploy: &composetypes.DeployConfig{}},
+			"app": composetypes.ServiceConfig{Name: "app", Image: "alpine", Deploy: &composetypes.DeployConfig{Mode: "global"}},
 		},
 	}
 	_, err := orch.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-x"})
@@ -692,6 +692,90 @@ func TestUp_AnonymousVolumesFlowThrough(t *testing.T) {
 	got := seenSpec.Mounts[0]
 	if got.Type != runtime.MountVolume || got.Source != "" || got.Target != "/data" {
 		t.Errorf("anonymous mount = %+v, want {Type:volume Source:\"\" Target:/data}", got)
+	}
+}
+
+// TestUp_ResourceLimitsTranslate pins the compose-to-RunSpec mapping
+// for memory and CPU limits, including the deploy.resources.limits >
+// legacy mem_limit/cpus precedence. Backends translate from RunSpec;
+// this test pins the orchestrator side.
+func TestUp_ResourceLimitsTranslate(t *testing.T) {
+	cases := []struct {
+		name     string
+		mut      func(*composetypes.ServiceConfig)
+		wantMem  int64
+		wantNano int64
+	}{
+		{
+			name: "deploy_limits",
+			mut: func(s *composetypes.ServiceConfig) {
+				s.Deploy = &composetypes.DeployConfig{
+					Resources: composetypes.Resources{
+						Limits: &composetypes.Resource{
+							MemoryBytes: composetypes.UnitBytes(2 * 1024 * 1024 * 1024),
+							NanoCPUs:    composetypes.NanoCPUs(2.5),
+						},
+					},
+				}
+			},
+			wantMem:  2 * 1024 * 1024 * 1024,
+			wantNano: 2_500_000_000,
+		},
+		{
+			name: "legacy_only",
+			mut: func(s *composetypes.ServiceConfig) {
+				s.MemLimit = composetypes.UnitBytes(512 * 1024 * 1024)
+				s.CPUS = 1.5
+			},
+			wantMem:  512 * 1024 * 1024,
+			wantNano: 1_500_000_000,
+		},
+		{
+			name: "deploy_overrides_legacy",
+			mut: func(s *composetypes.ServiceConfig) {
+				s.MemLimit = composetypes.UnitBytes(128 * 1024 * 1024)
+				s.CPUS = 1.0
+				s.Deploy = &composetypes.DeployConfig{
+					Resources: composetypes.Resources{
+						Limits: &composetypes.Resource{
+							MemoryBytes: composetypes.UnitBytes(4 * 1024 * 1024 * 1024),
+							NanoCPUs:    composetypes.NanoCPUs(4),
+						},
+					},
+				}
+			},
+			wantMem:  4 * 1024 * 1024 * 1024,
+			wantNano: 4_000_000_000,
+		},
+		{
+			name:     "unset",
+			mut:      func(*composetypes.ServiceConfig) {},
+			wantMem:  0,
+			wantNano: 0,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := newMockRuntime()
+			var seen runtime.RunSpec
+			rt.OnRunContainer = func(spec runtime.RunSpec) (*runtime.Container, error) {
+				seen = spec
+				return nil, nil
+			}
+			orch := NewOrchestrator(rt, "docker")
+			svc := composetypes.ServiceConfig{Name: "app", Image: "alpine"}
+			tc.mut(&svc)
+			proj := &composetypes.Project{Services: composetypes.Services{"app": svc}}
+			if _, err := orch.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-x"}); err != nil {
+				t.Fatalf("Up: %v", err)
+			}
+			if seen.MemoryBytes != tc.wantMem {
+				t.Errorf("MemoryBytes = %d, want %d", seen.MemoryBytes, tc.wantMem)
+			}
+			if seen.NanoCPUs != tc.wantNano {
+				t.Errorf("NanoCPUs = %d, want %d", seen.NanoCPUs, tc.wantNano)
+			}
+		})
 	}
 }
 

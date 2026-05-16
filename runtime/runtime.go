@@ -348,6 +348,26 @@ type RunSpec struct {
 	// OverrideCommand, when true, forces Cmd to be ["/bin/sh","-c","while sleep 1000; do :; done"]
 	// so the container stays alive for exec-based interaction. Spec default true.
 	OverrideCommand bool
+
+	// MemoryBytes is the hard memory limit for the container, in bytes.
+	// Zero means "unset": the backend's own default applies — for docker
+	// that's no cgroup limit; for apple it's the apiserver's per-VM
+	// default (1 GiB on 0.12.x). Negative values are rejected by the
+	// backend.
+	//
+	// On apple, this sizes the per-container VM at boot; the guest
+	// kernel sees exactly this much memory and the value cannot be
+	// resized without container recreation. On docker, this maps to
+	// HostConfig.Memory and is enforced by cgroups.
+	MemoryBytes int64
+
+	// NanoCPUs is the CPU limit expressed in nano-units: 1_000_000_000
+	// = one full CPU, 2_500_000_000 = 2.5 CPUs. Matches docker's
+	// HostConfig.NanoCPUs convention so a single field works across
+	// backends. Zero means "unset". Apple's apiserver takes an integer
+	// CPU count, so the value is rounded up to the next whole CPU at
+	// the bridge boundary (e.g. 1_500_000_000 → 2 cpus).
+	NanoCPUs int64
 }
 
 // PortBinding describes a host->container port publish. Translates

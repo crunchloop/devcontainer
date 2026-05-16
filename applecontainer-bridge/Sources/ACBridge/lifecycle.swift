@@ -30,6 +30,14 @@ private struct RunSpecJSON: Decodable {
     var initProcess: Bool?
     var capAdd: [String]?
     var overrideCommand: Bool?
+    // Hard memory limit for the per-container VM, in bytes. Zero or
+    // absent leaves apple's default (1 GiB on 0.12.x) in place.
+    var memoryBytes: Int64?
+    // CPU limit in nano-units (1_000_000_000 = 1 CPU). Apple's
+    // apiserver takes an integer CPU count, so the bridge rounds up
+    // to the next whole CPU. Zero or absent leaves apple's default (4)
+    // in place.
+    var nanoCPUs: Int64?
 }
 
 private struct MountJSON: Decodable {
@@ -106,6 +114,23 @@ private func runContainer(spec: RunSpecJSON) async throws {
     cfg.mounts = try (spec.mounts ?? []).map(toFilesystem)
     cfg.capAdd = spec.capAdd ?? []
     cfg.useInit = spec.initProcess ?? false
+    // Resource limits. Apply only when caller specified a value;
+    // leave apple's Resources defaults (4 cpus / 1 GiB) untouched
+    // otherwise. Negative inputs are clamped out at the bridge
+    // boundary; the Go side rejects them earlier too.
+    if let mem = spec.memoryBytes, mem > 0 {
+        cfg.resources.memoryInBytes = UInt64(mem)
+    }
+    if let nano = spec.nanoCPUs, nano > 0 {
+        // Round up to the next whole CPU. NanoCPUs of 1_500_000_000
+        // (1.5 cpus) → cpus = 2. Apple's apiserver doesn't model
+        // fractional CPU shares; callers expressing a fractional
+        // limit get the next whole CPU rather than a silent floor.
+        let cpus = Int((nano + 999_999_999) / 1_000_000_000)
+        if cpus > 0 {
+            cfg.resources.cpus = cpus
+        }
+    }
     // Enable Rosetta when running an amd64 container on an arm64
     // host. Without this flag the apiserver rejects amd64 containers
     // with "unsupported: platform linux/amd64". Mirrors
