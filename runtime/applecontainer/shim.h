@@ -59,4 +59,15 @@ const char* ac_pull_image_p(const char* reference);
 const char* ac_build_probe_p(void);
 const char* ac_build_p(const char* spec_json);
 
+// Compose orchestrator primitives. The Swift counterparts live in
+// applecontainer-bridge/Sources/ACBridge/networks.swift,
+// volumes.swift, list.swift.
+const char* ac_network_create_p(const char* spec_json);
+const char* ac_network_remove_p(const char* id);
+const char* ac_volume_create_p(const char* spec_json);
+const char* ac_volume_remove_p(const char* name);
+const char* ac_list_containers_p(void);
+const char* ac_list_images_p(void);
+const char* ac_remove_image_p(const char* ref);
+
 #endif

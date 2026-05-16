@@ -55,6 +55,7 @@ func (r *Runtime) InspectContainer(ctx context.Context, id string) (*runtime.Con
 		FinishedAt: stateFinishedAt(c.State),
 		ExitCode:   stateExitCode(c.State),
 		Mounts:     convertMounts(c.Mounts),
+		Health:     stateHealth(c.State),
 	}
 	if c.Config != nil {
 		out.User = c.Config.User
@@ -117,6 +118,26 @@ func stateFinishedAt(s *container.State) time.Time {
 		return time.Time{}
 	}
 	return parseTime(s.FinishedAt)
+}
+
+// stateHealth maps docker's container.State.Health to our typed
+// HealthStatus. Returns HealthNone when the image has no healthcheck
+// (docker's "none") so the compose orchestrator treats no-healthcheck
+// services as satisfied — matches compose v2 behavior.
+func stateHealth(s *container.State) runtime.HealthStatus {
+	if s == nil || s.Health == nil {
+		return runtime.HealthNone
+	}
+	switch s.Health.Status {
+	case container.Starting:
+		return runtime.HealthStarting
+	case container.Healthy:
+		return runtime.HealthHealthy
+	case container.Unhealthy:
+		return runtime.HealthUnhealthy
+	default:
+		return runtime.HealthNone
+	}
 }
 
 func stateExitCode(s *container.State) int {

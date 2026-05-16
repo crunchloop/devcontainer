@@ -126,4 +126,3 @@ func copyLogs(ctx context.Context, src *os.File, dst io.Writer, follow bool) err
 		return fmt.Errorf("applecontainer: log read: %w", err)
 	}
 }
-

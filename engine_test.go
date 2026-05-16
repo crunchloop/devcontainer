@@ -170,6 +170,55 @@ func (f *fakeRuntime) InspectImage(ctx context.Context, ref string) (*runtime.Im
 	return nil, &runtime.ImageNotFoundError{Ref: ref}
 }
 
+// ---- compose orchestrator primitives ---------------------------------
+// The engine's image / build / compose-shellout paths never reach these,
+// but the runtime.Runtime interface now declares them, so fakeRuntime
+// must answer. ErrNotImplemented signals "not exercised in this test";
+// any production code path that hits them through fakeRuntime would
+// surface that error in the test.
+
+func (f *fakeRuntime) CreateNetwork(ctx context.Context, spec runtime.NetworkSpec) (string, error) {
+	return "", runtime.ErrNotImplemented
+}
+
+func (f *fakeRuntime) RemoveNetwork(ctx context.Context, id string) error {
+	return runtime.ErrNotImplemented
+}
+
+func (f *fakeRuntime) CreateVolume(ctx context.Context, spec runtime.VolumeSpec) (string, error) {
+	return "", runtime.ErrNotImplemented
+}
+
+func (f *fakeRuntime) RemoveVolume(ctx context.Context, name string) error {
+	return runtime.ErrNotImplemented
+}
+
+func (f *fakeRuntime) ListContainers(ctx context.Context, filter runtime.LabelFilter) ([]runtime.Container, error) {
+	return nil, runtime.ErrNotImplemented
+}
+
+func (f *fakeRuntime) ListImages(ctx context.Context, filter runtime.LabelFilter) ([]runtime.ImageRef, error) {
+	return nil, runtime.ErrNotImplemented
+}
+
+func (f *fakeRuntime) RemoveImage(ctx context.Context, ref string) error {
+	return runtime.ErrNotImplemented
+}
+
+func (f *fakeRuntime) Capabilities() runtime.Capabilities {
+	// fakeRuntime advertises the docker baseline; non-compose tests
+	// never read this. Compose orchestrator tests live in compose/
+	// with their own purpose-built fake.
+	return runtime.Capabilities{
+		Healthchecks:     true,
+		ExitCodes:        true,
+		NamespaceSharing: true,
+		RestartPolicies:  true,
+		SharedVolumes:    true,
+		ServiceNameDNS:   true,
+	}
+}
+
 func (f *fakeRuntime) FindContainerByLabel(ctx context.Context, key, value string) (*runtime.Container, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -253,6 +302,49 @@ func TestUp_ComposeSourceErrors(t *testing.T) {
 	_, err := eng.Up(context.Background(), UpOptions{LocalWorkspaceFolder: ws})
 	if !errors.Is(err, runtime.ErrNotImplemented) {
 		t.Fatalf("expected ErrNotImplemented, got %v", err)
+	}
+}
+
+// TestUp_ComposeBackendNative_DispatchesToOrchestrator confirms that
+// EngineOptions.ComposeBackend = ComposeBackendNative routes through
+// the in-process orchestrator instead of asserting ComposeRuntime.
+// fakeRuntime does NOT implement ComposeRuntime; on the shellout
+// path the request would fail with ErrNotImplemented before any
+// project load. On native, the request should proceed past the
+// type-assertion check and surface a different failure mode (here:
+// the orchestrator's RunContainer hits BuildImage → ErrNotImplemented).
+// The point is the dispatch reached the native path at all.
+func TestUp_ComposeBackendNative_DispatchesToOrchestrator(t *testing.T) {
+	rt := newFakeRuntime()
+	eng, _ := New(EngineOptions{
+		Runtime:        rt,
+		ComposeBackend: ComposeBackendNative,
+	})
+
+	dir := t.TempDir()
+	dc := filepath.Join(dir, ".devcontainer")
+	if err := os.MkdirAll(dc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dc, "devcontainer.json"),
+		[]byte(`{"dockerComposeFile":"compose.yml","service":"app"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Minimal compose project so compose.Load succeeds.
+	if err := os.WriteFile(filepath.Join(dc, "compose.yml"),
+		[]byte("services:\n  app:\n    image: alpine:3.20\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := eng.Up(context.Background(), UpOptions{LocalWorkspaceFolder: dir})
+	if err == nil {
+		t.Fatal("expected an error from fakeRuntime hitting unimplemented primitive paths")
+	}
+	// The error must NOT be "runtime does not support compose" — that
+	// would mean we dispatched to shellout. Native dispatch routes
+	// past the ComposeRuntime assertion entirely.
+	if strings.Contains(err.Error(), "runtime does not support compose") {
+		t.Errorf("native dispatch fell through to shellout assertion: %v", err)
 	}
 }
 

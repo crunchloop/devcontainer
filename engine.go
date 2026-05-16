@@ -69,7 +69,41 @@ type EngineOptions struct {
 	// host execution is opt-in and security-sensitive — see
 	// HostExecutor docs.
 	HostExecutor HostExecutor
+
+	// ComposeBackend selects how compose-source devcontainers are
+	// brought up. ComposeBackendShellout (default) uses the legacy
+	// runtime.ComposeRuntime sub-interface, which on docker shells
+	// out to the `docker compose` v2 plugin. ComposeBackendNative
+	// uses the runtime-agnostic compose.Orchestrator under compose/
+	// driving runtime.Runtime primitives directly (no shellout, no
+	// compose plugin dependency, works on every backend that
+	// satisfies the §4 primitive surface).
+	//
+	// See design/compose-native.md §10 for the rollout schedule:
+	// Shellout stays default until a confirmed-green release on
+	// Native; then the default flips and the shellout path is
+	// deleted.
+	ComposeBackend ComposeBackend
 }
+
+// ComposeBackend selects between the legacy shellout and the new
+// runtime-agnostic native orchestrator for compose-source projects.
+type ComposeBackend int
+
+const (
+	// ComposeBackendShellout (default) uses runtime.ComposeRuntime
+	// — `docker compose` v2 plugin under the hood. Reliable for
+	// Docker, refused-with-typed-error for backends that don't
+	// implement the sub-interface (i.e. applecontainer).
+	ComposeBackendShellout ComposeBackend = 0
+
+	// ComposeBackendNative uses compose.Orchestrator driving
+	// runtime.Runtime primitives. Backend-agnostic; requires the
+	// backend to implement CreateNetwork / CreateVolume /
+	// ListContainers / ListImages / RemoveImage / RemoveNetwork /
+	// RemoveVolume.
+	ComposeBackendNative ComposeBackend = 1
+)
 
 // New constructs an Engine. Returns an error if Runtime is nil or the
 // feature store cannot be built.

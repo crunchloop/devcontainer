@@ -20,6 +20,13 @@ private struct RunSpecJSON: Decodable {
     var env: [String]?
     var labels: [String: String]?
     var mounts: [MountJSON]?
+    // Network IDs the container should be attached to. Empty / nil
+    // means "no explicit attachment" — apple's apiserver auto-joins
+    // the built-in default network when the field is unset. The
+    // compose orchestrator passes <project>_default here so its
+    // services land on the project network it created via
+    // NetworkClient.create.
+    var networks: [String]?
     var initProcess: Bool?
     var capAdd: [String]?
     var overrideCommand: Bool?
@@ -73,24 +80,83 @@ private func runContainer(spec: RunSpecJSON) async throws {
 
     // The image must already be in the local content store. Pull is
     // PR-F's job; here we assume the caller has done it.
+    // Resolve the platform on the cached image first, then re-fetch
+    // for that platform so the daemon has the correct snapshot
+    // staged. apple/container's containerConfigFromFlags uses
+    // ClientImage.fetch (not get) for exactly this reason: get
+    // returns the index entry but doesn't ensure a per-platform
+    // snapshot is present, and ContainerClient().create rejects
+    // missing snapshots as "does not support required platforms".
+    // Resolve the image's platform. For multi-arch images, prefer
+    // the host's `.current`; for single-arch images (commonly
+    // amd64-only when the publisher only builds on x86 CI), fall
+    // back to whatever the image actually carries. Then stage the
+    // per-platform snapshot the apiserver requires before create —
+    // mirrors apple/container CLI's containerConfigFromFlags path.
     let img = try await ClientImage.get(reference: spec.image)
-    let imageConfig = try await img.config(for: .current).config
+    let platform = try await resolvePlatform(for: img)
+    try await img.getCreateSnapshot(platform: platform, progressUpdate: nil)
+    let imageConfig = try await img.config(for: platform).config
 
     let process = try buildProcessConfiguration(spec: spec, imageConfig: imageConfig)
 
     var cfg = ContainerConfiguration(id: spec.id, image: img.description, process: process)
-    cfg.platform = .current
+    cfg.platform = platform
     cfg.labels = spec.labels ?? [:]
     cfg.mounts = try (spec.mounts ?? []).map(toFilesystem)
     cfg.capAdd = spec.capAdd ?? []
     cfg.useInit = spec.initProcess ?? false
+    // Enable Rosetta when running an amd64 container on an arm64
+    // host. Without this flag the apiserver rejects amd64 containers
+    // with "unsupported: platform linux/amd64". Mirrors
+    // apple/container CLI's containerConfigFromFlags auto-enabling
+    // of rosetta for the same case. Subject to host's Rosetta-for-
+    // Linux being installed and Virtualization.framework allowing
+    // its use — neither is universally available, and an
+    // unsupported host surfaces as VZErrorDomain Code=1 at bootstrap.
+    let host = ContainerizationOCI.Platform.current
+    if host.architecture == "arm64" && platform.architecture == "amd64" {
+        cfg.rosetta = true
+    }
+    // Attach explicitly to any networks the caller requested. The
+    // hostname per attachment defaults to the container id, matching
+    // apple/container CLI's behavior. Empty Networks => no override:
+    // the apiserver attaches to the built-in default automatically.
+    if let nets = spec.networks, !nets.isEmpty {
+        cfg.networks = nets.map {
+            AttachmentConfiguration(network: $0, options: AttachmentOptions(hostname: spec.id))
+        }
+    }
 
-    let kernel = try await ClientKernel.getDefaultKernel(for: .current)
+    // Kernel selection: always use the host platform. For amd64
+    // containers on arm64 hosts, the VM still runs an arm64 kernel
+    // and Apple's Rosetta translates amd64 userland binaries
+    // (cfg.rosetta=true, set below). Mirrors apple/container's CLI:
+    // the kernel is host-arch; the container's platform only
+    // influences Rosetta enablement and image manifest selection.
+    let hostSysPlatform: SystemPlatform = .linuxArm
+    let kernel = try await ClientKernel.getDefaultKernel(for: hostSysPlatform)
+    // Stage the init image for the host platform (.current).
+    // The init binary runs in the VM's pid 1 slot — apple's
+    // apiserver wires up a translation when the container's
+    // platform differs (Rosetta on Apple silicon). Mirrors the
+    // CLI's containerConfigFromFlags: it always fetches init for
+    // .current regardless of the container's platform.
+    let initImageRef = ClientImage.initImageRef
+    let initImg = try await ClientImage.fetch(
+        reference: initImageRef,
+        platform: .current,
+        scheme: .auto,
+        progressUpdate: nil
+    )
+    try await initImg.getCreateSnapshot(platform: .current, progressUpdate: nil)
+
     let options = ContainerCreateOptions(autoRemove: false)
     try await ContainerClient().create(
         configuration: cfg,
         options: options,
-        kernel: kernel
+        kernel: kernel,
+        initImage: initImageRef
     )
 }
 
@@ -190,6 +256,33 @@ private func toFilesystem(_ m: MountJSON) throws -> Filesystem {
     default:
         throw BridgeError.invalidArgument("unknown mount type \"\(m.type)\"")
     }
+}
+
+// resolvePlatform picks a platform descriptor the image actually
+// supports. Default preference is the host's `.current`; if the
+// image's index doesn't carry that variant (common case: amd64-only
+// images on Apple silicon), fall back to the first variant the
+// image's index declares. Falls back to .current if the image
+// store can't surface an index (legacy single-manifest images).
+private func resolvePlatform(for img: ClientImage) async throws -> ContainerizationOCI.Platform {
+    let current = ContainerizationOCI.Platform.current
+    do {
+        let index = try await img.index()
+        for desc in index.manifests {
+            if let p = desc.platform, p.architecture == current.architecture && p.os == current.os {
+                return current
+            }
+        }
+        for desc in index.manifests {
+            if let p = desc.platform {
+                return p
+            }
+        }
+    } catch {
+        // Single-manifest image or other index lookup error;
+        // .current is the right default to try.
+    }
+    return current
 }
 
 private enum BridgeError: LocalizedError {

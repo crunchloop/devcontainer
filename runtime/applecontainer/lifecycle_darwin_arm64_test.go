@@ -13,7 +13,8 @@ import (
 )
 
 // TestLifecycle_EndToEnd exercises the full PR-C surface:
-//   Run → Start → Inspect (running) → Stop → Inspect (stopped) → Remove
+//
+//	Run → Start → Inspect (running) → Stop → Inspect (stopped) → Remove
 //
 // Validates the create/start split + the JSON wire shape +
 // integration with PR-B's InspectContainer. Skips when the daemon is
@@ -41,7 +42,7 @@ func TestLifecycle_EndToEnd(t *testing.T) {
 		Cmd:   []string{"sleep", "120"},
 		Env:   map[string]string{"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
 		Labels: map[string]string{
-			"dev.containers.id":    "lifecycle-test-7",
+			"dev.containers.id":     "lifecycle-test-7",
 			"dev.containers.engine": "devcontainer-go/test",
 		},
 	})

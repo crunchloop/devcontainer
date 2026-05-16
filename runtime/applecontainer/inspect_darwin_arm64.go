@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -66,17 +67,25 @@ func goStringAndFree(c *C.char) string {
 // ContainerSnapshot.Codable emits. Only the fields we use are listed;
 // extras are ignored by encoding/json.
 type containerSnapshot struct {
-	Configuration containerConfiguration `json:"configuration"`
-	Status        string                 `json:"status"`
-	StartedDate   *time.Time             `json:"startedDate,omitempty"`
+	Configuration containerConfiguration   `json:"configuration"`
+	Status        string                   `json:"status"`
+	StartedDate   *time.Time               `json:"startedDate,omitempty"`
+	Networks      []containerNetworkAttach `json:"networks,omitempty"`
+}
+
+// containerNetworkAttach mirrors the per-attached-network shape on
+// Apple's ContainerSnapshot.networks list. We only need the IPv4
+// address; Apple emits it as a CIDR string ("192.168.66.2/24").
+type containerNetworkAttach struct {
+	IPv4Address string `json:"ipv4Address"`
 }
 
 type containerConfiguration struct {
-	ID          string                 `json:"id"`
-	Image       imageDescription       `json:"image"`
-	Mounts      []containerMount       `json:"mounts"`
-	Labels      map[string]string      `json:"labels"`
-	InitProcess containerInitProcess   `json:"initProcess"`
+	ID          string               `json:"id"`
+	Image       imageDescription     `json:"image"`
+	Mounts      []containerMount     `json:"mounts"`
+	Labels      map[string]string    `json:"labels"`
+	InitProcess containerInitProcess `json:"initProcess"`
 }
 
 type imageDescription struct {
@@ -84,9 +93,9 @@ type imageDescription struct {
 }
 
 type containerInitProcess struct {
-	Environment      []string                `json:"environment"`
-	WorkingDirectory string                  `json:"workingDirectory"`
-	User             json.RawMessage         `json:"user"`
+	Environment      []string        `json:"environment"`
+	WorkingDirectory string          `json:"workingDirectory"`
+	User             json.RawMessage `json:"user"`
 }
 
 // containerMount mirrors the subset of Apple's Filesystem we need for
@@ -201,17 +210,52 @@ func snapshotToDetails(s containerSnapshot) *runtime.ContainerDetails {
 	if s.StartedDate != nil {
 		startedAt = *s.StartedDate
 	}
+	// Compose orchestrator looks up the container's primary IPv4
+	// address through the well-known label key
+	// `dev.containers.network-ip` (see compose.Orchestrator's
+	// /etc/hosts patch). Apple's ContainerSnapshot exposes the
+	// address under networks[].ipv4Address in CIDR form
+	// ("192.168.66.2/24"); we strip the prefix and stash it in the
+	// labels map so the orchestrator doesn't need a typed network
+	// field on runtime.ContainerDetails. Labels we synthesize
+	// never override user-set labels with the same key.
+	labels := s.Configuration.Labels
+	if ip := primaryIPv4(s.Networks); ip != "" {
+		if labels == nil {
+			labels = map[string]string{}
+		}
+		if _, exists := labels["dev.containers.network-ip"]; !exists {
+			labels["dev.containers.network-ip"] = ip
+		}
+	}
+
 	return &runtime.ContainerDetails{
-		Container:  *snapshotToContainer(s),
-		StartedAt:  startedAt,
-		User:       decodeUserString(s.Configuration.InitProcess.User),
-		Env:        s.Configuration.InitProcess.Environment,
-		Mounts:     mounts,
-		Labels:     s.Configuration.Labels,
+		Container: *snapshotToContainer(s),
+		StartedAt: startedAt,
+		User:      decodeUserString(s.Configuration.InitProcess.User),
+		Env:       s.Configuration.InitProcess.Environment,
+		Mounts:    mounts,
+		Labels:    labels,
 		// Created / FinishedAt / ExitCode are not in Apple's
 		// ContainerSnapshot. Left as zero values; later PRs can
 		// surface them via an additional XPC call if exposed.
 	}
+}
+
+// primaryIPv4 returns the first non-empty network attachment's IP
+// stripped of its CIDR prefix. Apple's ContainerSnapshot
+// typically reports a single attachment per container.
+func primaryIPv4(nets []containerNetworkAttach) string {
+	for _, n := range nets {
+		if n.IPv4Address == "" {
+			continue
+		}
+		if i := strings.Index(n.IPv4Address, "/"); i > 0 {
+			return n.IPv4Address[:i]
+		}
+		return n.IPv4Address
+	}
+	return ""
 }
 
 // decodeUserString turns Apple's ProcessConfiguration.User Codable

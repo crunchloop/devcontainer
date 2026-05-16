@@ -34,6 +34,7 @@ type runSpecJSON struct {
 	Env             []string          `json:"env,omitempty"`
 	Labels          map[string]string `json:"labels,omitempty"`
 	Mounts          []mountJSON       `json:"mounts,omitempty"`
+	Networks        []string          `json:"networks,omitempty"`
 	InitProcess     bool              `json:"initProcess,omitempty"`
 	CapAdd          []string          `json:"capAdd,omitempty"`
 	OverrideCommand bool              `json:"overrideCommand,omitempty"`
@@ -211,6 +212,7 @@ func runSpecToWire(spec runtime.RunSpec) runSpecJSON {
 		Env:             envMapToSlice(spec.Env),
 		Labels:          spec.Labels,
 		Mounts:          mapMounts(spec.Mounts),
+		Networks:        append([]string(nil), spec.Networks...),
 		InitProcess:     spec.Init,
 		CapAdd:          spec.CapAdd,
 		OverrideCommand: spec.OverrideCommand,

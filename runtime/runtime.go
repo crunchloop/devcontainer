@@ -126,6 +126,60 @@ type Runtime interface {
 	// FindContainerByLabel returns the most recently created container
 	// matching the given label. Returns nil, nil if no match.
 	FindContainerByLabel(ctx context.Context, key, value string) (*Container, error)
+
+	// ---- compose orchestration primitives -----------------------------
+	//
+	// Methods below are consumed by the runtime-agnostic compose
+	// orchestrator under compose/ (see design/compose-native.md §4).
+	// Types live in runtime/compose_primitives.go. A backend that
+	// returns ErrNotImplemented from any of these effectively opts
+	// out of compose source — Plan.Validate(Capabilities()) catches
+	// such projects at validation time and refuses with a typed
+	// error before any side effect.
+
+	// CreateNetwork creates a network with the given name and
+	// labels. Returns the backend's network ID for later
+	// RemoveNetwork. Idempotent on (name, labels) match: if a
+	// network with the same name and matching label set already
+	// exists, return its ID without error (same shape as compose's
+	// own up behavior).
+	CreateNetwork(ctx context.Context, spec NetworkSpec) (string, error)
+
+	// RemoveNetwork removes a network by its backend ID. No-op if
+	// the network is already gone.
+	RemoveNetwork(ctx context.Context, id string) error
+
+	// CreateVolume creates a named volume. Idempotent on (name,
+	// labels). Returns the backend's volume identifier — usually
+	// the name itself, but backends may translate.
+	CreateVolume(ctx context.Context, spec VolumeSpec) (string, error)
+
+	// RemoveVolume removes a named volume. No-op if missing.
+	RemoveVolume(ctx context.Context, name string) error
+
+	// ListContainers returns containers matching every label in the
+	// filter. Empty filter is rejected — we never want to enumerate
+	// all containers. Implementations without server-side filtering
+	// (e.g. applecontainer per design probe R1b) filter client-side
+	// after a full enumeration.
+	ListContainers(ctx context.Context, filter LabelFilter) ([]Container, error)
+
+	// ListImages returns local images matching the filter. Used by
+	// Down --rmi local: built images are stamped with project labels
+	// so teardown can prune by label. Same empty-filter rule as
+	// ListContainers.
+	ListImages(ctx context.Context, filter LabelFilter) ([]ImageRef, error)
+
+	// RemoveImage removes a local image by ID or reference. No-op
+	// if missing.
+	RemoveImage(ctx context.Context, ref string) error
+
+	// Capabilities advertises optional features this backend
+	// supports. compose.Plan.Validate keys feature gates off this
+	// struct so per-backend conditionals stay out of the validator.
+	// The returned value should be a constant for the lifetime of
+	// the Runtime; callers may cache it.
+	Capabilities() Capabilities
 }
 
 // ImageRef identifies an image by digest and any associated tags.
@@ -134,13 +188,20 @@ type ImageRef struct {
 	Tags []string
 }
 
-// Container is a minimal container handle returned by Run / Find.
-// Use InspectContainer for full details.
+// Container is a minimal container handle returned by Run / Find /
+// ListContainers. Use InspectContainer for fields not present here.
 type Container struct {
 	ID    string
 	Name  string
 	Image string
 	State State
+
+	// Labels are populated by ListContainers and FindContainerByLabel
+	// when the backend can surface them cheaply. RunContainer may
+	// leave this nil; callers that need labels after a fresh create
+	// should InspectContainer. The compose orchestrator reads this
+	// to identify the service name during reverse-topo teardown.
+	Labels map[string]string
 }
 
 // State is the container lifecycle state per Docker Engine API.
@@ -174,7 +235,41 @@ type ContainerDetails struct {
 	// FinishedAt is when the container's main process last exited. Zero
 	// for never-exited containers.
 	FinishedAt time.Time
+
+	// Health reports the most recent HEALTHCHECK result.
+	// HealthNone means the image declared no healthcheck (i.e. the
+	// daemon never produced one); the compose orchestrator's
+	// service_healthy gate treats this as "satisfied" so projects
+	// without healthchecks still come up.
+	Health HealthStatus
 }
+
+// HealthStatus mirrors docker's container health-check states.
+// Backends that don't surface a typed health value report
+// HealthNone, which the compose orchestrator interprets as
+// "no healthcheck declared" — semantically equivalent to docker's
+// default for images without a HEALTHCHECK directive.
+type HealthStatus string
+
+const (
+	// HealthNone means the image / runtime did not surface a
+	// healthcheck status. The orchestrator treats this as
+	// satisfied (compose v2 behavior for healthcheck-less services).
+	HealthNone HealthStatus = ""
+
+	// HealthStarting is the daemon's transitional state — the
+	// container is up but the healthcheck hasn't produced a verdict
+	// yet. Orchestrator keeps polling.
+	HealthStarting HealthStatus = "starting"
+
+	// HealthHealthy means the most recent check passed.
+	HealthHealthy HealthStatus = "healthy"
+
+	// HealthUnhealthy means the most recent check failed. The
+	// orchestrator surfaces this through *HealthTimeoutError if it
+	// persists past the gate's deadline.
+	HealthUnhealthy HealthStatus = "unhealthy"
+)
 
 // ImageDetails is the inspected state of a local image. Labels are
 // the source of truth for the devcontainer.metadata pre-baked-image
@@ -226,10 +321,82 @@ type RunSpec struct {
 	CapAdd      []string
 	SecurityOpt []string
 
+	// HealthCheck declares the HEALTHCHECK directive at create time.
+	// Nil means inherit from the image (i.e. no override). Used by
+	// the compose orchestrator to translate `healthcheck:` directives.
+	HealthCheck *HealthCheckSpec
+
+	// Networks lists project networks the container joins. Empty
+	// means "backend default" — docker assigns the default bridge;
+	// apple assigns the built-in vmnet network. Used by the compose
+	// orchestrator to attach services to the project network it
+	// just created via CreateNetwork.
+	Networks []string
+
+	// Ports lists the ports this container publishes to the host.
+	// Empty means no publishing (the container's ports are reachable
+	// inside the project network but not from the host). Used by
+	// the compose orchestrator to translate `ports:` directives.
+	Ports []PortBinding
+
+	// RestartPolicy controls whether the runtime restarts the
+	// container on exit. Zero-value (RestartNo) matches docker's
+	// `no` default. Used by the compose orchestrator to translate
+	// `restart:` directives.
+	RestartPolicy RestartPolicy
+
 	// OverrideCommand, when true, forces Cmd to be ["/bin/sh","-c","while sleep 1000; do :; done"]
 	// so the container stays alive for exec-based interaction. Spec default true.
 	OverrideCommand bool
 }
+
+// PortBinding describes a host->container port publish. Translates
+// to docker's HostConfig.PortBindings + Config.ExposedPorts on the
+// docker backend. Other backends translate where possible; an
+// unsupported PortBinding on a backend that can't model it is
+// the backend's choice to error or pass through.
+type PortBinding struct {
+	// HostIP optionally restricts the bind to a specific host
+	// address. Empty = all interfaces (docker's 0.0.0.0 default).
+	HostIP string
+
+	// HostPort is the host-side port. Empty = let the daemon pick
+	// (docker assigns from the ephemeral range).
+	HostPort string
+
+	// ContainerPort is the in-container port that's being
+	// published. Required.
+	ContainerPort int
+
+	// Protocol is "tcp" or "udp". Empty defaults to "tcp".
+	Protocol string
+}
+
+// HealthCheckSpec mirrors compose's healthcheck: directive plus
+// docker's HEALTHCHECK config. Test is the command (with
+// CMD/CMD-SHELL prefix as compose's HealthCheckTest already
+// normalizes). Disable=true short-circuits to NONE, overriding any
+// image-baked healthcheck.
+type HealthCheckSpec struct {
+	Test          []string
+	Interval      time.Duration
+	Timeout       time.Duration
+	Retries       int
+	StartPeriod   time.Duration
+	StartInterval time.Duration
+	Disable       bool
+}
+
+// RestartPolicy controls auto-restart behavior of a container.
+// Mirrors docker compose's `restart:` directive values.
+type RestartPolicy string
+
+const (
+	RestartNo            RestartPolicy = ""
+	RestartAlways        RestartPolicy = "always"
+	RestartOnFailure     RestartPolicy = "on-failure"
+	RestartUnlessStopped RestartPolicy = "unless-stopped"
+)
 
 // MountSpec is a request for a single mount on a container.
 type MountSpec struct {

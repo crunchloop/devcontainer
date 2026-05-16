@@ -40,13 +40,24 @@ func writeWorkspace(t *testing.T, body string) string {
 
 func newEngine(t *testing.T) (*devcontainer.Engine, *docker.Runtime) {
 	t.Helper()
+	return newEngineWith(t, devcontainer.EngineOptions{})
+}
+
+// newEngineWith constructs an Engine with the given options layered on
+// top of a real Docker runtime. Runtime / FeatureStore / etc. fields
+// in opts are overridden — the helper exists so compose-backend tests
+// can pass ComposeBackend without duplicating the daemon-probe + close
+// boilerplate.
+func newEngineWith(t *testing.T, opts devcontainer.EngineOptions) (*devcontainer.Engine, *docker.Runtime) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	rt, err := docker.New(ctx, docker.Options{})
 	if err != nil {
 		t.Skipf("Docker daemon unavailable: %v", err)
 	}
-	eng, err := devcontainer.New(devcontainer.EngineOptions{Runtime: rt})
+	opts.Runtime = rt
+	eng, err := devcontainer.New(opts)
 	if err != nil {
 		_ = rt.Close()
 		t.Fatalf("New: %v", err)

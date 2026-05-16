@@ -105,7 +105,7 @@ func TestLogs_FollowBlocksUntilCancel(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		logErr = rt.ContainerLogs(ctx, id, pw, true)
-		pw.Close()
+		_ = pw.Close()
 	}()
 
 	// Block until we see the first marker line.
