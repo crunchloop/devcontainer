@@ -117,3 +117,59 @@ func TestConfigHash_ImageIDAffects(t *testing.T) {
 		t.Error("hash insensitive to imageID; image change must trigger recreation")
 	}
 }
+
+// TestConfigHash_StripsNonRuntimeFields pins the contract that
+// fields which don't shape the running container — Build,
+// PullPolicy, Scale, Deploy, DependsOn, Profiles — do not affect
+// the hash. Editing one of them must not recreate the service.
+// Matches docker/compose's hash.go behavior.
+func TestConfigHash_StripsNonRuntimeFields(t *testing.T) {
+	base := baseService()
+	wantHash := ConfigHash("img", base)
+
+	t.Run("Build", func(t *testing.T) {
+		svc := baseService()
+		svc.Build = &composetypes.BuildConfig{Context: "./different"}
+		if got := ConfigHash("img", svc); got != wantHash {
+			t.Errorf("Build edit changed hash: %q vs %q", got, wantHash)
+		}
+	})
+	t.Run("PullPolicy", func(t *testing.T) {
+		svc := baseService()
+		svc.PullPolicy = "always"
+		if got := ConfigHash("img", svc); got != wantHash {
+			t.Errorf("PullPolicy edit changed hash: %q vs %q", got, wantHash)
+		}
+	})
+	t.Run("Scale", func(t *testing.T) {
+		svc := baseService()
+		scale := 5
+		svc.Scale = &scale
+		if got := ConfigHash("img", svc); got != wantHash {
+			t.Errorf("Scale edit changed hash: %q vs %q", got, wantHash)
+		}
+	})
+	t.Run("DependsOn", func(t *testing.T) {
+		svc := baseService()
+		svc.DependsOn = composetypes.DependsOnConfig{
+			"other": composetypes.ServiceDependency{Condition: "service_started"},
+		}
+		if got := ConfigHash("img", svc); got != wantHash {
+			t.Errorf("DependsOn edit changed hash: %q vs %q", got, wantHash)
+		}
+	})
+	t.Run("Profiles", func(t *testing.T) {
+		svc := baseService()
+		svc.Profiles = []string{"dev"}
+		if got := ConfigHash("img", svc); got != wantHash {
+			t.Errorf("Profiles edit changed hash: %q vs %q", got, wantHash)
+		}
+	})
+	t.Run("Deploy", func(t *testing.T) {
+		svc := baseService()
+		svc.Deploy = &composetypes.DeployConfig{}
+		if got := ConfigHash("img", svc); got != wantHash {
+			t.Errorf("Deploy edit changed hash: %q vs %q", got, wantHash)
+		}
+	})
+}

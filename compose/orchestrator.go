@@ -51,6 +51,7 @@ const (
 	LabelComposeOneoff  = "com.docker.compose.oneoff"
 	LabelEngine         = "dev.containers.engine"
 	LabelConfigHash     = "dev.containers.config-hash"
+	LabelImageDigest    = "dev.containers.image-digest"
 )
 
 // EngineDisplayName identifies our orchestrator in stamped labels.
@@ -355,10 +356,13 @@ func (o *Orchestrator) Down(ctx context.Context, plan *DownPlan) error {
 		}
 	}
 
-	// Project network removal is handled in a follow-up commit
-	// (RemoveNetwork by name requires a backend-side lookup that
-	// isn't yet on the interface). Documented limitation; see
-	// down_network_test.go once it lands.
+	// Remove the project network. Both backends accept the network
+	// name (docker's NetworkRemove and apple's NetworkClient.delete
+	// both resolve by id-or-name; our CreateNetwork uses
+	// <project>_default as the name + id, so RemoveNetwork with the
+	// same string works). The call is idempotent — missing-network
+	// errors are swallowed at the backend.
+	_ = o.rt.RemoveNetwork(ctx, plan.ProjectName+"_default")
 
 	if plan.RemoveVolumes {
 		if plan.Project != nil {
@@ -424,7 +428,15 @@ func (o *Orchestrator) ensureService(
 	svc composetypes.ServiceConfig,
 	projectLabels map[string]string,
 ) (string, error) {
-	hash := ConfigHash(svc.Image, svc)
+	// Resolve the service's image to its digest before hashing. The
+	// compose file carries a tag (e.g. "postgres:17-alpine") which is
+	// mutable on the registry side — `docker pull` against the same
+	// tag can land a different digest. Hashing the tag means we'd
+	// silently reuse an old container after a tag update; hashing the
+	// digest forces a recreate, matching docker/compose's
+	// ImageDigestLabel check (convergence.go).
+	imageDigest := o.resolveImageDigest(ctx, svc.Image)
+	hash := ConfigHash(imageDigest, svc)
 
 	// Try to find an existing container for this (project, service).
 	existing, err := o.rt.ListContainers(ctx, runtime.LabelFilter{
@@ -439,10 +451,15 @@ func (o *Orchestrator) ensureService(
 
 	if len(existing) > 0 {
 		c := existing[0]
-		// Inspect to read the stored hash off labels.
+		// Inspect to read the stored hash + image digest. Recreate if
+		// either has drifted; the image-digest check is the second
+		// line of defense for tag-update scenarios where ConfigHash
+		// might match by accident (e.g. a digest probe that returned
+		// empty).
 		details, ierr := o.rt.InspectContainer(ctx, c.ID)
 		if ierr == nil && details != nil &&
 			details.Labels[LabelConfigHash] == hash &&
+			details.Labels[LabelImageDigest] == imageDigest &&
 			c.State == runtime.StateRunning {
 			return c.ID, nil
 		}
@@ -453,7 +470,7 @@ func (o *Orchestrator) ensureService(
 		}
 	}
 
-	spec := serviceToRunSpec(plan, svc, projectLabels, hash)
+	spec := serviceToRunSpec(plan, svc, projectLabels, hash, imageDigest)
 	c, err := o.rt.RunContainer(ctx, spec)
 	if err != nil {
 		// Compose's `up -d` pulls missing images implicitly. Mirror
@@ -476,6 +493,28 @@ func (o *Orchestrator) ensureService(
 	return c.ID, nil
 }
 
+// resolveImageDigest returns a stable identifier for the image —
+// the local store's digest if InspectImage can resolve it, the
+// reference itself as a fallback. Empty input returns empty.
+//
+// The fallback path matters: at first Up, the image hasn't been
+// pulled yet, so Inspect returns ImageNotFoundError. Using the
+// reference is the right thing because the hash will be
+// recalculated after pull-on-miss recreates and stamps it.
+// Re-runs against a moved tag pull a different digest, and the
+// next Inspect surfaces the new digest, recreating the container.
+func (o *Orchestrator) resolveImageDigest(ctx context.Context, ref string) string {
+	if ref == "" {
+		return ""
+	}
+	if details, err := o.rt.InspectImage(ctx, ref); err == nil && details != nil {
+		if details.ID != "" {
+			return details.ID
+		}
+	}
+	return ref
+}
+
 // gateLevel polls dependents at the just-completed level for any
 // downstream health/completion conditions. Returns *HealthTimeoutError
 // if a service fails to satisfy its condition in time.
@@ -491,7 +530,11 @@ func (o *Orchestrator) gateLevel(
 	// will require to be healthy/exited.
 	// Build a set: services in this level that some kept dependent
 	// requires via service_healthy / service_completed_successfully.
-	required := map[string]string{} // service -> condition
+	type requirement struct {
+		condition string
+		optional  bool
+	}
+	required := map[string]requirement{} // service -> requirement
 	for _, dependent := range plan.Project.Services {
 		if !keep[dependent.Name] {
 			continue
@@ -502,7 +545,20 @@ func (o *Orchestrator) gateLevel(
 			}
 			switch dep.Condition {
 			case "service_healthy", "service_completed_successfully":
-				required[depName] = dep.Condition
+				// Per compose spec, depends_on with required:false
+				// means the dependent should start best-effort even
+				// when the dep isn't ready. Honour an existing
+				// requirement (someone else may need this dep
+				// strictly), but downgrade to optional if no strict
+				// requirement is in place.
+				prev, exists := required[depName]
+				if exists && !prev.optional {
+					continue
+				}
+				required[depName] = requirement{
+					condition: dep.Condition,
+					optional:  !dep.Required,
+				}
 			}
 		}
 	}
@@ -511,12 +567,19 @@ func (o *Orchestrator) gateLevel(
 	}
 
 	deadline := time.Now().Add(o.HealthTimeout)
-	for svcName, cond := range required {
+	for svcName, req := range required {
 		cid := containerIDs[svcName]
 		if cid == "" {
 			continue
 		}
-		if err := o.waitFor(ctx, svcName, cid, cond, deadline); err != nil {
+		if err := o.waitFor(ctx, svcName, cid, req.condition, deadline); err != nil {
+			if req.optional {
+				// Per compose spec: a non-required dependency that
+				// fails to satisfy its condition does not block the
+				// dependent's start. Swallow the gate error and move
+				// on; the dependent will start best-effort.
+				continue
+			}
 			return err
 		}
 	}
@@ -592,7 +655,7 @@ func serviceToRunSpec(
 	plan *Plan,
 	svc composetypes.ServiceConfig,
 	projectLabels map[string]string,
-	hash string,
+	hash, imageDigest string,
 ) runtime.RunSpec {
 	labels := copyLabels(plan.Labels)
 	for k, v := range projectLabels {
@@ -601,6 +664,9 @@ func serviceToRunSpec(
 	labels[LabelComposeService] = svc.Name
 	labels[LabelComposeOneoff] = "False"
 	labels[LabelConfigHash] = hash
+	if imageDigest != "" {
+		labels[LabelImageDigest] = imageDigest
+	}
 	for k, v := range svc.Labels {
 		// User labels never override our convergence labels.
 		if _, reserved := reservedLabels[k]; reserved {
@@ -713,6 +779,7 @@ var reservedLabels = map[string]struct{}{
 	LabelComposeOneoff:  {},
 	LabelEngine:         {},
 	LabelConfigHash:     {},
+	LabelImageDigest:    {},
 }
 
 func mountTypeOf(s string) runtime.MountType {
@@ -729,7 +796,11 @@ func mountTypeOf(s string) runtime.MountType {
 
 // mountSourceOf returns the host-side source for a service volume.
 // Named volumes need their project-scoped name; binds and tmpfs
-// pass through.
+// pass through. Anonymous named volumes (Type=volume, Source="") fall
+// through to an empty source — docker's convention is that the
+// daemon assigns a random volume name on create. The mount still
+// flows to the backend; ensureNamedVolumes intentionally skips them
+// so we don't try to pre-create unnamed volumes.
 func mountSourceOf(v composetypes.ServiceVolumeConfig, projectName string) string {
 	if v.Type == composetypes.VolumeTypeVolume && v.Source != "" {
 		return projectName + "_" + v.Source
@@ -809,15 +880,15 @@ func orderContainersForTeardown(in []runtime.Container, plan *DownPlan) []runtim
 	return out
 }
 
-// serviceLabelOf reads the compose service name off a container
-// from its labels. Returns "" if missing (defensive — should never
-// happen for orchestrator-created containers).
+// serviceLabelOf reads the compose service name off a container.
+// Prefers the com.docker.compose.service label (always present on
+// orchestrator-created containers); falls back to the container
+// name for resilience against backends that drop labels through
+// ListContainers. Returns "" if neither is available — the
+// surrounding sort will tie-break by container name in that case.
 func serviceLabelOf(c runtime.Container) string {
-	// Container struct doesn't carry Labels; the docker
-	// ListContainers translation drops them. PR14 widens the
-	// Container struct or adds an explicit LabelLookup primitive;
-	// for now the orchestrator's Down ordering degrades to
-	// name-based if labels aren't readable here, which is harmless
-	// for correctness (Down is idempotent either way).
+	if v := c.Labels[LabelComposeService]; v != "" {
+		return v
+	}
 	return c.Name
 }

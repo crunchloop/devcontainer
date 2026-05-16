@@ -188,13 +188,20 @@ type ImageRef struct {
 	Tags []string
 }
 
-// Container is a minimal container handle returned by Run / Find.
-// Use InspectContainer for full details.
+// Container is a minimal container handle returned by Run / Find /
+// ListContainers. Use InspectContainer for fields not present here.
 type Container struct {
 	ID    string
 	Name  string
 	Image string
 	State State
+
+	// Labels are populated by ListContainers and FindContainerByLabel
+	// when the backend can surface them cheaply. RunContainer may
+	// leave this nil; callers that need labels after a fresh create
+	// should InspectContainer. The compose orchestrator reads this
+	// to identify the service name during reverse-topo teardown.
+	Labels map[string]string
 }
 
 // State is the container lifecycle state per Docker Engine API.

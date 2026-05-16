@@ -40,10 +40,16 @@ type mockRuntime struct {
 	startCalls         int
 	stopCalls          int
 	removeCalls        int
+	removeNetworkCalls []string
 
 	// Hooks (set to override default behavior).
 	OnRunContainer func(spec runtime.RunSpec) (*runtime.Container, error)
 	OnInspect      func(id string, base *runtime.ContainerDetails) *runtime.ContainerDetails
+
+	// imageDigest, when non-empty, is the digest InspectImage
+	// returns for every reference. Tests that exercise digest-drift
+	// recreate set this between Up calls.
+	imageDigest string
 }
 
 type mockContainer struct {
@@ -157,7 +163,13 @@ func (m *mockRuntime) InspectContainer(ctx context.Context, id string) (*runtime
 }
 
 func (m *mockRuntime) InspectImage(ctx context.Context, ref string) (*runtime.ImageDetails, error) {
-	return &runtime.ImageDetails{ID: "sha256:" + ref, Tags: []string{ref}}, nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	id := m.imageDigest
+	if id == "" {
+		id = "sha256:" + ref
+	}
+	return &runtime.ImageDetails{ID: id, Tags: []string{ref}}, nil
 }
 
 func (m *mockRuntime) ContainerLogs(ctx context.Context, id string, w io.Writer, follow bool) error {
@@ -182,6 +194,10 @@ func (m *mockRuntime) CreateNetwork(ctx context.Context, spec runtime.NetworkSpe
 }
 
 func (m *mockRuntime) RemoveNetwork(ctx context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.removeNetworkCalls = append(m.removeNetworkCalls, id)
+	delete(m.networks, id)
 	return nil
 }
 
@@ -206,7 +222,7 @@ func (m *mockRuntime) ListContainers(ctx context.Context, filter runtime.LabelFi
 	var out []runtime.Container
 	for _, c := range m.containers {
 		if labelsSuperset(c.labels, filter.Match) {
-			out = append(out, runtime.Container{ID: c.id, Name: c.name, Image: c.image, State: c.state})
+			out = append(out, runtime.Container{ID: c.id, Name: c.name, Image: c.image, State: c.state, Labels: copyLabels(c.labels)})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
@@ -350,6 +366,40 @@ func TestUp_RecreateOnHashChange(t *testing.T) {
 	}
 }
 
+// TestUp_RecreateOnImageDigestChange exercises the digest-driven
+// recreate path: the compose service config is byte-identical
+// across two Ups, but the registry has moved the tag to a new
+// digest. Our InspectImage mock returns a different digest on the
+// second call, and the orchestrator must recreate the container —
+// otherwise users would silently keep running the old image after
+// a `docker pull`.
+func TestUp_RecreateOnImageDigestChange(t *testing.T) {
+	rt := newMockRuntime()
+	orch := NewOrchestrator(rt, "docker")
+	proj := newProject(t, map[string][]string{"app": nil})
+	plan := &Plan{Project: proj, ProjectName: "dc-x"}
+
+	if _, err := orch.Up(context.Background(), plan); err != nil {
+		t.Fatalf("first Up: %v", err)
+	}
+	firstRun := rt.runCalls
+	firstRemove := rt.removeCalls
+
+	// Flip the InspectImage to return a different digest so the
+	// orchestrator observes a tag-to-different-digest drift.
+	rt.imageDigest = "sha256:moved"
+
+	if _, err := orch.Up(context.Background(), plan); err != nil {
+		t.Fatalf("second Up: %v", err)
+	}
+	if rt.runCalls != firstRun+1 {
+		t.Errorf("runCalls=%d, want %d (digest-change recreate expected)", rt.runCalls, firstRun+1)
+	}
+	if rt.removeCalls != firstRemove+1 {
+		t.Errorf("removeCalls=%d, want %d", rt.removeCalls, firstRemove+1)
+	}
+}
+
 func TestUp_PartialFailureSurfacesPartialError(t *testing.T) {
 	rt := newMockRuntime()
 	rt.OnRunContainer = func(spec runtime.RunSpec) (*runtime.Container, error) {
@@ -395,7 +445,11 @@ func TestUp_HealthGateTimesOut(t *testing.T) {
 		"app": composetypes.ServiceConfig{
 			Name: "app", Image: "alpine",
 			DependsOn: composetypes.DependsOnConfig{
-				"db": composetypes.ServiceDependency{Condition: "service_healthy"},
+				// Required: true mirrors what compose-go's Load
+				// produces after normalization. Without it, the
+				// dependency is treated as optional and the gate
+				// timeout would be swallowed.
+				"db": composetypes.ServiceDependency{Condition: "service_healthy", Required: true},
 			},
 		},
 	}
@@ -408,6 +462,45 @@ func TestUp_HealthGateTimesOut(t *testing.T) {
 	}
 	if hte.Service != "db" {
 		t.Errorf("Service=%q, want db", hte.Service)
+	}
+}
+
+// TestUp_OptionalDependencySkipsOnTimeout pins the compose-spec
+// optional-dependency contract: when depends_on.<dep>.required=false
+// AND the dep's health gate doesn't satisfy in time, the dependent
+// still starts (the gate failure is swallowed). Strict dependencies
+// (required=true) keep their existing fatal-on-timeout behavior.
+func TestUp_OptionalDependencySkipsOnTimeout(t *testing.T) {
+	rt := newMockRuntime()
+	// db never reports running -> service_healthy never satisfied.
+	rt.OnInspect = func(id string, base *runtime.ContainerDetails) *runtime.ContainerDetails {
+		base.State = runtime.StateCreated
+		return base
+	}
+	orch := NewOrchestrator(rt, "docker")
+	orch.HealthTimeout = 50 * time.Millisecond
+	orch.PollInterval = 10 * time.Millisecond
+
+	svcs := composetypes.Services{
+		"db": composetypes.ServiceConfig{Name: "db", Image: "alpine"},
+		"app": composetypes.ServiceConfig{
+			Name: "app", Image: "alpine",
+			DependsOn: composetypes.DependsOnConfig{
+				"db": composetypes.ServiceDependency{
+					Condition: "service_healthy",
+					Required:  false,
+				},
+			},
+		},
+	}
+	proj := &composetypes.Project{Services: svcs}
+
+	res, err := orch.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-x"})
+	if err != nil {
+		t.Fatalf("Up: %v (optional dep should not fail Up)", err)
+	}
+	if res.ContainerIDs["app"] == "" {
+		t.Error("app not started after optional-dep health timeout")
 	}
 }
 
@@ -464,6 +557,157 @@ func TestDown_RemovesProjectContainers(t *testing.T) {
 	}
 	if _, ok := rt.containers["c3"]; !ok {
 		t.Error("c3 (other project) was wrongly removed")
+	}
+}
+
+// TestDown_ReverseTopoOrder pins the contract that Down processes
+// dependent services BEFORE their dependencies. The orchestrator
+// reads the compose-service label off each container (set on Up)
+// and looks it up against the project's topo levels.
+func TestDown_ReverseTopoOrder(t *testing.T) {
+	rt := newMockRuntime()
+	// db (level 0) ← api (level 1) ← app (level 2).
+	rt.containers["c-db"] = &mockContainer{
+		id: "c-db", name: "dc-x-db-1", state: runtime.StateRunning,
+		labels: map[string]string{
+			LabelComposeProject: "dc-x",
+			LabelComposeService: "db",
+		},
+	}
+	rt.containers["c-api"] = &mockContainer{
+		id: "c-api", name: "dc-x-api-1", state: runtime.StateRunning,
+		labels: map[string]string{
+			LabelComposeProject: "dc-x",
+			LabelComposeService: "api",
+		},
+	}
+	rt.containers["c-app"] = &mockContainer{
+		id: "c-app", name: "dc-x-app-1", state: runtime.StateRunning,
+		labels: map[string]string{
+			LabelComposeProject: "dc-x",
+			LabelComposeService: "app",
+		},
+	}
+
+	// Record stop order for assertion.
+	var stopOrder []string
+	var mu sync.Mutex
+	wrapStop := rt.stopCalls
+	_ = wrapStop
+	origStop := func(ctx context.Context, id string, opts runtime.StopOptions) error {
+		mu.Lock()
+		stopOrder = append(stopOrder, id)
+		mu.Unlock()
+		return nil
+	}
+
+	// Hook stop tracking via a small wrapper. The mock's StopContainer
+	// just sets state and counts; we tap into RemoveContainer too
+	// since that's what the orchestrator does after Stop.
+	wrapped := &stopTracker{
+		mockRuntime: rt,
+		stopFunc:    origStop,
+	}
+
+	orch := NewOrchestrator(wrapped, "docker")
+	proj := newProject(t, map[string][]string{
+		"db":  nil,
+		"api": {"db"},
+		"app": {"api"},
+	})
+	if err := orch.Down(context.Background(), &DownPlan{ProjectName: "dc-x", Project: proj}); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+	want := []string{"c-app", "c-api", "c-db"}
+	if len(stopOrder) != 3 {
+		t.Fatalf("stopOrder=%v, want 3 entries", stopOrder)
+	}
+	for i, exp := range want {
+		if stopOrder[i] != exp {
+			t.Errorf("stopOrder[%d]=%q, want %q (full=%v)", i, stopOrder[i], exp, stopOrder)
+		}
+	}
+}
+
+// stopTracker wraps mockRuntime to capture stop order.
+type stopTracker struct {
+	*mockRuntime
+	stopFunc func(context.Context, string, runtime.StopOptions) error
+}
+
+func (s *stopTracker) StopContainer(ctx context.Context, id string, opts runtime.StopOptions) error {
+	if s.stopFunc != nil {
+		_ = s.stopFunc(ctx, id, opts)
+	}
+	return s.mockRuntime.StopContainer(ctx, id, opts)
+}
+
+// TestUp_AnonymousVolumesFlowThrough confirms a service-level
+// `volumes: [target_only_path]` (no source) makes it through to the
+// RunSpec the runtime sees, with empty Source — docker's convention
+// for anonymous volumes. The orchestrator must NOT call CreateVolume
+// for the anonymous entry (only named ones).
+func TestUp_AnonymousVolumesFlowThrough(t *testing.T) {
+	rt := newMockRuntime()
+	var seenSpec runtime.RunSpec
+	rt.OnRunContainer = func(spec runtime.RunSpec) (*runtime.Container, error) {
+		if spec.Labels[LabelComposeService] == "app" {
+			seenSpec = spec
+		}
+		return nil, nil
+	}
+	orch := NewOrchestrator(rt, "docker")
+	svc := composetypes.ServiceConfig{
+		Name:  "app",
+		Image: "alpine",
+		Volumes: []composetypes.ServiceVolumeConfig{
+			// Anonymous: no Source.
+			{Type: composetypes.VolumeTypeVolume, Target: "/data"},
+		},
+	}
+	proj := &composetypes.Project{
+		Services: composetypes.Services{"app": svc},
+	}
+	if _, err := orch.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-x"}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if rt.createVolumeCalls != 0 {
+		t.Errorf("CreateVolume call count = %d, want 0 (anonymous volumes must not be pre-created)", rt.createVolumeCalls)
+	}
+	if len(seenSpec.Mounts) != 1 {
+		t.Fatalf("Mounts = %v, want 1 entry", seenSpec.Mounts)
+	}
+	got := seenSpec.Mounts[0]
+	if got.Type != runtime.MountVolume || got.Source != "" || got.Target != "/data" {
+		t.Errorf("anonymous mount = %+v, want {Type:volume Source:\"\" Target:/data}", got)
+	}
+}
+
+// TestDown_RemovesProjectNetwork pins the network-cleanup contract.
+// Up creates <project>_default; Down must call RemoveNetwork on it
+// after containers are gone. Without this, every devcontainer
+// teardown would leak the project network.
+func TestDown_RemovesProjectNetwork(t *testing.T) {
+	rt := newMockRuntime()
+	orch := NewOrchestrator(rt, "docker")
+	proj := newProject(t, map[string][]string{"app": nil})
+	plan := &Plan{Project: proj, ProjectName: "dc-x"}
+	if _, err := orch.Up(context.Background(), plan); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if err := orch.Down(context.Background(), &DownPlan{ProjectName: "dc-x"}); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+	wantNet := "dc-x_default"
+	found := false
+	for _, id := range rt.removeNetworkCalls {
+		if id == wantNet {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("RemoveNetwork(%q) not called; got %v", wantNet, rt.removeNetworkCalls)
 	}
 }
 

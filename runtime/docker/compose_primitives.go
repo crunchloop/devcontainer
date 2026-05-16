@@ -136,10 +136,11 @@ func (r *Runtime) ListContainers(ctx context.Context, filter runtime.LabelFilter
 			name = trimLeadingSlash(c.Names[0])
 		}
 		out = append(out, runtime.Container{
-			ID:    c.ID,
-			Name:  name,
-			Image: c.Image,
-			State: mapContainerState(string(c.State)),
+			ID:     c.ID,
+			Name:   name,
+			Image:  c.Image,
+			State:  mapContainerState(string(c.State)),
+			Labels: copyLabels(c.Labels),
 		})
 	}
 	return out, nil

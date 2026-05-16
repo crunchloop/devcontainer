@@ -208,11 +208,16 @@ func (r *Runtime) ListContainers(ctx context.Context, filter runtime.LabelFilter
 		if !labelsMatchFilter(item.Labels, filter.Match) {
 			continue
 		}
+		labels := make(map[string]string, len(item.Labels))
+		for k, v := range item.Labels {
+			labels[k] = v
+		}
 		out = append(out, runtime.Container{
-			ID:    item.ID,
-			Name:  item.Name,
-			Image: item.Image,
-			State: mapState(item.State),
+			ID:     item.ID,
+			Name:   item.Name,
+			Image:  item.Image,
+			State:  mapState(item.State),
+			Labels: labels,
 		})
 	}
 	return out, nil
