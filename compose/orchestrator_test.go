@@ -322,6 +322,9 @@ func TestUp_DependencyOrder(t *testing.T) {
 		t.Fatalf("Up: %v", err)
 	}
 	want := []string{"db", "api", "app"}
+	if len(order) != len(want) {
+		t.Fatalf("order len=%d, want %d (full=%v)", len(order), len(want), order)
+	}
 	for i, name := range want {
 		if order[i] != name {
 			t.Errorf("order[%d] = %q, want %q (full=%v)", i, order[i], name, order)
