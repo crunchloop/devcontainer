@@ -692,6 +692,7 @@ func serviceToRunSpec(
 		})
 	}
 
+	memBytes, nanoCPUs := resourcesOf(svc)
 	return runtime.RunSpec{
 		Image:         svc.Image,
 		Name:          plan.ProjectName + "-" + svc.Name + "-1",
@@ -708,7 +709,32 @@ func serviceToRunSpec(
 		HealthCheck:   healthCheckOf(svc.HealthCheck),
 		Init:          svc.Init != nil && *svc.Init,
 		CapAdd:        svc.CapAdd,
+		MemoryBytes:   memBytes,
+		NanoCPUs:      nanoCPUs,
 	}
+}
+
+// resourcesOf extracts the memory + CPU limits from a compose service.
+// deploy.resources.limits (compose v3+) wins over the legacy top-level
+// mem_limit / cpus fields when both are set, matching docker compose's
+// own precedence. Zero values mean "unset" — the backend's default
+// applies.
+func resourcesOf(svc composetypes.ServiceConfig) (memBytes, nanoCPUs int64) {
+	if d := svc.Deploy; d != nil {
+		if lim := d.Resources.Limits; lim != nil {
+			memBytes = int64(lim.MemoryBytes)
+			if cpus := lim.NanoCPUs.Value(); cpus > 0 {
+				nanoCPUs = int64(cpus * 1_000_000_000)
+			}
+		}
+	}
+	if memBytes == 0 {
+		memBytes = int64(svc.MemLimit)
+	}
+	if nanoCPUs == 0 && svc.CPUS > 0 {
+		nanoCPUs = int64(svc.CPUS * 1_000_000_000)
+	}
+	return memBytes, nanoCPUs
 }
 
 // healthCheckOf translates compose's HealthCheckConfig pointer into

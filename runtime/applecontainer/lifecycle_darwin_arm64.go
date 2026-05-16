@@ -38,6 +38,8 @@ type runSpecJSON struct {
 	InitProcess     bool              `json:"initProcess,omitempty"`
 	CapAdd          []string          `json:"capAdd,omitempty"`
 	OverrideCommand bool              `json:"overrideCommand,omitempty"`
+	MemoryBytes     int64             `json:"memoryBytes,omitempty"`
+	NanoCPUs        int64             `json:"nanoCPUs,omitempty"`
 }
 
 type mountJSON struct {
@@ -216,6 +218,8 @@ func runSpecToWire(spec runtime.RunSpec) runSpecJSON {
 		InitProcess:     spec.Init,
 		CapAdd:          spec.CapAdd,
 		OverrideCommand: spec.OverrideCommand,
+		MemoryBytes:     spec.MemoryBytes,
+		NanoCPUs:        spec.NanoCPUs,
 	}
 	return out
 }

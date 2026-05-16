@@ -52,7 +52,7 @@ func TestValidate_RefusesSwarmFields(t *testing.T) {
 			"app": composetypes.ServiceConfig{
 				Name:   "app",
 				Image:  "alpine",
-				Deploy: &composetypes.DeployConfig{},
+				Deploy: &composetypes.DeployConfig{Mode: "global"},
 			},
 		},
 	}
