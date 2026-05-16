@@ -396,7 +396,7 @@ Resolved during this design review (2026-05-14):
    would be harmful (modifies the in-container user's UID for no
    benefit). PR-C wires `Engine.Up` to short-circuit the
    `updateRemoteUserUID` path when the runtime is apple-container.
-   Mechanism TBD in PR-C — either a capability flag on the `Runtime`
-   interface or a type assertion against an apple-container-only
-   marker interface; favor the former so future backends can opt in
-   without coupling.
+   Mechanism: a small capability flag on the `Runtime` interface
+   (rather than a type assertion against an apple-container-only
+   marker interface) so future backends can opt in without coupling
+   the engine to backend identity.

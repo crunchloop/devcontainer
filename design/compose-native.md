@@ -25,7 +25,7 @@ socket. Without this work, compose-source devcontainers are Docker-only forever.
 
 ## 1. Layering
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────┐
 │ Engine (devcontainer pkg)                                        │
 │   compose source path → compose.Orchestrator (not the runtime)   │
@@ -139,7 +139,7 @@ act on. Documented in the package doc; not warned per-run (would be noise):
 Every container the orchestrator creates carries a fixed label set. These
 are how `Down`, restart-on-Up, and `Engine.Attach` find our resources.
 
-```
+```text
 com.docker.compose.project        = <projectName>     # interop label
 com.docker.compose.service        = <serviceName>     # interop label
 com.docker.compose.oneoff         = False             # interop label
@@ -160,7 +160,7 @@ ps`-compat surface degrades but our own operation does not.
 
 Networks and volumes get a subset:
 
-```
+```text
 com.docker.compose.project = <projectName>
 com.docker.compose.network = default       # on networks
 com.docker.compose.volume  = <volName>     # on volumes
@@ -290,7 +290,7 @@ the existing public consumers are downstream tools maintained alongside this lib
 
 ### 5.1 Up
 
-```
+```text
 Input: Plan {
     Project    *types.Project   // from compose-go
     ProjectName string
@@ -342,7 +342,7 @@ Output: map[serviceName]containerID, error
 
 ### 5.2 Down
 
-```
+```text
 Input: DownPlan { ProjectName string, RemoveImages bool, RemoveVolumes bool }
 
 1. ListContainers(filter: com.docker.compose.project = <name>).
@@ -639,7 +639,7 @@ macOS 15 / arm64 (2026-05-14).
 
    **However: volumes are exclusively mounted.** Attempting to attach
    the same volume to two concurrently-running containers fails with:
-   ```
+   ```text
    Error: failed to bootstrap container ... (cause: "VZErrorDomain
    Code=2 'The storage device attachment is invalid.'")
    ```

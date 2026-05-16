@@ -87,7 +87,7 @@ URLs dedupes. Custom headers (auth) supplied by callers via
 Security posture for the HTTPS client:
 
 - TLS certificates validated against system root CAs; `EngineOptions.HTTPSRootCAs *x509.CertPool` lets callers add private CAs for internal mirrors. `InsecureSkipVerify` is never set.
-- Redirects: follow up to 5 hops; cross-host redirects re-apply `FeatureDownloadHeaders` only if the original Host header allows it (matches Go's default `http.Client` policy). Reject `http://` targets even on redirect.
+- Redirects: follow up to 5 hops; reject `http://` targets even on redirect. Go's `net/http` strips `Authorization` / `Cookie` / `Proxy-Authorization` on cross-host redirects but forwards arbitrary custom headers unchanged — so we install a `CheckRedirect` that drops every caller-supplied `FeatureDownloadHeaders` entry when the redirect crosses hosts. Callers needing cross-host auth pass an explicit host allowlist via `EngineOptions.FeatureDownloadHeaderHosts`.
 - Response size cap: 100 MB by default (`EngineOptions.FeatureDownloadMaxBytes`). Body is streamed with a `LimitReader`; overflow returns `*FeatureTooLargeError`.
 - Timeouts: 30s connect, 5min overall (`EngineOptions.FeatureDownloadTimeout`). No retry — features are large enough that retries mostly mask deeper problems; callers can re-run.
 - All network failures surface as `*FeatureFetchError{Ref, Cause}`; the cache write is atomic (extract to tmp dir, rename on success) so a partial download never poisons the cache.
