@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-18
+
+### Added
+
+- **applecontainer** — new runtime backend targeting Apple's native
+  `container` runtime on darwin/arm64. Containers are launched
+  directly via a Swift bridge (`ACBridge`, exposed over a C ABI) and
+  the bridge dylib is embedded into the Go binary and `dlopen`-ed at
+  runtime, so callers get an Apple-native path without shelling out
+  to `docker`. Includes `Inspect` and `FindContainerByLabel` parity
+  with the docker backend. (#58, #59, #60, #62)
+- **compose** — runtime-agnostic compose orchestrator, opt-in via
+  `EngineOptions.ComposeBackend = ComposeBackendNative`. Drives
+  compose entirely through `runtime.Runtime` primitives, with no
+  dependency on the `docker compose` v2 plugin, and works against
+  backends that lack a Docker-API equivalent — notably the
+  applecontainer runtime, which the orchestrator now drives
+  end-to-end. The shell-out path remains the default; existing
+  callers see no behavior change. (#64)
+- **runtime** — `RunSpec.MemoryBytes` and `RunSpec.NanoCPUs` let
+  callers size each container's resources. Maps to
+  `HostConfig.Memory`/`HostConfig.NanoCPUs` on docker, and to
+  `ContainerConfiguration.resources.memoryInBytes`/`.cpus` on
+  applecontainer (sizing the per-container VM at boot — Apple takes
+  whole CPUs, so fractional nano-cpus round up). The native compose
+  orchestrator translates `deploy.resources.limits.{memory,cpus}`
+  with the legacy top-level `mem_limit` / `cpus` as fallback,
+  matching docker compose's own precedence. (#68)
+
+### Fixed
+
+- **compose** — preserve container state across docker daemon
+  restarts. The shell-out path now passes `--no-recreate` to
+  `docker compose up -d` when a container is already known for the
+  workspace (mirroring the upstream `devcontainers/cli` gate); the
+  native orchestrator now `StartContainer`s a config-matched stopped
+  container instead of stop+remove+recreating it. Both code paths
+  were treating spurious config-hash drift (or a temporarily-stopped
+  container left behind by a daemon restart) as a recreate signal,
+  which destroyed the container's writable layer — taking
+  `~/.claude/projects/`, `~/.bash_history`, install caches, and
+  anything else in `$HOME` with it. (#71, #72)
+- **applecontainer** — named volume mounts now resolve to the volume's
+  backing image path. The Swift bridge was treating `MountType=volume`
+  as a virtiofs bind, and Apple's apiserver was resolving the source
+  via `URL(fileURLWithPath:)` against the launching process's CWD —
+  yielding non-existent paths like
+  `/private/tmp/runner/<project>_<vol>` and `errno 2` at VM
+  bootstrap. The bridge now calls `ClientVolume.inspect(name)` to
+  fetch the backing image path and constructs a proper
+  `Filesystem.volume(...)`, matching apple/container's own CLI. (#67)
+
 ## [0.1.4] - 2026-05-13
 
 ### Fixed
