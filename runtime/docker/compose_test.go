@@ -81,6 +81,44 @@ func TestBuildUpArgs_NoServicesUpsAll(t *testing.T) {
 	}
 }
 
+// TestBuildUpArgs_NoRecreate exercises the resume path: when the
+// caller knows a container already exists for this workspace, pass
+// --no-recreate so compose doesn't destroy it on spurious drift.
+// Matches upstream devcontainers/cli's gate
+// (`container || expectExistingContainer`).
+func TestBuildUpArgs_NoRecreate(t *testing.T) {
+	got := buildUpArgs(runtime.ComposeUpSpec{
+		Files:       []string{"compose.yml"},
+		ProjectName: "dc-x",
+		Services:    []string{"app"},
+		NoRecreate:  true,
+	})
+	want := []string{
+		"compose", "--project-name", "dc-x",
+		"-f", "compose.yml",
+		"up", "-d", "--no-recreate",
+		"app",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v\nwant %v", got, want)
+	}
+}
+
+func TestBuildUpArgs_NoRecreateOmittedByDefault(t *testing.T) {
+	// Cold-start path: no existing container, so --no-recreate must
+	// not appear (it would block first creation under some compose
+	// behaviors / be misleading in flow logs).
+	got := buildUpArgs(runtime.ComposeUpSpec{
+		Files:       []string{"compose.yml"},
+		ProjectName: "dc-x",
+	})
+	for _, a := range got {
+		if a == "--no-recreate" {
+			t.Errorf("buildUpArgs should not pass --no-recreate when NoRecreate=false; got %v", got)
+		}
+	}
+}
+
 func TestBuildDownArgs_Plain(t *testing.T) {
 	got := buildDownArgs(runtime.ComposeDownSpec{
 		Files:       []string{"compose.yml"},

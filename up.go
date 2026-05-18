@@ -203,7 +203,7 @@ func (e *Engine) Up(ctx context.Context, opts UpOptions) (*Workspace, error) {
 		if existing != nil {
 			composeOpts.RunSecretsCommand = false
 		}
-		ws, err = e.createFreshCompose(ctx, cfg, composeOpts)
+		ws, err = e.createFreshCompose(ctx, cfg, composeOpts, existing != nil)
 	case existing != nil:
 		ws, err = e.attachExisting(ctx, existing, cfg, opts)
 	default:
@@ -466,7 +466,7 @@ func composeWorkingDir(cfg *config.ResolvedConfig, opts UpOptions) string {
 //
 // Returns a Workspace whose Container is the primary service's
 // container.
-func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedConfig, opts UpOptions) (*Workspace, error) {
+func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedConfig, opts UpOptions, existingContainer bool) (*Workspace, error) {
 	// Shellout backend requires the runtime to satisfy
 	// ComposeRuntime. Check before any project load / image work so a
 	// missing capability fails fast with ErrNotImplemented instead of
@@ -539,7 +539,7 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 			finalImage, bindMounts, overrideEnv, overrideLabels)
 	case ComposeBackendShellout:
 		return e.upComposeShellout(ctx, cfg, opts, project, src, projectName,
-			workingDir, finalImage, bindMounts, overrideEnv, overrideLabels)
+			workingDir, finalImage, bindMounts, overrideEnv, overrideLabels, existingContainer)
 	default:
 		// Reject unknown values explicitly so a typo in
 		// EngineOptions.ComposeBackend doesn't silently route to
@@ -560,6 +560,7 @@ func (e *Engine) upComposeShellout(
 	bindMounts []compose.BindMount,
 	overrideEnv map[string]string,
 	overrideLabels map[string]string,
+	existingContainer bool,
 ) (*Workspace, error) {
 	cr, ok := e.runtime.(runtime.ComposeRuntime)
 	if !ok {
@@ -594,11 +595,18 @@ func (e *Engine) upComposeShellout(
 	allFiles := append([]string{}, src.Files...)
 	allFiles = append(allFiles, buildOverridePath, runOverridePath)
 
+	// Mirror upstream devcontainers/cli: when a container is already
+	// known to exist for this workspace id, pass --no-recreate so
+	// `docker compose up` keeps the existing container instead of
+	// destroying it on spurious config-hash drift (override file
+	// reordering, pod-scoped env injected by callers, etc.). Loses
+	// the container's writable layer otherwise — see issue #71.
 	if err := cr.ComposeUp(ctx, runtime.ComposeUpSpec{
 		Files:       allFiles,
 		ProjectName: projectName,
 		Services:    src.RunServices,
 		WorkingDir:  workingDir,
+		NoRecreate:  existingContainer,
 	}, opts.bus.BuildChan(events.BuildSourceCompose)); err != nil {
 		return nil, err
 	}
