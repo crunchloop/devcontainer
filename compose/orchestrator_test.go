@@ -412,6 +412,59 @@ func TestUp_RecreateOnImageDigestChange(t *testing.T) {
 	}
 }
 
+// TestUp_StartsStoppedContainerOnConfigMatch covers the daemon-restart
+// path: a previous Up created and started a container; the docker
+// daemon then went away (e.g. host pod destroyed in a k8s deployment
+// where /var/lib/docker lives on a PVC) and came back, leaving the
+// container Exited. A subsequent Up against an unchanged project
+// must reuse the existing container by Starting it, not by destroying
+// and recreating it — recreating would lose the writable layer
+// (issue #71).
+func TestUp_StartsStoppedContainerOnConfigMatch(t *testing.T) {
+	rt := newMockRuntime()
+	orch := NewOrchestrator(rt, "docker")
+	proj := newProject(t, map[string][]string{"app": nil})
+	plan := &Plan{Project: proj, ProjectName: "dc-x"}
+
+	res, err := orch.Up(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("first Up: %v", err)
+	}
+	firstID := res.ContainerIDs["app"]
+	if firstID == "" {
+		t.Fatalf("first Up did not produce a container id")
+	}
+	firstRun := rt.runCalls
+	firstRemove := rt.removeCalls
+
+	// Simulate the daemon-restart effect: container is on disk but
+	// not running. Use the public StopContainer path so the mock
+	// records the state transition the same way a real Exited
+	// container would surface to ListContainers.
+	if err := rt.StopContainer(context.Background(), firstID, runtime.StopOptions{}); err != nil {
+		t.Fatalf("stop container: %v", err)
+	}
+	startCallsBeforeReuse := rt.startCalls
+
+	res2, err := orch.Up(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("second Up: %v", err)
+	}
+
+	if got := res2.ContainerIDs["app"]; got != firstID {
+		t.Errorf("container id changed across Up: first=%s second=%s — reuse expected", firstID, got)
+	}
+	if rt.runCalls != firstRun {
+		t.Errorf("runCalls=%d, want %d (no RunContainer expected on reuse)", rt.runCalls, firstRun)
+	}
+	if rt.removeCalls != firstRemove {
+		t.Errorf("removeCalls=%d, want %d (no RemoveContainer expected on reuse)", rt.removeCalls, firstRemove)
+	}
+	if rt.startCalls != startCallsBeforeReuse+1 {
+		t.Errorf("startCalls=%d, want %d (one StartContainer expected to revive the stopped container)", rt.startCalls, startCallsBeforeReuse+1)
+	}
+}
+
 func TestUp_PartialFailureSurfacesPartialError(t *testing.T) {
 	rt := newMockRuntime()
 	rt.OnRunContainer = func(spec runtime.RunSpec) (*runtime.Container, error) {

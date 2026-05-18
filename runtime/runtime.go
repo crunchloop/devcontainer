@@ -53,6 +53,14 @@ type ComposeUpSpec struct {
 	// the base for compose's relative-path resolution. Engine sets
 	// this to the workspace folder.
 	WorkingDir string
+
+	// NoRecreate, when true, appends `--no-recreate` to the compose
+	// invocation. Tells compose to keep an existing container even if
+	// it thinks the config drifted — used on the resume path so we
+	// don't destroy the container's writable layer (and anything in
+	// $HOME inside it) on a spurious drift detection. Matches the
+	// upstream devcontainers/cli gate (`container || expectExistingContainer`).
+	NoRecreate bool
 }
 
 // ComposeDownSpec configures ComposeDown.

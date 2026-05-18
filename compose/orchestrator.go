@@ -459,11 +459,21 @@ func (o *Orchestrator) ensureService(
 		details, ierr := o.rt.InspectContainer(ctx, c.ID)
 		if ierr == nil && details != nil &&
 			details.Labels[LabelConfigHash] == hash &&
-			details.Labels[LabelImageDigest] == imageDigest &&
-			c.State == runtime.StateRunning {
+			details.Labels[LabelImageDigest] == imageDigest {
+			// Config and image match — the container is reusable.
+			// If it's not currently Running (e.g. dockerd was just
+			// restarted and brought stopped containers back from
+			// on-disk state), start it instead of destroying it.
+			// Recreating would lose the writable layer (the user's
+			// $HOME inside the container, etc.) — see issue #71.
+			if c.State != runtime.StateRunning {
+				if err := o.rt.StartContainer(ctx, c.ID); err != nil {
+					return "", fmt.Errorf("StartContainer(%s): %w", svc.Name, err)
+				}
+			}
 			return c.ID, nil
 		}
-		// Different config or not running — recreate.
+		// Different config — recreate.
 		_ = o.rt.StopContainer(ctx, c.ID, runtime.StopOptions{Timeout: 10 * time.Second})
 		if err := o.rt.RemoveContainer(ctx, c.ID, runtime.RemoveOptions{Force: true}); err != nil {
 			return "", fmt.Errorf("RemoveContainer(%s): %w", c.ID, err)

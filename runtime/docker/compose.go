@@ -75,6 +75,9 @@ func composeArgs(projectName string, files []string) []string {
 func buildUpArgs(spec runtime.ComposeUpSpec) []string {
 	args := composeArgs(spec.ProjectName, spec.Files)
 	args = append(args, "up", "-d")
+	if spec.NoRecreate {
+		args = append(args, "--no-recreate")
+	}
 	args = append(args, spec.Services...)
 	return args
 }
