@@ -2,11 +2,21 @@ package devcontainer
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/crunchloop/devcontainer/config"
 	"github.com/crunchloop/devcontainer/events"
+	"github.com/crunchloop/devcontainer/runtime"
 )
+
+// ErrComposeSourceUnsupported is returned (wrapped) from Engine.Build
+// when the resolved devcontainer.json is a compose source. Callers can
+// match with errors.Is to surface a friendlier message or fall back to
+// the compose workflow.
+var ErrComposeSourceUnsupported = errors.New("compose-source devcontainers are not supported by Engine.Build")
 
 // BuildOptions configures Engine.Build.
 type BuildOptions struct {
@@ -23,10 +33,14 @@ type BuildOptions struct {
 
 	// ImageName, when non-empty, is the tag applied to the final
 	// produced image. It replaces the engine's auto-generated tag
-	// (dc-go-final-<id>:latest or dc-go-base-<id>:latest). Ignored for
-	// pure image sources with no features layered (there is nothing
-	// to retag — the engine would need a TagImage primitive it
-	// doesn't currently expose; tracked as a follow-up).
+	// (dc-go-final-<id>:latest or dc-go-base-<id>:latest).
+	//
+	// Honored uniformly across source kinds. For paths where no build
+	// step would otherwise carry the tag — pure image source, or a
+	// build source whose features are all already pre-baked into the
+	// base image — Build runs a thin `FROM <baseImage>` Dockerfile
+	// build to apply the tag. (This workaround goes away once the
+	// runtime exposes a TagImage primitive; tracked as a follow-up.)
 	ImageName string
 
 	// NoCache forces --no-cache on every BuildImage call in the chain
@@ -79,10 +93,11 @@ type BuildResult struct {
 // while UID reconciliation bakes the calling host's UID into the
 // image. Use Engine.Up if you need a UID-reconciled local image.
 //
-// For pure image sources with no features, Build short-circuits: it
-// just ensures the image is present locally and returns its ref.
-// BuildOptions.ImageName is ignored in that case (no build step to
-// retag); a TagImage primitive is tracked as a follow-up.
+// When the feature pipeline produces no work (no features declared,
+// or every requested feature is already present in the base image's
+// metadata label), Build still honors BuildOptions.ImageName via a
+// thin no-op `FROM <baseImage>` Dockerfile build that applies the
+// tag.
 func (e *Engine) Build(ctx context.Context, opts BuildOptions) (*BuildResult, error) {
 	if err := ctxIfDone(ctx); err != nil {
 		return nil, err
@@ -108,7 +123,7 @@ func (e *Engine) Build(ctx context.Context, opts BuildOptions) (*BuildResult, er
 	}
 
 	if _, isCompose := cfg.Source.(*config.ComposeSource); isCompose {
-		return nil, fmt.Errorf("Engine.Build: compose-source devcontainers are not supported")
+		return nil, fmt.Errorf("Engine.Build: %w", ErrComposeSourceUnsupported)
 	}
 
 	_, isBuildSource := cfg.Source.(*config.BuildSource)
@@ -139,5 +154,59 @@ func (e *Engine) Build(ctx context.Context, opts BuildOptions) (*BuildResult, er
 		return nil, err
 	}
 
+	// If the feature pipeline returned baseImage unchanged (no features
+	// declared, or every feature was already pre-baked into the base
+	// image's metadata) and the caller asked for a specific tag, apply
+	// it via a thin `FROM <baseImage>` build. Until the runtime grows a
+	// TagImage primitive this is the only way to honor ImageName in
+	// these short-circuit paths.
+	if opts.ImageName != "" && finalImage == baseImage && finalImage != opts.ImageName {
+		finalImage, err = e.retagImage(ctx, baseImage, opts.ImageName, upOpts.override, bus)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return &BuildResult{ImageID: finalImage}, nil
+}
+
+// retagImage applies `target` as an additional tag on `source` by
+// running a one-line `FROM <source>` Dockerfile build. Used by Build
+// when the feature pipeline short-circuits and the caller asked for
+// a specific ImageName — there's no other tag-affecting step in the
+// pipeline to carry the tag, and the runtime doesn't expose a
+// dedicated tag primitive yet.
+//
+// Cost: roughly one BuildKit FROM-fetch + a metadata write. No
+// userland layers are added.
+func (e *Engine) retagImage(ctx context.Context, source, target string, override *buildOverride, bus *eventBus) (string, error) {
+	tmp, err := os.MkdirTemp("", "dc-go-retag-*")
+	if err != nil {
+		return "", fmt.Errorf("retag: create tmpdir: %w", err)
+	}
+	defer os.RemoveAll(tmp)
+
+	if err := os.WriteFile(filepath.Join(tmp, "Dockerfile"), []byte("FROM "+source+"\n"), 0o644); err != nil {
+		return "", fmt.Errorf("retag: write Dockerfile: %w", err)
+	}
+
+	var (
+		platform  string
+		cacheFrom []string
+	)
+	if override != nil {
+		platform = override.Platform
+		cacheFrom = override.ExtraCacheFrom
+	}
+	bus.Emit(events.BuildStartEvent{Source: events.BuildSourceDockerfile, Ref: target})
+	if _, err := e.runtime.BuildImage(ctx, runtime.BuildSpec{
+		ContextPath: tmp,
+		Dockerfile:  "Dockerfile",
+		Tag:         target,
+		Platform:    platform,
+		CacheFrom:   cacheFrom,
+	}, bus.BuildChan(events.BuildSourceDockerfile)); err != nil {
+		return "", fmt.Errorf("retag %s as %s: %w", source, target, err)
+	}
+	return target, nil
 }

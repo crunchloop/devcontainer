@@ -4,19 +4,18 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	devcontainer "github.com/crunchloop/devcontainer"
 )
 
-// TestEngineBuild_ImageSource_NoFeatures exercises the short-circuit:
-// pure image source with no features should pull the image and return
-// its ref unchanged, with ImageName ignored (there's nothing to retag
-// — a TagImage primitive is a tracked follow-up).
-func TestEngineBuild_ImageSource_NoFeatures(t *testing.T) {
+// TestEngineBuild_ImageSource_NoFeatures_NoImageName exercises the
+// pure short-circuit path: pure image source, no features, no
+// ImageName. Build should pull the image and return its ref unchanged.
+func TestEngineBuild_ImageSource_NoFeatures_NoImageName(t *testing.T) {
 	if testing.Short() {
 		t.Skip()
 	}
@@ -29,16 +28,46 @@ func TestEngineBuild_ImageSource_NoFeatures(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	res, err := eng.Build(ctx, devcontainer.BuildOptions{
-		LocalWorkspaceFolder: ws,
-		ImageName:            "ignored-because-no-build-step:latest",
-	})
+	res, err := eng.Build(ctx, devcontainer.BuildOptions{LocalWorkspaceFolder: ws})
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	if res.ImageID != testImage {
-		t.Errorf("ImageID = %q, want %q (ImageName should be ignored when no build step exists)", res.ImageID, testImage)
+		t.Errorf("ImageID = %q, want %q", res.ImageID, testImage)
 	}
+}
+
+// TestEngineBuild_ImageSource_RetagToImageName: pure image source +
+// ImageName should run a thin retag build so the returned ImageID
+// equals the requested tag.
+func TestEngineBuild_ImageSource_RetagToImageName(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+
+	eng, rt := newEngine(t)
+	defer rt.Close()
+
+	ws := writeWorkspace(t, `{"image": "`+testImage+`"}`)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	const tag = "dc-go-build-test-retag-image-source:v1"
+	res, err := eng.Build(ctx, devcontainer.BuildOptions{
+		LocalWorkspaceFolder: ws,
+		ImageName:            tag,
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if res.ImageID != tag {
+		t.Errorf("ImageID = %q, want %q", res.ImageID, tag)
+	}
+	if details, err := rt.InspectImage(ctx, tag); err != nil || details == nil {
+		t.Errorf("InspectImage(%s): details=%v err=%v", tag, details, err)
+	}
+	t.Cleanup(func() { _ = rt.RemoveImage(context.Background(), tag) })
 }
 
 // TestEngineBuild_BuildSource_WithFeature is the canonical happy path:
@@ -143,8 +172,8 @@ func TestEngineBuild_ComposeRefused(t *testing.T) {
 	if err == nil {
 		t.Fatal("Build accepted a compose source; expected refusal")
 	}
-	if !strings.Contains(err.Error(), "compose") {
-		t.Errorf("error %q should mention compose", err.Error())
+	if !errors.Is(err, devcontainer.ErrComposeSourceUnsupported) {
+		t.Errorf("error %v does not match ErrComposeSourceUnsupported", err)
 	}
 }
 
