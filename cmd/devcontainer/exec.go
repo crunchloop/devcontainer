@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -15,6 +16,7 @@ func newExecCmd(rf *rootFlags) *cobra.Command {
 		user       string
 		workingDir string
 		noTty      bool
+		envFlags   []string
 	)
 
 	cmd := &cobra.Command{
@@ -48,6 +50,11 @@ func newExecCmd(rf *rootFlags) *cobra.Command {
 				return err
 			}
 
+			env, err := parseEnvFlags(envFlags)
+			if err != nil {
+				return err
+			}
+
 			tty := !noTty && term.IsTerminal(int(os.Stdin.Fd()))
 			restore, err := setupTty(tty)
 			if err != nil {
@@ -70,6 +77,7 @@ func newExecCmd(rf *rootFlags) *cobra.Command {
 			// term.GetSize + signal.Notify(SIGWINCH) through.
 			res, err := eng.Exec(ctx, workspace, devcontainer.ExecOptions{
 				Cmd:        args,
+				Env:        env,
 				User:       user,
 				WorkingDir: wd,
 				Tty:        tty,
@@ -92,8 +100,27 @@ func newExecCmd(rf *rootFlags) *cobra.Command {
 	cmd.Flags().StringVar(&user, "user", "", "Override remoteUser/containerUser for this exec")
 	cmd.Flags().StringVar(&workingDir, "working-dir", "", "Working directory inside the container")
 	cmd.Flags().BoolVar(&noTty, "no-tty", false, "Do not allocate a TTY even if stdin is a terminal")
+	cmd.Flags().StringArrayVarP(&envFlags, "env", "e", nil, "Set an environment variable (KEY=VALUE). Repeatable.")
 
 	return cmd
+}
+
+// parseEnvFlags turns each "KEY=VALUE" into a map entry. The first '='
+// is the separator, so values containing '=' (URLs, base64) survive.
+// Entries without '=' are rejected.
+func parseEnvFlags(flags []string) (map[string]string, error) {
+	if len(flags) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(flags))
+	for _, e := range flags {
+		i := strings.IndexByte(e, '=')
+		if i <= 0 {
+			return nil, fmt.Errorf("invalid --env %q: expected KEY=VALUE", e)
+		}
+		out[e[:i]] = e[i+1:]
+	}
+	return out, nil
 }
 
 // setupTty puts the terminal in raw mode when tty is true and returns a
