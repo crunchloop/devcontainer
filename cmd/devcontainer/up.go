@@ -19,6 +19,11 @@ func newUpCmd(rf *rootFlags) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 
+			level, err := rf.level()
+			if err != nil {
+				return err
+			}
+
 			ws, err := rf.resolveWorkspaceFolder()
 			if err != nil {
 				return err
@@ -30,7 +35,7 @@ func newUpCmd(rf *rootFlags) *cobra.Command {
 			}
 			defer closeEng()
 
-			evCh, stop := startEventPrinter()
+			evCh, stop := startEventPrinter(level)
 			workspace, upErr := eng.Up(ctx, devcontainer.UpOptions{
 				LocalWorkspaceFolder: ws,
 				ConfigPath:           rf.configPath,
@@ -54,6 +59,7 @@ func newUpCmd(rf *rootFlags) *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&recreate, "remove-existing-container", false, "Stop and remove any existing container before creating a fresh one")
+	cmd.Flags().BoolVar(&recreate, "recreate", false, "Alias for --remove-existing-container")
 	cmd.Flags().BoolVar(&runInitializeCommand, "run-initialize-command", false, "Run devcontainer.json initializeCommand on the host before container creation")
 	cmd.Flags().BoolVar(&runSecretsCommand, "run-secrets-command", false, "Run devcontainer.json secretsCommand on the host and inject its output as container env")
 

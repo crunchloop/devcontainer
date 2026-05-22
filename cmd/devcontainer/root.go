@@ -48,6 +48,22 @@ func newRootCmd() *cobra.Command {
 	return cmd
 }
 
+// level returns the parsed --log-level. Unknown values return an error;
+// commands should call this once at the top of RunE so a bad value
+// fails fast.
+func (f *rootFlags) level() (logLevel, error) {
+	switch f.logLevel {
+	case "info", "":
+		return levelInfo, nil
+	case "debug":
+		return levelDebug, nil
+	case "trace":
+		return levelTrace, nil
+	default:
+		return 0, fmt.Errorf("unknown --log-level %q (want info | debug | trace)", f.logLevel)
+	}
+}
+
 // resolveWorkspaceFolder turns the --workspace-folder flag into an absolute
 // path, defaulting to the current working directory when unset.
 func (f *rootFlags) resolveWorkspaceFolder() (string, error) {

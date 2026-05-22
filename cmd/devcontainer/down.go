@@ -42,6 +42,11 @@ func newDownLikeCmd(rf *rootFlags, o downLikeOpts) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 
+			level, err := rf.level()
+			if err != nil {
+				return err
+			}
+
 			ws, err := rf.resolveWorkspaceFolder()
 			if err != nil {
 				return err
@@ -66,7 +71,7 @@ func newDownLikeCmd(rf *rootFlags, o downLikeOpts) *cobra.Command {
 				return err
 			}
 
-			evCh, stop := startEventPrinter()
+			evCh, stop := startEventPrinter(level)
 			downOpts := devcontainer.DownOptions{
 				Remove: o.remove,
 				Events: evCh,
