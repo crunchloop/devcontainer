@@ -1,18 +1,14 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
 	devcontainer "github.com/crunchloop/devcontainer"
-	"github.com/crunchloop/devcontainer/runtime"
 )
 
 func newExecCmd(rf *rootFlags) *cobra.Command {
@@ -54,25 +50,25 @@ func newExecCmd(rf *rootFlags) *cobra.Command {
 			}
 
 			tty := !noTty && term.IsTerminal(int(os.Stdin.Fd()))
-			initialSize, resizeCh, restore, err := setupTty(ctx, tty)
+			restore, err := setupTty(tty)
 			if err != nil {
 				return err
 			}
 			defer restore()
 
-			execOpts := devcontainer.ExecOptions{
-				Cmd:            args,
-				User:           user,
-				WorkingDir:     workingDir,
-				Tty:            tty,
-				Stdin:          os.Stdin,
-				Stdout:         os.Stdout,
-				Stderr:         os.Stderr,
-				InitialTtySize: initialSize,
-				ResizeCh:       resizeCh,
-			}
-
-			res, err := eng.Exec(ctx, workspace, execOpts)
+			// NOTE: window-size forwarding (SIGWINCH → resize) is not
+			// wired here yet — the runtime ExecOptions surface for it
+			// is still in-flight on main. Once it lands we can plumb
+			// term.GetSize + signal.Notify(SIGWINCH) through.
+			res, err := eng.Exec(ctx, workspace, devcontainer.ExecOptions{
+				Cmd:        args,
+				User:       user,
+				WorkingDir: workingDir,
+				Tty:        tty,
+				Stdin:      os.Stdin,
+				Stdout:     os.Stdout,
+				Stderr:     os.Stderr,
+			})
 			if err != nil {
 				return err
 			}
@@ -92,53 +88,18 @@ func newExecCmd(rf *rootFlags) *cobra.Command {
 	return cmd
 }
 
-// setupTty puts the terminal in raw mode and wires SIGWINCH to a resize
-// channel when tty is true. Returns a restore func that's always safe
-// to call (no-op when tty was false).
-func setupTty(ctx context.Context, tty bool) (runtime.TtySize, <-chan runtime.TtySize, func(), error) {
+// setupTty puts the terminal in raw mode when tty is true and returns a
+// restore func that's always safe to call (no-op when tty was false).
+func setupTty(tty bool) (func(), error) {
 	if !tty {
-		return runtime.TtySize{}, nil, func() {}, nil
+		return func() {}, nil
 	}
 	fd := int(os.Stdin.Fd())
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
-		return runtime.TtySize{}, nil, func() {}, fmt.Errorf("make raw: %w", err)
+		return func() {}, fmt.Errorf("make raw: %w", err)
 	}
-
-	var initial runtime.TtySize
-	if w, h, err := term.GetSize(fd); err == nil {
-		initial = runtime.TtySize{Width: uint16(w), Height: uint16(h)}
-	}
-
-	resizeCh := make(chan runtime.TtySize, 1)
-	sigwinch := make(chan os.Signal, 1)
-	signal.Notify(sigwinch, syscall.SIGWINCH)
-	winchCtx, cancelWinch := context.WithCancel(ctx)
-	go func() {
-		defer signal.Stop(sigwinch)
-		for {
-			select {
-			case <-winchCtx.Done():
-				return
-			case <-sigwinch:
-				w, h, err := term.GetSize(fd)
-				if err != nil {
-					continue
-				}
-				select {
-				case resizeCh <- runtime.TtySize{Width: uint16(w), Height: uint16(h)}:
-				case <-winchCtx.Done():
-					return
-				}
-			}
-		}
-	}()
-
-	restore := func() {
-		cancelWinch()
-		_ = term.Restore(fd, oldState)
-	}
-	return initial, resizeCh, restore, nil
+	return func() { _ = term.Restore(fd, oldState) }, nil
 }
 
 // silentExitError carries an exit code without a printed message.

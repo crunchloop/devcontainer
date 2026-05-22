@@ -10,7 +10,6 @@ import (
 
 	devcontainer "github.com/crunchloop/devcontainer"
 	"github.com/crunchloop/devcontainer/runtime"
-	"github.com/crunchloop/devcontainer/runtime/applecontainer"
 	"github.com/crunchloop/devcontainer/runtime/docker"
 )
 
@@ -78,11 +77,7 @@ func (f *rootFlags) newRuntime(ctx context.Context) (runtime.Runtime, func(), er
 		}
 		return rt, func() { _ = rt.Close() }, nil
 	case "applecontainer":
-		rt, err := applecontainer.New(ctx, applecontainer.Options{})
-		if err != nil {
-			return nil, nil, fmt.Errorf("applecontainer runtime: %w", err)
-		}
-		return rt, func() {}, nil
+		return newAppleContainerRuntime(ctx)
 	default:
 		return nil, nil, fmt.Errorf("unknown runtime %q (want docker | applecontainer)", f.runtimeName)
 	}
