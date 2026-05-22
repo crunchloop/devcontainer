@@ -1,9 +1,6 @@
 package main
 
 import (
-	"fmt"
-	"os"
-
 	"github.com/spf13/cobra"
 
 	devcontainer "github.com/crunchloop/devcontainer"
@@ -48,9 +45,9 @@ func newUpCmd(rf *rootFlags) *cobra.Command {
 				return upErr
 			}
 
-			fmt.Fprintf(os.Stderr, "✓ workspace %s ready\n", workspace.ID)
+			stderrf("✓ workspace %s ready\n", workspace.ID)
 			if workspace.Container != nil {
-				fmt.Fprintf(os.Stderr, "  container: %s\n", workspace.Container.ID)
+				stderrf("  container: %s\n", workspace.Container.ID)
 			}
 			return nil
 		},

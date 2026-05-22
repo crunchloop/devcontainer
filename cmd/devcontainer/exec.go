@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 
@@ -107,11 +106,3 @@ func setupTty(tty bool) (func(), error) {
 type silentExitError struct{ code int }
 
 func (s silentExitError) Error() string { return fmt.Sprintf("exit status %d", s.code) }
-
-func exitCodeFor(err error) int {
-	var s silentExitError
-	if errors.As(err, &s) {
-		return s.code
-	}
-	return 1
-}

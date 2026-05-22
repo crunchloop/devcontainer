@@ -1,9 +1,6 @@
 package main
 
 import (
-	"fmt"
-	"os"
-
 	"github.com/spf13/cobra"
 
 	devcontainer "github.com/crunchloop/devcontainer"
@@ -84,9 +81,9 @@ func newDownLikeCmd(rf *rootFlags, o downLikeOpts) *cobra.Command {
 			}
 
 			if o.remove {
-				fmt.Fprintf(os.Stderr, "✓ workspace %s down\n", workspace.ID)
+				stderrf("✓ workspace %s down\n", workspace.ID)
 			} else {
-				fmt.Fprintf(os.Stderr, "✓ workspace %s stopped\n", workspace.ID)
+				stderrf("✓ workspace %s stopped\n", workspace.ID)
 			}
 			return nil
 		},

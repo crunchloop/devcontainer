@@ -8,6 +8,18 @@ import (
 	"github.com/crunchloop/devcontainer/events"
 )
 
+// stderrf writes a formatted message to stderr, ignoring write errors —
+// there's nothing reasonable to do if writing to stderr itself fails.
+func stderrf(format string, args ...any) {
+	_, _ = fmt.Fprintf(os.Stderr, format, args...)
+}
+
+// outf is the io.Writer-targeted variant used by printEvent (the writer
+// is injectable so tests can substitute a buffer).
+func outf(w io.Writer, format string, args ...any) {
+	_, _ = fmt.Fprintf(w, format, args...)
+}
+
 // startEventPrinter spawns a goroutine that drains ch to stderr in
 // human-readable form and returns the channel for callers to pass to
 // the engine, plus a stop function that closes the channel and waits
@@ -33,42 +45,42 @@ func startEventPrinter() (chan events.Event, func()) {
 func printEvent(w io.Writer, ev events.Event) {
 	switch e := ev.(type) {
 	case events.ConfigWarningEvent:
-		fmt.Fprintf(w, "[warn] %s: %s\n", e.Code, e.Message)
+		outf(w, "[warn] %s: %s\n", e.Code, e.Message)
 	case events.WarnEvent:
-		fmt.Fprintf(w, "[warn] %s\n", e.Message)
+		outf(w, "[warn] %s\n", e.Message)
 	case events.LifecycleStartEvent:
-		fmt.Fprintf(w, "[lifecycle] %s starting\n", e.Phase)
+		outf(w, "[lifecycle] %s starting\n", e.Phase)
 	case events.LifecycleOutputEvent:
-		fmt.Fprintf(w, "[%s] %s", e.Phase, e.Line)
+		outf(w, "[%s] %s", e.Phase, e.Line)
 	case events.LifecycleCompletedEvent:
-		fmt.Fprintf(w, "[lifecycle] %s done\n", e.Phase)
+		outf(w, "[lifecycle] %s done\n", e.Phase)
 	case events.LifecycleSkippedEvent:
-		fmt.Fprintf(w, "[lifecycle] %s skipped: %s\n", e.Phase, e.Reason)
+		outf(w, "[lifecycle] %s skipped: %s\n", e.Phase, e.Reason)
 	case events.BuildStartEvent:
-		fmt.Fprintf(w, "[build] start\n")
+		outf(w, "[build] start\n")
 	case events.BuildLogEvent:
-		fmt.Fprint(w, e.Line)
+		_, _ = fmt.Fprint(w, e.Line)
 	case events.BuildCompletedEvent:
-		fmt.Fprintf(w, "[build] done: %s\n", e.ImageID)
+		outf(w, "[build] done: %s\n", e.ImageID)
 	case events.FeatureResolveStartEvent:
-		fmt.Fprintf(w, "[feature] resolving %s\n", e.Ref)
+		outf(w, "[feature] resolving %s\n", e.Ref)
 	case events.FeatureResolvedEvent:
 		if e.FromCache {
-			fmt.Fprintf(w, "[feature] %s (cached)\n", e.Ref)
+			outf(w, "[feature] %s (cached)\n", e.Ref)
 		} else {
-			fmt.Fprintf(w, "[feature] %s\n", e.Ref)
+			outf(w, "[feature] %s\n", e.Ref)
 		}
 	case events.ContainerCreatingEvent:
-		fmt.Fprintf(w, "[container] creating\n")
+		outf(w, "[container] creating\n")
 	case events.ContainerCreatedEvent:
-		fmt.Fprintf(w, "[container] created: %s\n", e.ContainerID)
+		outf(w, "[container] created: %s\n", e.ContainerID)
 	case events.ContainerStartedEvent:
-		fmt.Fprintf(w, "[container] started\n")
+		outf(w, "[container] started\n")
 	case events.ContainerStoppedEvent:
-		fmt.Fprintf(w, "[container] stopped: %s\n", e.ContainerID)
+		outf(w, "[container] stopped: %s\n", e.ContainerID)
 	case events.ContainerRemovedEvent:
-		fmt.Fprintf(w, "[container] removed: %s\n", e.ContainerID)
+		outf(w, "[container] removed: %s\n", e.ContainerID)
 	default:
-		fmt.Fprintf(w, "[%s]\n", ev.EventType())
+		outf(w, "[%s]\n", ev.EventType())
 	}
 }

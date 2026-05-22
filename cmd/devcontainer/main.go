@@ -9,7 +9,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -27,6 +26,6 @@ func main() {
 	if errors.As(err, &silent) {
 		os.Exit(silent.code)
 	}
-	fmt.Fprintln(os.Stderr, "error:", err)
+	stderrf("error: %s\n", err)
 	os.Exit(1)
 }

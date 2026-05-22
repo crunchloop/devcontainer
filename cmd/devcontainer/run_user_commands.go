@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -73,7 +72,7 @@ func newRunUserCommandsCmd(rf *rootFlags) *cobra.Command {
 					return err
 				}
 			}
-			fmt.Fprintf(os.Stderr, "✓ lifecycle commands complete\n")
+			stderrf("✓ lifecycle commands complete\n")
 			return nil
 		},
 	}
