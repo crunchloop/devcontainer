@@ -12,10 +12,12 @@ import (
 func newDownCmd(rf *rootFlags) *cobra.Command {
 	var removeVolumes bool
 	return newDownLikeCmd(rf, downLikeOpts{
-		use:           "down",
-		short:         "Stop and remove the workspace's dev container",
-		remove:        true,
-		extraFlags:    func(c *cobra.Command) { c.Flags().BoolVar(&removeVolumes, "remove-volumes", false, "Also remove anonymous volumes created by the container") },
+		use:    "down",
+		short:  "Stop and remove the workspace's dev container",
+		remove: true,
+		extraFlags: func(c *cobra.Command) {
+			c.Flags().BoolVar(&removeVolumes, "remove-volumes", false, "Also remove anonymous volumes created by the container")
+		},
 		removeVolumes: &removeVolumes,
 	})
 }
