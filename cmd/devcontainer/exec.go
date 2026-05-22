@@ -55,6 +55,15 @@ func newExecCmd(rf *rootFlags) *cobra.Command {
 			}
 			defer restore()
 
+			// Default cwd to the resolved container workspace folder
+			// when --working-dir wasn't given, so `devcontainer exec ls`
+			// lands inside the project rather than wherever the base
+			// image's WORKDIR points.
+			wd := workingDir
+			if wd == "" {
+				wd = cfg.ContainerWorkspaceFolder
+			}
+
 			// NOTE: window-size forwarding (SIGWINCH → resize) is not
 			// wired here yet — the runtime ExecOptions surface for it
 			// is still in-flight on main. Once it lands we can plumb
@@ -62,7 +71,7 @@ func newExecCmd(rf *rootFlags) *cobra.Command {
 			res, err := eng.Exec(ctx, workspace, devcontainer.ExecOptions{
 				Cmd:        args,
 				User:       user,
-				WorkingDir: workingDir,
+				WorkingDir: wd,
 				Tty:        tty,
 				Stdin:      os.Stdin,
 				Stdout:     os.Stdout,
