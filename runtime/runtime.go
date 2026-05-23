@@ -455,6 +455,14 @@ type BuildSpec struct {
 	Platform    string
 }
 
+// TtySize is a pty geometry in character cells. A zero value means
+// "unspecified" — callers that don't care can leave it at the zero value
+// and the runtime falls back to the container's default (typically 80x24).
+type TtySize struct {
+	Width  uint16
+	Height uint16
+}
+
 // ExecOptions configures an exec invocation. If Stdout/Stderr are nil,
 // captured output is returned in ExecResult; otherwise output streams
 // directly and ExecResult's Stdout/Stderr are empty.
@@ -467,6 +475,19 @@ type ExecOptions struct {
 	Stdin      io.Reader
 	Stdout     io.Writer
 	Stderr     io.Writer
+
+	// InitialTtySize, when Tty is true and both dimensions are non-zero,
+	// sets the pty geometry at exec creation. Ignored when Tty is false.
+	InitialTtySize TtySize
+
+	// ResizeCh, when non-nil and Tty is true, delivers pty geometry
+	// updates for the lifetime of the exec. The runtime forwards each
+	// received TtySize to the underlying exec session. The caller owns
+	// the channel and MUST NOT close it before ExecContainer returns.
+	// Sends are non-blocking from the caller's perspective: if the
+	// runtime is mid-resize, the latest value may be coalesced. Ignored
+	// when Tty is false.
+	ResizeCh <-chan TtySize
 }
 
 // ExecResult is the outcome of ExecContainer.
