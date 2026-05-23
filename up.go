@@ -99,6 +99,32 @@ type UpOptions struct {
 	// through internal helpers via the UpOptions value copy. Never read or
 	// written by callers.
 	bus *eventBus
+
+	// override carries build-time knobs supplied by Engine.Build callers
+	// (final image tag, --no-cache, --platform, additional --cache-from).
+	// Engine.Up itself leaves this nil; prepareBaseImage and layerFeatures
+	// merge override values into their runtime.BuildSpec when non-nil.
+	override *buildOverride
+}
+
+// buildOverride is the bag of build-time knobs Engine.Build threads
+// through Up's internal helpers. Internal-only — Engine.Build sets it,
+// Engine.Up leaves it nil.
+type buildOverride struct {
+	// FinalTag, when non-empty, replaces the auto-generated tag of the
+	// *last* BuildImage call in the chain. Which call that is depends
+	// on BaseIsFinal: when true the base Dockerfile build is the last
+	// step (BuildSource with no features); otherwise it's the features
+	// build (any source with at least one feature).
+	FinalTag    string
+	BaseIsFinal bool
+	// NoCache forces --no-cache on every BuildImage call in the chain.
+	NoCache bool
+	// Platform pins the target platform on every BuildImage call.
+	Platform string
+	// ExtraCacheFrom is appended to whatever CacheFrom the source
+	// declares (devcontainer.json `build.cacheFrom`).
+	ExtraCacheFrom []string
 }
 
 // PullPolicy controls when images are pulled from a registry.
@@ -860,6 +886,19 @@ func (e *Engine) prepareBaseImage(ctx context.Context, cfg *config.ResolvedConfi
 
 	case *config.BuildSource:
 		tag := "dc-go-base-" + cfg.DevcontainerID + ":latest"
+		cacheFrom := s.CacheFrom
+		var (
+			noCache  bool
+			platform string
+		)
+		if opts.override != nil {
+			if opts.override.BaseIsFinal && opts.override.FinalTag != "" {
+				tag = opts.override.FinalTag
+			}
+			noCache = opts.override.NoCache
+			platform = opts.override.Platform
+			cacheFrom = append(append([]string(nil), cacheFrom...), opts.override.ExtraCacheFrom...)
+		}
 		opts.bus.Emit(events.BuildStartEvent{Source: events.BuildSourceDockerfile, Ref: tag})
 		_, err := e.runtime.BuildImage(ctx, runtime.BuildSpec{
 			ContextPath: s.Context,
@@ -867,7 +906,9 @@ func (e *Engine) prepareBaseImage(ctx context.Context, cfg *config.ResolvedConfi
 			Tag:         tag,
 			Args:        s.Args,
 			Target:      s.Target,
-			CacheFrom:   s.CacheFrom,
+			CacheFrom:   cacheFrom,
+			NoCache:     noCache,
+			Platform:    platform,
 		}, opts.bus.BuildChan(events.BuildSourceDockerfile))
 		if err != nil {
 			return "", fmt.Errorf("build base image from %s: %w", s.Context, err)
@@ -992,6 +1033,19 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 	}
 
 	finalTag := "dc-go-final-" + cfg.DevcontainerID + ":latest"
+	var (
+		noCache   bool
+		platform  string
+		cacheFrom []string
+	)
+	if opts.override != nil {
+		if !opts.override.BaseIsFinal && opts.override.FinalTag != "" {
+			finalTag = opts.override.FinalTag
+		}
+		noCache = opts.override.NoCache
+		platform = opts.override.Platform
+		cacheFrom = append([]string(nil), opts.override.ExtraCacheFrom...)
+	}
 	opts.bus.Emit(events.BuildStartEvent{Source: events.BuildSourceFeatures, Ref: finalTag})
 	_, err = e.runtime.BuildImage(ctx, runtime.BuildSpec{
 		ContextPath: tmp,
@@ -1000,6 +1054,9 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 		Args: map[string]string{
 			"_DEV_CONTAINERS_BASE_IMAGE": baseImage,
 		},
+		CacheFrom: cacheFrom,
+		NoCache:   noCache,
+		Platform:  platform,
 	}, opts.bus.BuildChan(events.BuildSourceFeatures))
 	if err != nil {
 		return "", nil, fmt.Errorf("build feature-extended image: %w", err)
