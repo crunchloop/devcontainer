@@ -191,10 +191,12 @@ func (e *Engine) retagImage(ctx context.Context, source, target string, override
 	}
 
 	var (
+		noCache   bool
 		platform  string
 		cacheFrom []string
 	)
 	if override != nil {
+		noCache = override.NoCache
 		platform = override.Platform
 		cacheFrom = override.ExtraCacheFrom
 	}
@@ -205,6 +207,7 @@ func (e *Engine) retagImage(ctx context.Context, source, target string, override
 		Tag:         target,
 		Platform:    platform,
 		CacheFrom:   cacheFrom,
+		NoCache:     noCache,
 	}, bus.BuildChan(events.BuildSourceDockerfile)); err != nil {
 		return "", fmt.Errorf("retag %s as %s: %w", source, target, err)
 	}
