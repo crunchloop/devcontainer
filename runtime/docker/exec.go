@@ -12,6 +12,14 @@ import (
 )
 
 func (r *Runtime) ExecContainer(ctx context.Context, id string, opts runtime.ExecOptions) (runtime.ExecResult, error) {
+	var consoleSize client.ConsoleSize
+	if opts.Tty && opts.InitialTtySize.Width != 0 && opts.InitialTtySize.Height != 0 {
+		consoleSize = client.ConsoleSize{
+			Height: uint(opts.InitialTtySize.Height),
+			Width:  uint(opts.InitialTtySize.Width),
+		}
+	}
+
 	createRes, err := r.api.ExecCreate(ctx, id, client.ExecCreateOptions{
 		User:         opts.User,
 		WorkingDir:   opts.WorkingDir,
@@ -21,6 +29,7 @@ func (r *Runtime) ExecContainer(ctx context.Context, id string, opts runtime.Exe
 		AttachStdout: true,
 		AttachStderr: true,
 		TTY:          opts.Tty,
+		ConsoleSize:  consoleSize,
 	})
 	if err != nil {
 		if isContainerNotFound(err) {
@@ -34,6 +43,16 @@ func (r *Runtime) ExecContainer(ctx context.Context, id string, opts runtime.Exe
 		return runtime.ExecResult{}, fmt.Errorf("ExecAttach: %w", err)
 	}
 	defer attachRes.Close()
+
+	// Forward pty resize events for the lifetime of this exec. The
+	// goroutine exits when the caller stops sending and the parent
+	// context is cancelled (which we always do via the deferred
+	// cancel below, even on the happy path).
+	if opts.Tty && opts.ResizeCh != nil {
+		resizeCtx, cancelResize := context.WithCancel(ctx)
+		defer cancelResize()
+		go forwardExecResize(resizeCtx, r.api, createRes.ID, opts.ResizeCh)
+	}
 
 	// Pipe stdin in the background if provided. We close the write half
 	// when the caller-supplied reader returns EOF so the daemon sees a
@@ -95,4 +114,41 @@ func (r *Runtime) ExecContainer(ctx context.Context, id string, opts runtime.Exe
 		res.Stderr = errBuf.String()
 	}
 	return res, nil
+}
+
+// forwardExecResize drains size updates and pushes them to the daemon
+// for the given exec id. Coalescing isn't strictly needed (resize events
+// are sparse compared to the speed of the API call), but we use a
+// best-effort drain to avoid backing up if the user resizes furiously.
+func forwardExecResize(ctx context.Context, api *client.Client, execID string, ch <-chan runtime.TtySize) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case sz, ok := <-ch:
+			if !ok {
+				return
+			}
+			// Drain any pending updates and keep only the latest.
+			drained := true
+			for drained {
+				select {
+				case next, ok := <-ch:
+					if !ok {
+						return
+					}
+					sz = next
+				default:
+					drained = false
+				}
+			}
+			if sz.Width == 0 || sz.Height == 0 {
+				continue
+			}
+			_, _ = api.ExecResize(ctx, execID, client.ExecResizeOptions{
+				Height: uint(sz.Height),
+				Width:  uint(sz.Width),
+			})
+		}
+	}
 }

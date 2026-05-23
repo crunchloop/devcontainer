@@ -23,6 +23,17 @@ type ExecOptions struct {
 	Stdout     io.Writer
 	Stderr     io.Writer
 
+	// InitialTtySize, when Tty is true and both dimensions are
+	// non-zero, sets the initial pty geometry. Ignored when Tty is
+	// false.
+	InitialTtySize runtime.TtySize
+
+	// ResizeCh, when non-nil and Tty is true, delivers pty geometry
+	// updates for the lifetime of the exec. The caller owns the
+	// channel and MUST NOT close it before Exec returns. Ignored when
+	// Tty is false.
+	ResizeCh <-chan runtime.TtySize
+
 	// SkipUserEnvProbe, when true, makes Exec bypass the merge of
 	// probedEnv AND cfg.RemoteEnv into the process environment.
 	// Only opts.Env (after substitution) plus whatever the runtime
@@ -104,14 +115,16 @@ func (e *Engine) Exec(ctx context.Context, ws *Workspace, opts ExecOptions) (Exe
 	start := time.Now()
 
 	res, err := e.runtime.ExecContainer(ctx, ws.Container.ID, runtime.ExecOptions{
-		Cmd:        cmd,
-		Env:        env,
-		User:       user,
-		WorkingDir: wd,
-		Tty:        opts.Tty,
-		Stdin:      opts.Stdin,
-		Stdout:     opts.Stdout,
-		Stderr:     opts.Stderr,
+		Cmd:            cmd,
+		Env:            env,
+		User:           user,
+		WorkingDir:     wd,
+		Tty:            opts.Tty,
+		Stdin:          opts.Stdin,
+		Stdout:         opts.Stdout,
+		Stderr:         opts.Stderr,
+		InitialTtySize: opts.InitialTtySize,
+		ResizeCh:       opts.ResizeCh,
 	})
 	if err != nil {
 		bus.Emit(events.ExecCompletedEvent{
