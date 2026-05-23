@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
 	devcontainer "github.com/crunchloop/devcontainer"
+	"github.com/crunchloop/devcontainer/runtime"
 )
 
 func newExecCmd(rf *rootFlags) *cobra.Command {
@@ -56,11 +60,11 @@ func newExecCmd(rf *rootFlags) *cobra.Command {
 			}
 
 			tty := !noTty && term.IsTerminal(int(os.Stdin.Fd()))
-			restore, err := setupTty(tty)
+			ttyState, err := setupTty(ctx, tty)
 			if err != nil {
 				return err
 			}
-			defer restore()
+			defer ttyState.restore()
 
 			// Default cwd to the resolved container workspace folder
 			// when --working-dir wasn't given, so `devcontainer exec ls`
@@ -71,19 +75,17 @@ func newExecCmd(rf *rootFlags) *cobra.Command {
 				wd = cfg.ContainerWorkspaceFolder
 			}
 
-			// NOTE: window-size forwarding (SIGWINCH → resize) is not
-			// wired here yet — the runtime ExecOptions surface for it
-			// is still in-flight on main. Once it lands we can plumb
-			// term.GetSize + signal.Notify(SIGWINCH) through.
 			res, err := eng.Exec(ctx, workspace, devcontainer.ExecOptions{
-				Cmd:        args,
-				Env:        env,
-				User:       user,
-				WorkingDir: wd,
-				Tty:        tty,
-				Stdin:      os.Stdin,
-				Stdout:     os.Stdout,
-				Stderr:     os.Stderr,
+				Cmd:            args,
+				Env:            env,
+				User:           user,
+				WorkingDir:     wd,
+				Tty:            tty,
+				Stdin:          os.Stdin,
+				Stdout:         os.Stdout,
+				Stderr:         os.Stderr,
+				InitialTtySize: ttyState.initial,
+				ResizeCh:       ttyState.resize,
 			})
 			if err != nil {
 				return err
@@ -123,18 +125,68 @@ func parseEnvFlags(flags []string) (map[string]string, error) {
 	return out, nil
 }
 
-// setupTty puts the terminal in raw mode when tty is true and returns a
-// restore func that's always safe to call (no-op when tty was false).
-func setupTty(tty bool) (func(), error) {
+// ttyState bundles the resources setupTty owns for a single exec
+// invocation: the initial pty size at exec time, a channel that
+// receives subsequent resizes triggered by SIGWINCH, and a restore
+// function that tears it all down. restore is always safe to call,
+// even when tty is false (it's a no-op in that case).
+type ttyState struct {
+	initial runtime.TtySize
+	resize  <-chan runtime.TtySize
+	restore func()
+}
+
+// setupTty puts stdin in raw mode when tty is true and starts a
+// goroutine that translates SIGWINCH into resize-channel events for
+// the lifetime of the exec. The returned ttyState carries the values
+// to pass through devcontainer.ExecOptions.
+func setupTty(ctx context.Context, tty bool) (ttyState, error) {
 	if !tty {
-		return func() {}, nil
+		return ttyState{restore: func() {}}, nil
 	}
 	fd := int(os.Stdin.Fd())
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
-		return func() {}, fmt.Errorf("make raw: %w", err)
+		return ttyState{restore: func() {}}, fmt.Errorf("make raw: %w", err)
 	}
-	return func() { _ = term.Restore(fd, oldState) }, nil
+
+	var initial runtime.TtySize
+	if w, h, err := term.GetSize(fd); err == nil {
+		initial = runtime.TtySize{Width: uint16(w), Height: uint16(h)}
+	}
+
+	resizeCh := make(chan runtime.TtySize, 1)
+	sigwinch := make(chan os.Signal, 1)
+	signal.Notify(sigwinch, syscall.SIGWINCH)
+	winchCtx, cancelWinch := context.WithCancel(ctx)
+	go func() {
+		defer signal.Stop(sigwinch)
+		for {
+			select {
+			case <-winchCtx.Done():
+				return
+			case <-sigwinch:
+				w, h, err := term.GetSize(fd)
+				if err != nil {
+					continue
+				}
+				select {
+				case resizeCh <- runtime.TtySize{Width: uint16(w), Height: uint16(h)}:
+				case <-winchCtx.Done():
+					return
+				}
+			}
+		}
+	}()
+
+	return ttyState{
+		initial: initial,
+		resize:  resizeCh,
+		restore: func() {
+			cancelWinch()
+			_ = term.Restore(fd, oldState)
+		},
+	}, nil
 }
 
 // silentExitError carries an exit code without a printed message.
