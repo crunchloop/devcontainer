@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/moby/moby/api/types/build"
 	"github.com/moby/moby/client"
@@ -168,6 +169,12 @@ func streamBuildOutput(ctx context.Context, body io.ReadCloser, events chan<- ru
 	}
 }
 
+// tarEpoch is the canonical normalized mtime stamped into every tar
+// header by tarDirectory. Using unix epoch (rather than time.Time{},
+// which clamps to epoch anyway in USTAR) makes intent explicit and
+// avoids any reader special-casing the year-1 sentinel.
+var tarEpoch = time.Unix(0, 0)
+
 // tarDirectory writes the contents of dir (recursively) into w as a
 // non-gzipped tar archive. Symlinks are preserved as tar TypeSymlink
 // entries with their original target text; the daemon-side BuildKit
@@ -217,6 +224,22 @@ func tarDirectory(dir string, w io.Writer) error {
 		if d.IsDir() {
 			hdr.Name = rel + "/"
 		}
+		// Normalize metadata so the tar stream — and therefore
+		// BuildKit's COPY vertex digest — is reproducible across
+		// invocations and machines. Wall-clock mtimes from
+		// os.WriteFile (e.g. useruid's synthesized context) and
+		// host-specific uid/gid would otherwise perturb the digest of
+		// byte-identical content, causing cache misses and forcing
+		// re-extraction of downstream image layers. BuildKit hashes
+		// content for cache purposes, so erasing these fields doesn't
+		// lose information it relies on.
+		hdr.ModTime = tarEpoch
+		hdr.AccessTime = time.Time{}
+		hdr.ChangeTime = time.Time{}
+		hdr.Uid = 0
+		hdr.Gid = 0
+		hdr.Uname = ""
+		hdr.Gname = ""
 
 		if err := tw.WriteHeader(hdr); err != nil {
 			return err

@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/crunchloop/devcontainer/config"
 	"github.com/crunchloop/devcontainer/events"
@@ -84,11 +85,26 @@ func (e *Engine) reconcileRemoteUserUID(ctx context.Context, cfg *config.Resolve
 	}
 	defer os.RemoveAll(tmp)
 
-	if err := os.WriteFile(filepath.Join(tmp, "uid-fix.sh"), []byte(uidReconcileScript), 0o755); err != nil {
+	// Pin synthesized-context file times to the epoch so the tar
+	// stream is stable across invocations regardless of wall-clock.
+	// runtime/docker/build.go also normalizes tar headers as a
+	// defense-in-depth measure, but keeping the on-disk mtimes
+	// deterministic here means this context's reproducibility is a
+	// local property — independent of any consumer's tar pipeline.
+	epoch := time.Unix(0, 0)
+	uidFix := filepath.Join(tmp, "uid-fix.sh")
+	if err := os.WriteFile(uidFix, []byte(uidReconcileScript), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.Chtimes(uidFix, epoch, epoch); err != nil {
 		return "", err
 	}
 	df := generateUIDDockerfile(finalImage, user, hostUID, hostGID)
-	if err := os.WriteFile(filepath.Join(tmp, "Dockerfile"), []byte(df), 0o644); err != nil {
+	dfPath := filepath.Join(tmp, "Dockerfile")
+	if err := os.WriteFile(dfPath, []byte(df), 0o644); err != nil {
+		return "", err
+	}
+	if err := os.Chtimes(dfPath, epoch, epoch); err != nil {
 		return "", err
 	}
 	opts.bus.Emit(events.BuildStartEvent{Source: events.BuildSourceUIDReconcile, Ref: tag})
