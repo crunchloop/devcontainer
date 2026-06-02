@@ -7,6 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-01
+
+### Added
+
+- **cli** — new `cmd/devcontainer` binary, a cobra-based CLI on top
+  of the engine. Commands: `up`, `exec`, `down` / `stop`,
+  `read-configuration`, `run-user-commands`. Global flags:
+  `--workspace-folder`, `--config`, `--runtime`
+  (`docker` | `applecontainer`, default `docker`), `--log-level`.
+  Logs to stderr, results to stdout, non-zero exit on failure. Tools
+  wanting programmatic access keep importing the library directly;
+  no outcome-envelope JSON shim. The CLI surface is new and may
+  evolve before v1.0.0. (#79)
+- **engine** — `Engine.Build(ctx, BuildOptions) (*BuildResult, error)`
+  resolves a workspace's `devcontainer.json` and produces the final
+  image (base + feature pipeline) without creating or running a
+  container. Skips `updateRemoteUserUID` so build output is portable
+  across hosts; refuses compose sources with a typed
+  `ErrComposeSourceUnsupported`; image-source-with-no-features
+  short-circuits to a pull. Single `ImageName` tag for now;
+  multi-tag, `--push`, and `--cache-to` need `BuildSpec` extensions
+  on both backends and are tracked as follow-ups. (#82)
+- **runtime** — `ExecOptions.InitialTtySize` and `ExecOptions.ResizeCh`
+  plumb host pty geometry into `ExecContainer`. Docker backend
+  passes `ConsoleSize` to `ExecCreate` so the pty starts at the right
+  size, and a small goroutine coalesces resize bursts onto
+  `ExecResize` (keeps only the latest size when updates arrive
+  faster than the daemon round-trip) so a fast drag doesn't back up.
+  Mirrored on `devcontainer.ExecOptions`. Apple-container backend
+  retains its prior no-resize behavior; resize support there is a
+  follow-up. (#83)
+- **cli/exec** — `-e` / `--env KEY=VALUE` (repeatable; split on the
+  first `=` so values containing `=` survive — URLs, base64, etc.);
+  `--recreate` as an alias for `--remove-existing-container` to
+  match upstream `@devcontainers/cli` muscle memory. (#74, #75)
+- **cli/exec** — interactive TTY exec now forwards `SIGWINCH` into
+  the resize channel. Curses apps (`htop`, editors, etc.) render at
+  the host terminal size and reflow when the window is resized,
+  instead of being pinned at 80x24 until first redraw. (#83)
+
+### Changed
+
+- **cli/exec** — when `--working-dir` is unset, default `WorkingDir`
+  to `cfg.ContainerWorkspaceFolder` instead of falling through to
+  the image's `WORKDIR`. Stock devcontainer base images happened to
+  coincide, but a custom Dockerfile with a different `WORKDIR` was
+  landing `devcontainer exec` outside the project. Explicit
+  `--working-dir` still overrides. (#80)
+- **cli** — `--log-level` is now applied (it was previously parsed
+  but never enforced). The two chatty event types —
+  `events.BuildLogEvent` (raw docker build output) and
+  `events.LifecycleOutputEvent` (raw script stdout/stderr) — are
+  filtered out below `debug`; progress, warnings, and state changes
+  still render at `info`. Unknown values are rejected at command
+  entry. `trace` is reserved (currently equivalent to `debug`) so
+  the flag's contract doesn't break once more granular event types
+  are added. (#76)
+
+### Fixed
+
+- **runtime/docker** — normalize tar headers in build-context
+  streaming so BuildKit's COPY vertex digest is reproducible across
+  invocations and machines. `tarDirectory` previously stamped
+  wall-clock mtimes (from `os.WriteFile` in synthesized contexts
+  like `useruid`'s `uid-fix.sh` + `Dockerfile`) and the host
+  uid/gid into every entry, so byte-identical content produced
+  different digests on consecutive runs. Downstream pipelines that
+  snapshot a workspace after one `Up` and restore it for a later
+  `Up` were hitting full BuildKit cache misses on the second `Up`,
+  re-extracting GBs of image-layer data into new snapshotter dirs
+  and pushing 30Gi PVCs toward ENOSPC. `tarDirectory` now stamps
+  `ModTime` to the unix epoch, zeroes `AccessTime` / `ChangeTime`,
+  and clears `uid` / `gid` / `uname` / `gname` on every entry;
+  `useruid` additionally `os.Chtimes`-pins its synthesized files to
+  the epoch so the context's reproducibility is a local property
+  of the synthesizer too. (#86)
+
+### Build
+
+- **deps** — bump `github.com/compose-spec/compose-go/v2` 2.10.2 →
+  2.11.0 (#85); `github.com/google/go-containerregistry` 0.21.5 →
+  0.21.6 (#84); `google.golang.org/protobuf` 1.34.2 → 1.36.11 (#70).
+- **ci** — bump `actions/cache` 4 → 5 (#69).
+
 ## [0.2.0] - 2026-05-18
 
 ### Added
@@ -240,7 +324,11 @@ shelling out to `@devcontainers/cli`.
 - `events` is doc-tagged **experimental** until v1.0.0 — type shapes may evolve
   without a SemVer-major bump.
 
-[Unreleased]: https://github.com/crunchloop/devcontainer/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/crunchloop/devcontainer/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/crunchloop/devcontainer/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/crunchloop/devcontainer/compare/v0.1.4...v0.2.0
+[0.1.4]: https://github.com/crunchloop/devcontainer/compare/v0.1.3...v0.1.4
+[0.1.3]: https://github.com/crunchloop/devcontainer/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/crunchloop/devcontainer/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/crunchloop/devcontainer/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/crunchloop/devcontainer/releases/tag/v0.1.0
