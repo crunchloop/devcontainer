@@ -1,6 +1,9 @@
 {
   "name": "devcontainer-build",
-  "image": "mcr.microsoft.com/devcontainers/base:debian",
+  // Pinned to bookworm (Debian 12): the rolling `:debian` tag now resolves to
+  // trixie (Debian 13), which the docker-in-docker feature's Moby apt
+  // packages don't yet support ("Unsupported distribution version 'trixie'").
+  "image": "mcr.microsoft.com/devcontainers/base:bookworm",
 
   // Features to add to the dev container. More info: https://containers.dev/features.
   "features": {
