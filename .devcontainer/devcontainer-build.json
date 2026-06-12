@@ -15,11 +15,14 @@
     },
     "ghcr.io/devcontainers/features/github-cli:1": {},
     "ghcr.io/devcontainers/features/docker-in-docker:1": {
-      // Use Compose v2 (the `docker compose` CLI plugin), which is what the
-      // integration suite calls. The default "v1" has no arm64 standalone
-      // binary, so the feature falls back to `pip install docker-compose`,
+      // "none" skips the legacy `docker-compose` (hyphen) command entirely.
+      // The repo only uses `docker compose` v2 (runtime/docker/compose.go:
+      // "legacy docker-compose is not supported"), and the v2 plugin is
+      // installed separately via the moby-compose package regardless of this
+      // option. Avoiding the hyphen command is what unblocks arm64: the
+      // released feature installs Compose v1 there via a global `pip install`,
       // which fails on bookworm under PEP 668 (externally-managed-environment).
-      "dockerDashComposeVersion": "v2"
+      "dockerDashComposeVersion": "none"
     },
     "ghcr.io/rocker-org/devcontainer-features/apt-packages:1": {
       "packages": "make"
