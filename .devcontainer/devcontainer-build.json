@@ -10,36 +10,13 @@
       // .github/workflows/ci.yml matrix); go.mod declares go 1.25.0.
       "version": "1.26"
     },
-    "ghcr.io/devcontainers/features/node:1": {
-      // Required by the local claude-code feature (installs via npm).
-      "version": "22"
-    },
     "ghcr.io/devcontainers/features/github-cli:1": {},
     "ghcr.io/devcontainers/features/docker-in-docker:1": {},
-    "ghcr.io/devcontainers-extra/features/vscode-server:1": {},
     "ghcr.io/rocker-org/devcontainer-features/apt-packages:1": {
       "packages": "make"
     },
 
     // Local features
-    "./features/golangci-lint": { "version": "2.5.0" },
-    "./features/claude-code": { "version": "2.1.170" }
-  },
-
-  // Customize the vscode extensions that are installed.
-  "customizations": {
-    "vscode": {
-      "extensions": [
-        "golang.go",
-        "streetsidesoftware.code-spell-checker",
-        "mhutchie.git-graph",
-        "eamodio.gitlens",
-        "GitHub.copilot",
-        "GitHub.copilot-chat",
-        "GitHub.vscode-pull-request-github",
-        "github.vscode-github-actions"
-      ],
-      "settings": {}
-    }
+    "./features/golangci-lint": { "version": "2.5.0" }
   }
 }

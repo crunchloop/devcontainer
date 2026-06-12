@@ -15,21 +15,5 @@
   // Keep containers running after VS Code shuts down.
   "shutdownAction": "stopCompose",
 
-  "postCreateCommand": ".devcontainer/post-create.sh",
-
-  "customizations": {
-    "vscode": {
-      "extensions": [
-        "golang.go",
-        "streetsidesoftware.code-spell-checker",
-        "mhutchie.git-graph",
-        "eamodio.gitlens",
-        "GitHub.copilot",
-        "GitHub.copilot-chat",
-        "GitHub.vscode-pull-request-github",
-        "github.vscode-github-actions"
-      ],
-      "settings": {}
-    }
-  }
+  "postCreateCommand": ".devcontainer/post-create.sh"
 }

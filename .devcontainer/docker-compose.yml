@@ -1,6 +1,3 @@
-volumes:
-  claude-config:
-
 services:
   app:
     image: ghcr.io/crunchloop/devcontainer/devcontainer:latest
@@ -12,5 +9,3 @@ services:
     command: sleep infinity
     volumes:
       - ..:/workspaces/devcontainer
-      # Persist Claude Code config/credentials across container rebuilds.
-      - claude-config:/home/vscode/.claude

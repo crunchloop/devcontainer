@@ -14,8 +14,7 @@ The devcontainer uses a **prebuild strategy** (the same one as
    Registry as `ghcr.io/crunchloop/devcontainer/devcontainer:latest`.
 3. Developers pull that prebuild image via `devcontainer.json` →
    `docker-compose.yml` instead of building the toolchain locally.
-4. `post-create.sh` runs lightweight, per-checkout setup (Go module download,
-   Claude config persistence).
+4. `post-create.sh` runs lightweight, per-checkout setup (Go module download).
 
 This keeps container startup fast while the toolchain stays reproducible.
 
@@ -25,10 +24,8 @@ This keeps container startup fast while the toolchain stays reproducible.
 - `devcontainer-build.json` — prebuild image configuration (used by CI).
 - `docker-compose.yml` — runs the prebuilt `app` service.
 - `post-create.sh` — per-checkout setup hook.
-- `features/` — local devcontainer features:
-  - `golangci-lint` — installs the linter pinned to the Makefile / `ci.yml`
-    version (`v2.5.0`).
-  - `claude-code` — installs the Claude Code CLI.
+- `features/golangci-lint` — local feature installing the linter pinned to the
+  Makefile / `ci.yml` version (`v2.5.0`).
 
 ## Toolchain
 
@@ -40,7 +37,7 @@ The prebuild image provides everything the Linux CI jobs need:
 - **docker-in-docker** so the integration suite
   (`go test -tags=integration ./test/integration/...`) can drive
   `docker` / `docker compose` from inside the container.
-- **GitHub CLI**, **Node.js 22** (for Claude Code), and `make`.
+- **GitHub CLI** and `make`.
 
 > The Apple `container` backend (`runtime/applecontainer`) is darwin/arm64-only
 > and cannot be built inside this Linux container — exactly as on the Linux CI
