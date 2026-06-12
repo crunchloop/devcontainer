@@ -78,10 +78,64 @@ jobs:
 
       - name: Create manifest list and push
         run: |
+          # Tag the multi-arch manifest as :latest (the rolling tag developers
+          # pull) and as an immutable :sha-<commit> tag for pinning/rollback.
+          short_sha="${GITHUB_SHA::12}"
           docker buildx imagetools create \
             -t ${{ env.DEVCONTAINER_IMAGE }}:latest \
+            -t ${{ env.DEVCONTAINER_IMAGE }}:sha-${short_sha} \
             ${{ env.DEVCONTAINER_IMAGE }}:build-${{ github.run_id }}-amd64 \
             ${{ env.DEVCONTAINER_IMAGE }}:build-${{ github.run_id }}-arm64
 
       - name: Inspect manifest
         run: docker buildx imagetools inspect ${{ env.DEVCONTAINER_IMAGE }}:latest
+
+      # Best-effort cleanup of the per-arch build-<run_id>-* intermediates that
+      # devcontainers/ci has to push (it can't push digest-only). This is
+      # non-fatal: a failure here must never block a published :latest.
+      #
+      # Safety: the current run's intermediates share their image digests with
+      # the children of the :latest manifest list we just pushed — deleting
+      # those versions would break :latest. So we only delete build-* versions
+      # whose digest is NOT referenced by the current :latest, and never touch
+      # versions tagged latest or sha-*.
+      - name: Prune stale per-arch build intermediates
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER}"
+          pkg="devcontainer%2Fdevcontainer"   # url-encoded "devcontainer/devcontainer"
+
+          # Digests referenced by the just-pushed :latest manifest list. These
+          # must be preserved.
+          mapfile -t keep_digests < <(
+            docker buildx imagetools inspect --raw "${DEVCONTAINER_IMAGE}:latest" \
+              | jq -r '.manifests[].digest'
+          )
+          echo "Protected digests (referenced by :latest):"
+          printf '  %s\n' "${keep_digests[@]}"
+
+          gh api --paginate "/orgs/${owner}/packages/container/${pkg}/versions" \
+            | jq -c '.[]' | while read -r v; do
+              id=$(jq -r '.id' <<<"$v")
+              digest=$(jq -r '.name' <<<"$v")
+              tags=$(jq -r '(.metadata.container.tags // []) | join(",")' <<<"$v")
+
+              # Only consider intermediates; never delete latest/sha-* versions.
+              case ",${tags}," in
+                *",latest,"*) continue ;;
+              esac
+              [[ "${tags}" == *sha-* ]] && continue
+              [[ "${tags}" == *build-* ]] || continue
+
+              # Preserve anything still referenced by the current :latest.
+              for d in "${keep_digests[@]}"; do
+                [ "${d}" = "${digest}" ] && { echo "keep ${id} (${tags}) — in :latest"; continue 2; }
+              done
+
+              echo "prune ${id} (tags: ${tags})"
+              gh api -X DELETE "/orgs/${owner}/packages/container/${pkg}/versions/${id}" \
+                && echo "  deleted" || echo "  delete failed (non-fatal)"
+            done
