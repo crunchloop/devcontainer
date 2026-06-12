@@ -1,0 +1,22 @@
+{
+  "name": "devcontainer-build",
+  "image": "mcr.microsoft.com/devcontainers/base:debian",
+
+  // Features to add to the dev container. More info: https://containers.dev/features.
+  "features": {
+    // Registry features
+    "ghcr.io/devcontainers/features/go:1": {
+      // Primary dev toolchain. CI also exercises 1.25 (see
+      // .github/workflows/ci.yml matrix); go.mod declares go 1.25.0.
+      "version": "1.26"
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/docker-in-docker:1": {},
+    "ghcr.io/rocker-org/devcontainer-features/apt-packages:1": {
+      "packages": "make"
+    },
+
+    // Local features
+    "./features/golangci-lint": { "version": "2.5.0" }
+  }
+}

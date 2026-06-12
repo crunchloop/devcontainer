@@ -1,0 +1,19 @@
+{
+  "name": "devcontainer",
+
+  // Local development configuration. The heavy toolchain image is built in
+  // CI from devcontainer-build.json and published to GHCR; here we just pull
+  // it via docker-compose. See README.md for the prebuild strategy.
+  "dockerComposeFile": [
+    "docker-compose.yml"
+  ],
+
+  "service": "app",
+
+  "workspaceFolder": "/workspaces/devcontainer",
+
+  // Keep containers running after VS Code shuts down.
+  "shutdownAction": "stopCompose",
+
+  "postCreateCommand": ".devcontainer/post-create.sh"
+}

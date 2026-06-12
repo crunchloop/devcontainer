@@ -1,0 +1,11 @@
+services:
+  app:
+    image: ghcr.io/crunchloop/devcontainer/devcontainer:latest
+    # privileged is required by the docker-in-docker feature so the
+    # in-container dockerd can start. The integration suite shells out to
+    # `docker` / `docker compose` (see test/integration and ci.yml), so the
+    # daemon must be available inside the workspace.
+    privileged: true
+    command: sleep infinity
+    volumes:
+      - ..:/workspaces/devcontainer

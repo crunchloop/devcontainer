@@ -1,0 +1,87 @@
+name: DevContainer Prebuild
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.devcontainer/**'
+      - '.github/workflows/devcontainer-cache.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+env:
+  DEVCONTAINER_IMAGE: ghcr.io/crunchloop/devcontainer/devcontainer
+
+jobs:
+  prebuild:
+    name: Build devcontainer prebuild (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            suffix: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            suffix: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # devcontainers/ci doesn't cleanly expose digest-only push, so we push
+      # per-arch tags and merge them into a multi-arch manifest below.
+      - name: Build devcontainer prebuild image
+        uses: devcontainers/ci@v0.3
+        with:
+          configFile: .devcontainer/devcontainer-build.json
+          imageName: ${{ env.DEVCONTAINER_IMAGE }}
+          imageTag: build-${{ github.run_id }}-${{ matrix.suffix }}
+          platform: ${{ matrix.platform }}
+          cacheFrom: ${{ env.DEVCONTAINER_IMAGE }}:buildcache-${{ matrix.suffix }}
+          push: always
+
+  merge:
+    name: Merge multi-arch manifest
+    needs: prebuild
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create manifest list and push
+        run: |
+          docker buildx imagetools create \
+            -t ${{ env.DEVCONTAINER_IMAGE }}:latest \
+            ${{ env.DEVCONTAINER_IMAGE }}:build-${{ github.run_id }}-amd64 \
+            ${{ env.DEVCONTAINER_IMAGE }}:build-${{ github.run_id }}-arm64
+
+      - name: Inspect manifest
+        run: docker buildx imagetools inspect ${{ env.DEVCONTAINER_IMAGE }}:latest

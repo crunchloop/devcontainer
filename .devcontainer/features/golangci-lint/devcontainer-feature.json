@@ -1,0 +1,17 @@
+{
+  "id": "golangci-lint",
+  "version": "0.0.1",
+  "name": "golangci-lint",
+  "description": "Installs golangci-lint, the Go linters aggregator. Keep the default version in sync with the Makefile GOLANGCI_LINT_VERSION and the ci.yml lint job.",
+  "documentationURL": "https://golangci-lint.run",
+  "installsAfter": [
+    "ghcr.io/devcontainers/features/go"
+  ],
+  "options": {
+    "version": {
+      "type": "string",
+      "default": "2.5.0",
+      "description": "Version of golangci-lint to install, without the leading 'v' (e.g. '2.5.0')."
+    }
+  }
+}
