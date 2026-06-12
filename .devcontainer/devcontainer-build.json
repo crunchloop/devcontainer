@@ -14,7 +14,13 @@
       "version": "1.26"
     },
     "ghcr.io/devcontainers/features/github-cli:1": {},
-    "ghcr.io/devcontainers/features/docker-in-docker:1": {},
+    "ghcr.io/devcontainers/features/docker-in-docker:1": {
+      // Use Compose v2 (the `docker compose` CLI plugin), which is what the
+      // integration suite calls. The default "v1" has no arm64 standalone
+      // binary, so the feature falls back to `pip install docker-compose`,
+      // which fails on bookworm under PEP 668 (externally-managed-environment).
+      "dockerDashComposeVersion": "v2"
+    },
     "ghcr.io/rocker-org/devcontainer-features/apt-packages:1": {
       "packages": "make"
     },
