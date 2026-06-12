@@ -14,14 +14,17 @@
       "version": "1.26"
     },
     "ghcr.io/devcontainers/features/github-cli:1": {},
-    "ghcr.io/devcontainers/features/docker-in-docker:1": {
-      // "none" skips the legacy `docker-compose` (hyphen) command entirely.
-      // The repo only uses `docker compose` v2 (runtime/docker/compose.go:
-      // "legacy docker-compose is not supported"), and the v2 plugin is
-      // installed separately via the moby-compose package regardless of this
-      // option. Avoiding the hyphen command is what unblocks arm64: the
-      // released feature installs Compose v1 there via a global `pip install`,
-      // which fails on bookworm under PEP 668 (externally-managed-environment).
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      // Pin to the 2.x major: ":1" is a stale frozen image (the feature has
+      // no 1.x releases anymore — current is 3.x) whose old script runs a
+      // global `pip install docker-compose` on bookworm/arm64 and fails under
+      // PEP 668 (externally-managed-environment). 2.x gates that whole block
+      // behind `dockerDashComposeVersion != none`.
+      //
+      // "none" skips the legacy `docker-compose` (hyphen) command entirely;
+      // the repo only uses `docker compose` v2 (runtime/docker/compose.go:
+      // "legacy docker-compose is not supported"), and the v2 plugin ships
+      // separately via the moby-compose package regardless of this option.
       "dockerDashComposeVersion": "none"
     },
     "ghcr.io/rocker-org/devcontainer-features/apt-packages:1": {
