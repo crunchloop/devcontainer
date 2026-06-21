@@ -4,6 +4,10 @@
 *.so
 *.dylib
 
+# Locally-built CLI/example binaries (extension-less Mach-O/ELF outputs)
+/dap
+/devcontainer
+
 # Test artifacts
 *.test
 *.out

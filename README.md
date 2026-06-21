@@ -37,8 +37,15 @@ The container backend is pluggable. Pick one at engine construction time:
   embedded Swift bridge (`libACBridge.dylib`, dlopen'd at runtime).
   Lets you run devcontainers on Apple Silicon without Docker
   Desktop.
+- **`runtime/podman`** — Podman over its docker-compatible socket (the
+  same `moby/moby/client`, embedded), plus CRIU-backed
+  **checkpoint/restore** (`runtime.CheckpointRuntime`) driven through the
+  libpod REST API on that one socket. The only backend that can migrate a
+  running devcontainer — process + memory — to another node; see
+  [`design/checkpoint-restore.md`](design/checkpoint-restore.md). Linux
+  only; needs a running `podman system service`.
 
-Both backends implement the same `runtime.Runtime` interface — the
+All three backends implement the same `runtime.Runtime` interface — the
 engine, feature pipeline, lifecycle, and compose paths don't care which
 one you wire in.
 
@@ -177,6 +184,13 @@ Requires:
     system start` already up. Swift toolchain only if you're
     building the bridge from source — releases embed the
     pre-built dylib.
+  - **Podman:** Linux only. A running `podman system service` exposing
+    its socket (it serves both the docker-compatible and libpod APIs);
+    point the backend at it with `podman.Options{Socket}`.
+    Checkpoint/restore additionally requires `criu` (a CRIU-capable
+    kernel and an OCI runtime such as `crun`/`runc`). No BuildKit:
+    in-container builds go through buildah, so pre-built/pulled images
+    are the fast path.
 
 ## Quick start
 

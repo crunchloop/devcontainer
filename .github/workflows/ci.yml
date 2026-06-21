@@ -125,6 +125,59 @@ jobs:
           go test -race -count=1 -tags=integration -timeout=15m \
             -run "$pattern" ./test/integration/...
 
+  # Real Podman + CRIU checkpoint/restore. The runtime/podman backend and
+  # the Engine checkpoint/restore + project-orchestrator paths only execute
+  # against a live Podman socket with CRIU; their tests skip everywhere
+  # else (PODMAN_SOCKET-gated). This job installs that stack and runs them
+  # for real. The cross-node test (TestPodmanXNode_*) needs two hosts, so
+  # it skips here (no DCCKPT_XNODE_DIR) — run it on two machines by hand.
+  #
+  # continue-on-error: whether GitHub's hosted ubuntu kernel can do CRIU
+  # checkpoint/restore end-to-end is unverified (criu check can pass while
+  # a real dump still hits a missing kernel feature). Kept non-blocking
+  # like the darwin VZ job below; drop it once a green run is confirmed,
+  # else move this job to a self-hosted CRIU-capable runner.
+  test-integration-podman:
+    runs-on: ubuntu-latest
+    needs: [lint, test-linux]
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Install Podman + CRIU + crun
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          # iptables is REQUIRED: CRIU shells out to iptables-restore to
+          # lock the network namespace during a dump (without it the dump
+          # fails with "execvp(iptables-restore) ... No such file").
+          sudo apt-get install -y -qq podman criu crun iptables uidmap
+          podman --version && criu --version && crun --version
+      - name: criu check (capability gate)
+        run: sudo criu check
+      - name: Start Podman API socket
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /etc/containers
+          printf '[engine]\nevents_logger="file"\n' | sudo tee /etc/containers/containers.conf >/dev/null
+          sudo systemctl enable --now podman.socket
+          for i in $(seq 1 30); do sudo test -S /run/podman/podman.sock && break; sleep 1; done
+          sudo test -S /run/podman/podman.sock
+      - name: Build gated test binaries
+        run: |
+          go test -tags=integration -c ./test/integration -o ./int.test
+          go test -c ./runtime/podman -o ./podman.test
+      - name: Run Podman checkpoint/restore tests (root; checkpoint needs it)
+        env:
+          PODMAN_SOCKET: unix:///run/podman/podman.sock
+        run: |
+          set -euo pipefail
+          sudo -E ./podman.test -test.run TestIntegration -test.v -test.timeout 15m
+          sudo -E ./int.test -test.run '^TestPodman' -test.v -test.timeout 15m
+
   # Integration tests against a live Apple `container` daemon.
   #
   # Verified-on-CI status:
