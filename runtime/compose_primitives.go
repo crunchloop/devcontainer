@@ -132,4 +132,16 @@ type Capabilities struct {
 	// depends_on edge race and may miss the patch on first DNS
 	// lookup — documented limitation on this backend.
 	ServiceNameDNS bool
+
+	// Checkpoint: backend implements CheckpointRuntime — it can
+	// checkpoint a running container to a portable archive and restore
+	// it (CRIU). Engine.Checkpoint / Engine.Restore gate on this.
+	//
+	// True on runtime/podman when the libpod API is reachable at
+	// construction (and a deployer-supplied CRIU probe, if any, passes —
+	// the REST transport can't run `criu check` itself). False on
+	// runtime/docker (restore is broken on current engines — see
+	// design/checkpoint-restore.md) and
+	// runtime/applecontainer (no CRIU).
+	Checkpoint bool
 }

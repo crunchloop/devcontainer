@@ -63,17 +63,30 @@ func (e *Engine) AttachWith(ctx context.Context, id WorkspaceID, opts AttachOpti
 		return nil, err
 	}
 
-	// Reconstruct just enough config for the substituter. Attach can't
-	// reproduce the full ResolvedConfig (the source devcontainer.json may
-	// have changed since Up); callers that need it should Resolve again.
+	return e.reattachWorkspace(ctx, details, id, opts.LocalEnv), nil
+}
+
+// reattachWorkspace rebuilds a *Workspace from an already-inspected,
+// running container. It is shared by Attach (container found by label)
+// and Restore (container freshly imported from a checkpoint archive):
+// both have a live container and need the same MINIMAL config + bound
+// substituter + userEnv probe, without re-reading devcontainer.json.
+//
+// It reconstructs just enough config for the substituter (Attach can't
+// reproduce the full ResolvedConfig — the source devcontainer.json may
+// have changed since Up; callers that need it should Resolve again),
+// folds in the image's merged-config metadata label so callers see the
+// same RemoteUser / lifecycle hooks / probe config as Up, and re-probes
+// userEnv so subsequent Exec calls see the user's rc-file PATH additions.
+//
+// id stamps the workspace and cfg.DevcontainerID; localEnv may be nil
+// (falls back to os.Environ()).
+func (e *Engine) reattachWorkspace(ctx context.Context, details *runtime.ContainerDetails, id WorkspaceID, localEnv map[string]string) *Workspace {
 	cfg := configFromContainerLabels(details)
 	cfg.DevcontainerID = string(id)
 
-	// The container's image carries the merged-config metadata label
-	// from when Up created it; folding it in here means Attach-only
-	// callers see the same RemoteUser / lifecycle hooks / probe config
-	// as Up. Failures to read or parse the label are non-fatal — Attach
-	// then gives back a minimal cfg as before.
+	// Reading or parsing the metadata label is best-effort: failures
+	// leave baseLayers nil and we fall back to the minimal cfg.
 	var baseLayers []config.FeatureMetadata
 	if details.Image != "" {
 		if imgDetails, err := e.runtime.InspectImage(ctx, details.Image); err == nil && imgDetails != nil {
@@ -84,7 +97,6 @@ func (e *Engine) AttachWith(ctx context.Context, id WorkspaceID, opts AttachOpti
 			}
 		}
 	}
-	localEnv := opts.LocalEnv
 	if localEnv == nil {
 		localEnv = environAsMap(os.Environ())
 	}
@@ -104,11 +116,8 @@ func (e *Engine) AttachWith(ctx context.Context, id WorkspaceID, opts AttachOpti
 		subst:     newSubstituter(cfg, details, localEnv),
 	}
 
-	// Re-probe on attach so subsequent Exec calls see PATH additions
-	// from the user's rc files. The original Up populated probedEnv,
-	// but a fresh Attach doesn't share that workspace value.
 	if probed, err := e.probeUserEnv(ctx, ws, cfg.UserEnvProbe); err == nil {
 		ws.probedEnv = probed
 	}
-	return ws, nil
+	return ws
 }

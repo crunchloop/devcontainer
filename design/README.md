@@ -24,6 +24,8 @@ work shipped.
 | [`compose-native.md`](compose-native.md) | The runtime-agnostic compose orchestrator that drives any backend through `runtime.Runtime` primitives. Replaces (when opted in) the `docker compose` shell-out, and is what enables compose source on apple-container. |
 | [`features.md`](features.md) | The Dev Container Features pipeline: OCI / HTTPS / local resolution, DAG ordering, dockerfile generation, the pre-baked-image fast path, and the content-addressed cache. |
 | [`structured-errors.md`](structured-errors.md) | The `*devcontainer.Error` surface returned from every public failure path. Code catalog, `Cause` chain conventions, and the `StderrCarrier` interface for subprocess-output access. |
+| [`checkpoint-restore.md`](checkpoint-restore.md) | The optional `CheckpointRuntime` sub-interface: CRIU-backed checkpoint/restore for migrating spot-evicted devcontainers. Pass-2 records the empirical finding that docker's restore is broken upstream and only **Podman** (`checkpoint --export`/`restore --import`) works end-to-end — so the primitive lands in a new `runtime/podman` backend. Includes the runtime matrix, capability gating, integration options, and what's proven vs open. |
+| [`podman-backend.md`](podman-backend.md) | The implementation plan for the Podman backend that makes checkpoint/restore real: reuse the docker/moby backend against Podman's docker-compatible socket and add C/R via libpod, the build-path risk (BuildKit vs buildah) that gates it, the phased plan (de-risk spikes → contract → backend → consumer adoption), and the file-level change list. |
 
 ## What's *not* here
 
