@@ -3,6 +3,7 @@ package podman
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -32,17 +33,23 @@ func (r *Runtime) Checkpoint(ctx context.Context, id string, spec runtime.Checkp
 		return runtime.CheckpointRef{}, &runtime.CheckpointFailedError{ID: id, Stderr: errorBody(resp)}
 	}
 
-	f, err := os.Create(spec.ArchivePath)
+	// 0600: the archive carries the container's process memory — keep it
+	// private regardless of the caller's umask.
+	f, err := os.OpenFile(spec.ArchivePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return runtime.CheckpointRef{}, &runtime.CheckpointFailedError{ID: id, Err: err}
 	}
 	n, copyErr := io.Copy(f, resp.Body)
 	closeErr := f.Close()
-	if copyErr != nil {
-		return runtime.CheckpointRef{}, &runtime.CheckpointFailedError{ID: id, Err: copyErr}
-	}
-	if closeErr != nil {
-		return runtime.CheckpointRef{}, &runtime.CheckpointFailedError{ID: id, Err: closeErr}
+	if copyErr != nil || closeErr != nil {
+		// Don't leave a truncated archive that a later Restore could
+		// mistake for a valid one.
+		_ = os.Remove(spec.ArchivePath)
+		werr := copyErr
+		if werr == nil {
+			werr = closeErr
+		}
+		return runtime.CheckpointRef{}, &runtime.CheckpointFailedError{ID: id, Err: werr}
 	}
 	return runtime.CheckpointRef{ArchivePath: spec.ArchivePath, Size: n}, nil
 }
@@ -84,6 +91,9 @@ func (r *Runtime) Restore(ctx context.Context, spec runtime.RestoreSpec) (*runti
 	var rep restoreReport
 	if err := json.NewDecoder(resp.Body).Decode(&rep); err != nil {
 		return nil, &runtime.RestoreFailedError{ArchivePath: spec.ArchivePath, Err: err}
+	}
+	if rep.ID == "" {
+		return nil, &runtime.RestoreFailedError{ArchivePath: spec.ArchivePath, Err: errors.New("libpod restore returned an empty container id")}
 	}
 	return &runtime.Container{ID: rep.ID, Name: spec.Name, State: runtime.StateRunning}, nil
 }

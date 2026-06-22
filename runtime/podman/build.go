@@ -107,6 +107,9 @@ func (r *Runtime) BuildImage(ctx context.Context, spec runtime.BuildSpec, events
 
 	resp, err := r.lp.do(ctx, http.MethodPost, "/build", buildQuery(spec), pr, "application/x-tar")
 	if err != nil {
+		// Unblock the tarDir goroutine still writing into pw; without
+		// this it leaks, parked on the full pipe.
+		_ = pr.CloseWithError(err)
 		return runtime.ImageRef{}, fmt.Errorf("podman build: %w", err)
 	}
 	defer resp.Body.Close()

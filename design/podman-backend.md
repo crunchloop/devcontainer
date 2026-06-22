@@ -167,10 +167,19 @@ Podman backend implements it.
 
 ### 5.1 Mapping (verified on the bench, 2026-06-19)
 
+> **IMPLEMENTED via libpod REST, not the CLI (2026-06-21).** §2 settled the
+> transport as the libpod REST API on the Podman socket (no `podman` CLI
+> shell-out). The CLI flags below are kept only as the human-readable
+> equivalent of the endpoints the backend actually calls:
+> `POST …/libpod/containers/{id}/checkpoint?export=true&tcpestablished=&leaverunning=`
+> (response body = the archive) and
+> `POST …/libpod/containers/import/restore?import=true&tcpestablished=&name=`
+> (archive in the request body → `{"Id":…}`). See `runtime/podman/checkpoint.go`.
+
 ```text
-Checkpoint → podman container checkpoint --export <ArchivePath> \
+Checkpoint ≈ podman container checkpoint --export <ArchivePath> \
                  [--tcp-established] [--leave-running=!StopAfter] <id>
-Restore    → podman container restore --import <ArchivePath> \
+Restore    ≈ podman container restore --import <ArchivePath> \
                  [--tcp-established] [--name <Name>]
 ```
 
@@ -198,9 +207,13 @@ Either way, keep it behind the backend so the engine only sees
 > 7→10). The original wedge symptom traced to (a) a forcibly-killed
 > `podman system service` leaving a stale lock and (b) a test-harness bug
 > (`pkill -f "system service"` matching the runner's own shell). So
-> **CLI for C/R is viable alongside the moby-over-service surface** — no
-> need to switch to libpod REST. (REST remains the fallback if heavier
-> concurrency ever surfaces contention.)
+> **CLI for C/R is viable alongside the moby-over-service surface.**
+>
+> **Superseded (2026-06-21):** although CLI C/R was proven viable, the
+> final implementation uses **libpod REST**, not the CLI — to keep the
+> backend SDK-first and shell-out-free like the docker backend (§2/§2.1).
+> The transport-wedge finding above still stands and is why REST over the
+> *same* socket is safe.
 
 ### 5.3 Capability probe
 

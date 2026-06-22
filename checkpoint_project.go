@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/crunchloop/devcontainer/compose"
 	"github.com/crunchloop/devcontainer/runtime"
@@ -137,8 +138,16 @@ func (e *Engine) CheckpointProject(ctx context.Context, ws *Workspace, opts Proj
 	}
 
 	ref := ProjectCheckpointRef{Project: project, ArchiveDir: opts.ArchiveDir}
+	seen := make(map[string]bool, len(containers))
 	for _, c := range containers {
 		svc := serviceName(c)
+		// Distinct archive per service; a collision would silently
+		// overwrite (and restore would collapse the entries). v1 assumes
+		// one container per service — reject scaled services explicitly.
+		if seen[svc] {
+			return ProjectCheckpointRef{}, fmt.Errorf("CheckpointProject: duplicate service name %q in project %q (scaled services are not supported)", svc, project)
+		}
+		seen[svc] = true
 		archive := svc + ".tar"
 		cref, err := cr.Checkpoint(ctx, c.ID, runtime.CheckpointSpec{
 			ArchivePath:    filepath.Join(opts.ArchiveDir, archive),
@@ -230,7 +239,14 @@ func writeProjectManifest(dir string, ref ProjectCheckpointRef) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, projectManifestName), b, 0o644)
+	// Write-then-rename: rename is atomic, so a present project.json is
+	// always complete — never a half-written file from an interrupted run.
+	final := filepath.Join(dir, projectManifestName)
+	tmp := final + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, final)
 }
 
 func readProjectManifest(dir string) (ProjectCheckpointRef, error) {
@@ -244,6 +260,13 @@ func readProjectManifest(dir string) (ProjectCheckpointRef, error) {
 	}
 	if len(ref.Services) == 0 {
 		return ProjectCheckpointRef{}, fmt.Errorf("project manifest has no services")
+	}
+	// Archive entries are joined onto ArchiveDir at restore; a tampered
+	// manifest must not escape it. Require a plain basename.
+	for _, s := range ref.Services {
+		if s.Archive == "" || s.Archive != filepath.Base(s.Archive) || strings.Contains(s.Archive, "..") {
+			return ProjectCheckpointRef{}, fmt.Errorf("project manifest has an unsafe archive entry %q", s.Archive)
+		}
 	}
 	ref.ArchiveDir = dir
 	return ref, nil

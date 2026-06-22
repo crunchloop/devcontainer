@@ -55,7 +55,9 @@ func TestPodmanProject_CheckpointRestore_MultiService(t *testing.T) {
 		t.Fatalf("PullImage: %v", err)
 	}
 
-	// Fresh network for the project (idempotent across reruns).
+	// Fresh network for the project. Clear any leftover from an interrupted
+	// run first so CreateNetwork doesn't fail on a stale name.
+	_ = rt.RemoveNetwork(ctx, netName)
 	if _, err := rt.CreateNetwork(ctx, runtime.NetworkSpec{
 		Name:   netName,
 		Labels: map[string]string{compose.LabelComposeProject: project},

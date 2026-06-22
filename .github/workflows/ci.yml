@@ -132,13 +132,16 @@ jobs:
   # for real. The cross-node test (TestPodmanXNode_*) needs two hosts, so
   # it skips here (no DCCKPT_XNODE_DIR) — run it on two machines by hand.
   #
-  # continue-on-error: whether GitHub's hosted ubuntu kernel can do CRIU
-  # checkpoint/restore end-to-end is unverified (criu check can pass while
-  # a real dump still hits a missing kernel feature). Kept non-blocking
-  # like the darwin VZ job below; drop it once a green run is confirmed,
-  # else move this job to a self-hosted CRIU-capable runner.
+  # Runner notes: criu was dropped from Ubuntu 24.04, so this pins
+  # ubuntu-22.04 (jammy still ships it in universe). Whether the hosted
+  # kernel can actually checkpoint/restore is not guaranteed, so the setup
+  # step SKIPS the job green when criu can't be installed or `criu check`
+  # fails — the job is a ready harness that runs for real wherever CRIU
+  # works (incl. a future self-hosted runner). continue-on-error is a
+  # backstop for a dump that fails after criu check passed; drop it once a
+  # green real run is confirmed.
   test-integration-podman:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     needs: [lint, test-linux]
     continue-on-error: true
     steps:
@@ -147,30 +150,34 @@ jobs:
         with:
           go-version: "1.25"
           cache: true
-      - name: Install Podman + CRIU + crun
+      - name: Build gated test binaries
         run: |
-          set -euo pipefail
-          sudo apt-get update -qq
-          # iptables is REQUIRED: CRIU shells out to iptables-restore to
-          # lock the network namespace during a dump (without it the dump
-          # fails with "execvp(iptables-restore) ... No such file").
-          sudo apt-get install -y -qq podman criu crun iptables uidmap
-          podman --version && criu --version && crun --version
-      - name: criu check (capability gate)
-        run: sudo criu check
-      - name: Start Podman API socket
+          go test -tags=integration -c ./test/integration -o ./int.test
+          go test -c ./runtime/podman -o ./podman.test
+      - name: Install Podman + CRIU + crun (skip job if unavailable)
+        id: setup
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          sudo add-apt-repository -y universe || true
+          sudo apt-get update -qq || true
+          # iptables is REQUIRED: CRIU shells out to iptables-restore to lock
+          # the netns during a dump (without it: "execvp(iptables-restore)
+          # ... No such file").
+          if ! sudo apt-get install -y -qq podman criu crun iptables uidmap; then
+            echo "::warning::criu/podman not installable on this runner — skipping real checkpoint/restore"
+            echo "skip=1" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if ! sudo criu check; then
+            echo "::warning::criu check failed on this runner kernel — skipping checkpoint/restore"
+            echo "skip=1" >> "$GITHUB_OUTPUT"; exit 0
+          fi
           sudo mkdir -p /etc/containers
           printf '[engine]\nevents_logger="file"\n' | sudo tee /etc/containers/containers.conf >/dev/null
           sudo systemctl enable --now podman.socket
           for i in $(seq 1 30); do sudo test -S /run/podman/podman.sock && break; sleep 1; done
           sudo test -S /run/podman/podman.sock
-      - name: Build gated test binaries
-        run: |
-          go test -tags=integration -c ./test/integration -o ./int.test
-          go test -c ./runtime/podman -o ./podman.test
       - name: Run Podman checkpoint/restore tests (root; checkpoint needs it)
+        if: steps.setup.outputs.skip != '1'
         env:
           PODMAN_SOCKET: unix:///run/podman/podman.sock
         run: |

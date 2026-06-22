@@ -132,5 +132,8 @@ func (e *Engine) Restore(ctx context.Context, opts RestoreOptions) (*Workspace, 
 		return nil, fmt.Errorf("restore: inspect restored container %s: %w", c.ID, err)
 	}
 	id := WorkspaceID(details.Labels[LabelDevcontainerID])
+	if id == "" {
+		return nil, fmt.Errorf("restore: restored container %s has no %s label — not a devcontainer workspace archive", c.ID, LabelDevcontainerID)
+	}
 	return e.reattachWorkspace(ctx, details, id, opts.LocalEnv), nil
 }
