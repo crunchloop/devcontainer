@@ -127,23 +127,21 @@ jobs:
 
   # Real Podman + CRIU checkpoint/restore. The runtime/podman backend and
   # the Engine checkpoint/restore + project-orchestrator paths only execute
-  # against a live Podman socket with CRIU; their tests skip everywhere
-  # else (PODMAN_SOCKET-gated). This job installs that stack and runs them
-  # for real. The cross-node test (TestPodmanXNode_*) needs two hosts, so
-  # it skips here (no DCCKPT_XNODE_DIR) — run it on two machines by hand.
+  # against a live Podman socket with CRIU (PODMAN_SOCKET-gated). The
+  # cross-node test (TestPodmanXNode_*) needs two hosts, so it skips here
+  # (no DCCKPT_XNODE_DIR) — run it on two machines by hand.
   #
-  # Runner reality (measured): no GitHub-hosted runner can actually run
-  # these — Ubuntu 24.04 dropped criu, and 22.04 ships podman 3.4.4 whose
-  # OCI runtime reports "does not support checkpoint/restore" (3.x also
-  # predates the libpod v5 API the backend targets). So this job always
-  # COMPILES the gated tests (catching API/signature breaks every push) and
-  # only RUNS them when the host is genuinely capable: criu + `criu check`
-  # good + podman >= 5. Hosted runners don't meet that, so the job skips
-  # green with a warning. Real execution is local on podman 5.x + criu
-  # (OrbStack — see design/private notes) and runs here automatically if
-  # pointed at a self-hosted podman-5 + criu runner.
+  # Why a container: the hosted runner's apt podman is unusable (24.04 has
+  # no criu; 22.04's podman 3.4.4 can't checkpoint and predates the libpod
+  # v5 API). So we build the gated tests on the runner (compile coverage,
+  # static CGO_ENABLED=0 so they run on Fedora), then run them INSIDE a
+  # modern-podman container (podman 5.x + crun + criu) that's privileged +
+  # --cgroupns=host so CRIU can drive the runner's kernel. The script
+  # smoke-tests an actual checkpoint first and skips green (with the real
+  # reason) if this runner can't — e.g. nested cgroup-freezer perms — so a
+  # capable runner runs for real while an incapable one stays green.
   test-integration-podman:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     needs: [lint, test-linux]
     steps:
       - uses: actions/checkout@v6
@@ -151,44 +149,20 @@ jobs:
         with:
           go-version: "1.25"
           cache: true
-      - name: Build gated test binaries
+      - name: Build gated test binaries (static; compile coverage + run in container)
+        env:
+          CGO_ENABLED: "0"
         run: |
           go test -tags=integration -c ./test/integration -o ./int.test
           go test -c ./runtime/podman -o ./podman.test
-      - name: Probe Podman + CRIU (skip unless the host can checkpoint)
-        id: setup
+      - name: Checkpoint/restore in a modern-podman privileged container
         run: |
-          set -uo pipefail
-          sudo add-apt-repository -y universe || true
-          sudo apt-get update -qq || true
-          # iptables is REQUIRED: CRIU shells out to iptables-restore to lock
-          # the netns during a dump.
-          if ! sudo apt-get install -y -qq podman criu crun iptables uidmap; then
-            echo "::warning::podman/criu not installable — skipping real C/R run"
-            echo "skip=1" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          pmaj=$(podman version --format '{{.Client.Version}}' 2>/dev/null | cut -d. -f1)
-          if [ "${pmaj:-0}" -lt 5 ]; then
-            echo "::warning::podman ${pmaj:-?}.x < 5 (backend targets the libpod v5 API) — skipping real C/R run; validated locally on podman 5.x"
-            echo "skip=1" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          if ! sudo criu check; then
-            echo "::warning::criu check failed on this runner kernel — skipping real C/R run"
-            echo "skip=1" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          sudo mkdir -p /etc/containers
-          printf '[engine]\nevents_logger="file"\nruntime="crun"\n' | sudo tee /etc/containers/containers.conf >/dev/null
-          sudo systemctl enable --now podman.socket
-          for i in $(seq 1 30); do sudo test -S /run/podman/podman.sock && break; sleep 1; done
-          sudo test -S /run/podman/podman.sock
-      - name: Run Podman checkpoint/restore tests (root; checkpoint needs it)
-        if: steps.setup.outputs.skip != '1'
-        env:
-          PODMAN_SOCKET: unix:///run/podman/podman.sock
-        run: |
-          set -euo pipefail
-          sudo -E ./podman.test -test.run TestIntegration -test.v -test.timeout 15m
-          sudo -E ./int.test -test.run '^TestPodman' -test.v -test.timeout 15m
+          docker run --rm --privileged --cgroupns=host \
+            --security-opt seccomp=unconfined \
+            --security-opt apparmor=unconfined \
+            --security-opt label=disable \
+            -v "$PWD":/w -w /w \
+            quay.io/podman/stable bash /w/.github/scripts/podman-cr.sh
 
   # Integration tests against a live Apple `container` daemon.
   #
