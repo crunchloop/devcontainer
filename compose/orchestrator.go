@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -82,15 +83,36 @@ type Orchestrator struct {
 	// PollInterval is the cadence for health polling. Tests
 	// override; production default below.
 	PollInterval time.Duration
+
+	// selfProbe is true when the backend asks the orchestrator to run
+	// healthcheck probes itself (via Exec) instead of configuring the
+	// backend's native HEALTHCHECK — see selfHealthProber and
+	// design/compose-native-health.md. Computed once at construction.
+	selfProbe bool
+}
+
+// selfHealthProber is an optional runtime capability: a backend that
+// implements it and returns true asks the orchestrator to drive
+// healthcheck probes itself rather than relying on the backend's native
+// HEALTHCHECK. Podman implements it — its native healthcheck runs eagerly
+// as root and races privilege-dropping images. Docker and Apple do not,
+// keeping their existing behavior.
+type selfHealthProber interface {
+	PreferSelfProbedHealth() bool
 }
 
 // NewOrchestrator constructs an Orchestrator with sane defaults.
 func NewOrchestrator(rt runtime.Runtime, backendName string) *Orchestrator {
+	selfProbe := false
+	if p, ok := rt.(selfHealthProber); ok {
+		selfProbe = p.PreferSelfProbedHealth()
+	}
 	return &Orchestrator{
 		rt:            rt,
 		BackendName:   backendName,
 		HealthTimeout: DefaultHealthTimeout,
 		PollInterval:  500 * time.Millisecond,
+		selfProbe:     selfProbe,
 	}
 }
 
@@ -481,6 +503,12 @@ func (o *Orchestrator) ensureService(
 	}
 
 	spec := serviceToRunSpec(plan, svc, projectLabels, hash, imageDigest)
+	if o.selfProbe {
+		// The orchestrator probes health itself (see waitFor); never
+		// configure the backend's native HEALTHCHECK, whose eager
+		// root probe breaks privilege-dropping images on Podman.
+		spec.HealthCheck = nil
+	}
 	c, err := o.rt.RunContainer(ctx, spec)
 	if err != nil {
 		// Compose's `up -d` pulls missing images implicitly. Mirror
@@ -582,7 +610,11 @@ func (o *Orchestrator) gateLevel(
 		if cid == "" {
 			continue
 		}
-		if err := o.waitFor(ctx, svcName, cid, req.condition, deadline); err != nil {
+		var hc *runtime.HealthCheckSpec
+		if svc, ok := plan.Project.Services[svcName]; ok {
+			hc = healthCheckOf(svc.HealthCheck)
+		}
+		if err := o.waitFor(ctx, svcName, cid, req.condition, hc, deadline); err != nil {
 			if req.optional {
 				// Per compose spec: a non-required dependency that
 				// fails to satisfy its condition does not block the
@@ -596,46 +628,63 @@ func (o *Orchestrator) gateLevel(
 	return nil
 }
 
-// waitFor polls a service's condition until satisfied or deadline.
+// waitFor polls a service's condition until satisfied or deadline. When
+// o.selfProbe is set, a service_healthy gate is evaluated by executing the
+// service's healthcheck command (hc) via Exec rather than reading the
+// backend's native health status — see selfHealthProber and
+// design/compose-native-health.md. The completion condition always reads
+// container state (no native healthcheck required either way).
 func (o *Orchestrator) waitFor(
-	ctx context.Context, svc, id, cond string, deadline time.Time,
+	ctx context.Context, svc, id, cond string, hc *runtime.HealthCheckSpec, deadline time.Time,
 ) error {
+	// In self-probe mode, honor start_period as a grace delay before the
+	// first probe so an eager probe can't run before the service inits.
+	probeNotBefore := time.Now()
+	if o.selfProbe && hc != nil {
+		probeNotBefore = probeNotBefore.Add(hc.StartPeriod)
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		details, err := o.rt.InspectContainer(ctx, id)
-		if err == nil && details != nil {
-			switch cond {
-			case "service_healthy":
-				// Treat HealthNone as satisfied: a container with
-				// no HEALTHCHECK directive can still be a
-				// service_healthy gate target (compose's behavior),
-				// so falling back to State=Running keeps that case
-				// working. For services that DO declare a
-				// healthcheck, require Healthy explicitly.
-				switch details.Health {
-				case runtime.HealthHealthy:
-					return nil
-				case runtime.HealthNone:
-					if details.State == runtime.StateRunning {
+		if o.selfProbe && cond == "service_healthy" {
+			if o.probeHealthy(ctx, id, hc, probeNotBefore) {
+				return nil
+			}
+		} else {
+			details, err := o.rt.InspectContainer(ctx, id)
+			if err == nil && details != nil {
+				switch cond {
+				case "service_healthy":
+					// Treat HealthNone as satisfied: a container with
+					// no HEALTHCHECK directive can still be a
+					// service_healthy gate target (compose's behavior),
+					// so falling back to State=Running keeps that case
+					// working. For services that DO declare a
+					// healthcheck, require Healthy explicitly.
+					switch details.Health {
+					case runtime.HealthHealthy:
+						return nil
+					case runtime.HealthNone:
+						if details.State == runtime.StateRunning {
+							return nil
+						}
+					case runtime.HealthUnhealthy:
+						return fmt.Errorf(
+							"compose: service %q reported unhealthy while waiting on service_healthy",
+							svc,
+						)
+					}
+				case "service_completed_successfully":
+					if details.State == runtime.StateExited && details.ExitCode == 0 {
 						return nil
 					}
-				case runtime.HealthUnhealthy:
-					return fmt.Errorf(
-						"compose: service %q reported unhealthy while waiting on service_healthy",
-						svc,
-					)
-				}
-			case "service_completed_successfully":
-				if details.State == runtime.StateExited && details.ExitCode == 0 {
-					return nil
-				}
-				if details.State == runtime.StateExited && details.ExitCode != 0 {
-					return fmt.Errorf(
-						"compose: %s exited with code %d while waiting for completion",
-						svc, details.ExitCode,
-					)
+					if details.State == runtime.StateExited && details.ExitCode != 0 {
+						return fmt.Errorf(
+							"compose: %s exited with code %d while waiting for completion",
+							svc, details.ExitCode,
+						)
+					}
 				}
 			}
 		}
@@ -651,6 +700,59 @@ func (o *Orchestrator) waitFor(
 			return ctx.Err()
 		case <-time.After(o.PollInterval):
 		}
+	}
+}
+
+// probeHealthy runs the service's compose healthcheck once via Exec and
+// reports whether it currently passes. A nil/disabled/NONE/empty
+// healthcheck falls back to "is the container running?", mirroring the
+// native path's HealthNone behavior. During the start_period grace
+// (before notBefore) it reports not-healthy without probing, so the first
+// probe is deferred until the service has had time to initialize.
+func (o *Orchestrator) probeHealthy(
+	ctx context.Context, id string, hc *runtime.HealthCheckSpec, notBefore time.Time,
+) bool {
+	cmd := healthProbeCmd(hc)
+	if cmd == nil {
+		details, err := o.rt.InspectContainer(ctx, id)
+		return err == nil && details != nil && details.State == runtime.StateRunning
+	}
+	if time.Now().Before(notBefore) {
+		return false
+	}
+	probeCtx := ctx
+	if hc.Timeout > 0 {
+		var cancel context.CancelFunc
+		probeCtx, cancel = context.WithTimeout(ctx, hc.Timeout)
+		defer cancel()
+	}
+	res, err := o.rt.ExecContainer(probeCtx, id, runtime.ExecOptions{Cmd: cmd})
+	return err == nil && res.ExitCode == 0
+}
+
+// healthProbeCmd converts a compose-normalized healthcheck Test into an
+// Exec command, or nil for NONE / disabled / empty. Compose normalizes
+// Test to a CMD / CMD-SHELL / NONE leading token; the default branch
+// shell-runs a bare-string form defensively.
+func healthProbeCmd(hc *runtime.HealthCheckSpec) []string {
+	if hc == nil || hc.Disable || len(hc.Test) == 0 {
+		return nil
+	}
+	switch hc.Test[0] {
+	case "NONE":
+		return nil
+	case "CMD":
+		if len(hc.Test) < 2 {
+			return nil
+		}
+		return append([]string(nil), hc.Test[1:]...)
+	case "CMD-SHELL":
+		if len(hc.Test) < 2 {
+			return nil
+		}
+		return []string{"/bin/sh", "-c", hc.Test[1]}
+	default:
+		return []string{"/bin/sh", "-c", strings.Join(hc.Test, " ")}
 	}
 }
 
