@@ -119,3 +119,15 @@ func (r *Runtime) Capabilities() runtime.Capabilities {
 		Checkpoint:       r.checkpointOK,
 	}
 }
+
+// PreferSelfProbedHealth tells the compose orchestrator to run healthcheck
+// probes itself (via Exec) rather than configuring Podman's native
+// HEALTHCHECK. Podman runs the native healthcheck as root and fires the
+// first probe immediately at container start — before the main process
+// initializes — which breaks privilege-dropping images: e.g. rabbitmq's
+// `rabbitmq-diagnostics` probe, run as root, creates a root-owned
+// /var/lib/rabbitmq/.erlang.cookie that the gosu-dropped (uid 999) server
+// then cannot read (eacces). Letting the orchestrator probe defers the
+// first check until after the service is up, matching Docker's behavior.
+// See design/compose-native-health.md.
+func (r *Runtime) PreferSelfProbedHealth() bool { return true }

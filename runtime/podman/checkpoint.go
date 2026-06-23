@@ -75,6 +75,9 @@ func (r *Runtime) Restore(ctx context.Context, spec runtime.RestoreSpec) (*runti
 	q := url.Values{}
 	q.Set("import", "true")
 	q.Set("tcpestablished", strconv.FormatBool(spec.TCPEstablished))
+	if spec.IgnoreVolumes {
+		q.Set("ignoreVolumes", "true")
+	}
 	if spec.Name != "" {
 		q.Set("name", spec.Name)
 	}

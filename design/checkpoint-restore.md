@@ -242,12 +242,45 @@ Model notes (validated by the Phase-0 spike, §7):
 - **Network:** the shared network re-forms as containers come back
   (`restore --import` re-attaches networking, and Podman restores the
   original container name, so service-name DNS resolves again). The network
-  must still exist on the target; recreating it cross-node is the
-  orchestrator's caller's job (or a follow-up).
+  must exist on the target *before* restore, or libpod fails with `network
+  not found`. **`RestoreProject` now recreates `<project>_default` itself**
+  (idempotent, mirroring `compose.Orchestrator.Up`'s name + labels) so a
+  cross-node restore onto a fresh store works. Only the default network is
+  recreated; custom/extra compose networks aren't recorded in the manifest
+  yet — a follow-up records the network set at checkpoint time.
+- **Replace, don't duplicate:** `restore --import` always creates a *new*
+  container under the archived (deterministic `<project>-<service>-1`)
+  name. `CheckpointProject(StopAfter)` stops but does not remove, so a
+  same-node restore-in-place collides on that name (`ID already in use`).
+  `RestoreProject` clears it first, but only when **not running** (its
+  state is in the archive; `RemoveVolumes` stays false so the data volume
+  survives) — a *running* same-named container is a genuine conflict and
+  restore errors rather than killing a live service. No-op cross-node.
+- **Volumes:** restore re-extracts volume content from the archive by
+  default (correct cross-node, where the destination has none). For a
+  same-node restore-in-place the volumes still exist and re-extraction
+  collides (`volume already exists`); `RestoreSpec.IgnoreVolumes`
+  (surfaced as `ProjectRestoreOptions`/`RestoreOptions.IgnoreVolumes` →
+  Podman `ignoreVolumes=true`) reuses the existing volume instead.
 - **Completeness:** the manifest is written last, so its presence implies a
   complete set; a partial checkpoint leaves no manifest and `RestoreProject`
   fails cleanly.
 - **Scale:** one container per service in v1 (no compose `scale`).
+
+Two **node prerequisites** the multi-service validation surfaced (both
+node-provisioning, not library code — the engine talks to a remote socket):
+
+- **CRIU `skip-file-rwx-check`** in `/etc/criu/default.conf` on every node
+  that restores. Some images set their data dir to `0700` (Postgres
+  requires it) and CRIU records the process cwd mode at checkpoint; the
+  restored volume mountpoint is `0755`, so CRIU's file-mode consistency
+  check rejects it. Podman exposes no per-restore flag for it (5.7.0), and
+  the content is correct — only the mountpoint mode differs — so the CRIU
+  config switch is the fix, alongside installing CRIU itself.
+- **Base images present on the destination.** A project restore is *not*
+  fully self-contained: Podman pulls each service's base image if absent.
+  A cross-node destination needs the images cached or registry credentials
+  (in practice it already runs the same workloads).
 
 ## 4. Capability gate
 
@@ -362,13 +395,26 @@ What's **proven** (2026-06-19, bench pod, real image):
   peer-IP change on restore is the residual edge (matches the
   "agents reconnect" assumption).
 
+- ✅ **Real multi-service devcontainer, full project round trip + true
+  cross-node migration (2026-06-23).** An 8-service compose devcontainer
+  (Postgres, RabbitMQ, MinIO, an OAuth mock, an app sidecar, …) checkpointed
+  on node A and `RestoreProject`'d on node B — a separate, never-ran-this
+  Podman store. All 8 services resumed and in-memory/disk state survived the
+  move (a file written in the app container and a row written in Postgres
+  pre-checkpoint were present post-restore on B). Exercised the §3.3
+  decisions (network recreation, replace-guard, volume handling) and both
+  node prerequisites above. Timings: checkpoint ~9–17s, restore ~6–7s
+  cross-node / ~5s same-node-reuse for a ~580 MB archive set; storage speed
+  (local vs shared mount) and whether volume content is re-extracted are the
+  dominant variables.
+
 What's **still open** (minor):
 
-- **Working-set timing.** Idle container was fast (~0.5s same-pod, ~3.5s
-  cross-pod incl. rootfs unpack); a busy agent's memory footprint sets the
-  real checkpoint time vs the eviction window. Measure on a real workload.
-- **Forced cross-node** placement (anti-affinity) — belt-and-suspenders;
-  the archive is already proven node-independent.
+- **Working-set timing on a busy agent.** The validations above were on
+  freshly-started services; a saturated agent's memory footprint still sets
+  the real checkpoint time vs the eviction window — measure under load.
+- **Forced cross-node** placement (anti-affinity) — now exercised across two
+  isolated Podman stores (2026-06-23); the archive is proven node-independent.
 
 ## 8. Constraints, risks & mitigations
 

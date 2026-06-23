@@ -45,6 +45,7 @@ type mockRuntime struct {
 	// Hooks (set to override default behavior).
 	OnRunContainer func(spec runtime.RunSpec) (*runtime.Container, error)
 	OnInspect      func(id string, base *runtime.ContainerDetails) *runtime.ContainerDetails
+	OnExec         func(id string, opts runtime.ExecOptions) (runtime.ExecResult, error)
 
 	// imageDigest, when non-empty, is the digest InspectImage
 	// returns for every reference. Tests that exercise digest-drift
@@ -139,6 +140,9 @@ func (m *mockRuntime) RemoveContainer(ctx context.Context, id string, opts runti
 }
 
 func (m *mockRuntime) ExecContainer(ctx context.Context, id string, opts runtime.ExecOptions) (runtime.ExecResult, error) {
+	if m.OnExec != nil {
+		return m.OnExec(id, opts)
+	}
 	return runtime.ExecResult{}, nil
 }
 
