@@ -504,10 +504,12 @@ func (o *Orchestrator) ensureService(
 
 	spec := serviceToRunSpec(plan, svc, projectLabels, hash, imageDigest)
 	if o.selfProbe {
-		// The orchestrator probes health itself (see waitFor); never
-		// configure the backend's native HEALTHCHECK, whose eager
-		// root probe breaks privilege-dropping images on Podman.
-		spec.HealthCheck = nil
+		// The orchestrator probes health itself (see waitFor); explicitly
+		// DISABLE the backend's native HEALTHCHECK. Nil would mean "inherit
+		// from image" (toHealthcheck), so an image-baked HEALTHCHECK would
+		// still run natively — reintroducing Podman's eager root probe that
+		// breaks privilege-dropping images. Disable emits the NONE sentinel.
+		spec.HealthCheck = &runtime.HealthCheckSpec{Disable: true}
 	}
 	c, err := o.rt.RunContainer(ctx, spec)
 	if err != nil {

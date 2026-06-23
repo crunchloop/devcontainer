@@ -3,6 +3,7 @@ package devcontainer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -237,7 +238,17 @@ func (e *Engine) RestoreProject(ctx context.Context, opts ProjectRestoreOptions)
 		// be destroying a live service, not restoring it. RemoveVolumes
 		// stays false so the service's data volume survives for reuse.
 		name := manifest.Project + "-" + svc.Service + "-1"
-		if d, ierr := e.runtime.InspectContainer(ctx, name); ierr == nil && d != nil {
+		d, ierr := e.runtime.InspectContainer(ctx, name)
+		switch {
+		case ierr != nil:
+			// Absent is the normal fresh/cross-node case — proceed. Any
+			// other inspect failure (daemon/API/permission) is surfaced
+			// rather than masked behind a downstream restore error.
+			var notFound *runtime.ContainerNotFoundError
+			if !errors.As(ierr, &notFound) {
+				return nil, fmt.Errorf("RestoreProject: service %q: inspect existing container %q: %w", svc.Service, name, ierr)
+			}
+		case d != nil:
 			if d.State == runtime.StateRunning {
 				return nil, fmt.Errorf("RestoreProject: service %q: a running container %q already exists — stop it before restoring", svc.Service, name)
 			}

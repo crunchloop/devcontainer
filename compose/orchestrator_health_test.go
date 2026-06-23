@@ -50,6 +50,28 @@ func TestNewOrchestratorDetectsSelfProbe(t *testing.T) {
 	}
 }
 
+// In self-probe mode the RunSpec must DISABLE the native healthcheck, not
+// leave it nil — nil means "inherit the image's HEALTHCHECK", which would
+// let Podman run an image-baked probe (as root, eagerly) and reintroduce
+// the very failure self-probing exists to avoid.
+func TestUp_SelfProbeDisablesNativeHealthcheck(t *testing.T) {
+	rt := newMockRuntime()
+	orch := NewOrchestrator(selfProbingMock{rt}, "podman")
+	proj := newProject(t, map[string][]string{"app": nil})
+
+	var got *runtime.HealthCheckSpec
+	rt.OnRunContainer = func(spec runtime.RunSpec) (*runtime.Container, error) {
+		got = spec.HealthCheck
+		return nil, nil
+	}
+	if _, err := orch.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-x"}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if got == nil || !got.Disable {
+		t.Fatalf("self-probe must set HealthCheck.Disable=true (got %+v); nil would inherit the image healthcheck", got)
+	}
+}
+
 func TestWaitForSelfProbeHealthy(t *testing.T) {
 	rt := newMockRuntime()
 	var execed int
