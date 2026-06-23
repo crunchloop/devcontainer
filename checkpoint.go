@@ -38,6 +38,12 @@ type RestoreOptions struct {
 	// established connections.
 	TCPEstablished bool
 
+	// IgnoreVolumes skips restoring volume content from the archive,
+	// reusing an existing volume. Leave false for cross-node restore;
+	// set true for same-node restore-in-place. See
+	// ProjectRestoreOptions.IgnoreVolumes.
+	IgnoreVolumes bool
+
 	// LocalEnv overrides os.Environ() for the reattached workspace's
 	// substituter localEnv pass. Nil means use the current process
 	// environment — matches AttachOptions.LocalEnv. On a cross-node
@@ -117,6 +123,7 @@ func (e *Engine) Restore(ctx context.Context, opts RestoreOptions) (*Workspace, 
 		ArchivePath:    opts.ArchivePath,
 		Name:           opts.Name,
 		TCPEstablished: opts.TCPEstablished,
+		IgnoreVolumes:  opts.IgnoreVolumes,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("restore: %w", err)

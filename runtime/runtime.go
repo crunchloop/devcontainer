@@ -148,6 +148,14 @@ type RestoreSpec struct {
 	// TCPEstablished must match the checkpoint when the archive captured
 	// established connections.
 	TCPEstablished bool
+
+	// IgnoreVolumes asks the backend to skip restoring volume content
+	// from the archive, reusing whatever volume already exists. For
+	// Podman this maps to restore's ignore-volumes; cross-node restore
+	// leaves it false (content must come from the archive), same-node
+	// restore-in-place sets it true to avoid a "volume already exists"
+	// collision.
+	IgnoreVolumes bool
 }
 
 // CheckpointRef describes a written checkpoint archive.

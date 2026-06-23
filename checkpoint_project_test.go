@@ -39,6 +39,13 @@ func (f *fakeProjectRuntime) Capabilities() runtime.Capabilities {
 	return c
 }
 
+// CreateNetwork succeeds: RestoreProject recreates the project network
+// before restoring containers (cross-node fresh-store path), so the
+// checkpoint-capable fake must support it.
+func (f *fakeProjectRuntime) CreateNetwork(ctx context.Context, spec runtime.NetworkSpec) (string, error) {
+	return "net-" + spec.Name, nil
+}
+
 func (f *fakeProjectRuntime) ListContainers(ctx context.Context, filter runtime.LabelFilter) ([]runtime.Container, error) {
 	f.fakeRuntime.mu.Lock()
 	defer f.fakeRuntime.mu.Unlock()

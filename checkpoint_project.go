@@ -63,6 +63,14 @@ type ProjectRestoreOptions struct {
 	// established connections.
 	TCPEstablished bool
 
+	// IgnoreVolumes skips restoring volume content from the archives,
+	// reusing whatever volumes already exist. Leave false for a
+	// cross-node restore (the destination has no volumes, so content
+	// must come from the archive). Set true for a same-node
+	// restore-in-place, where the volumes still exist with current data
+	// and re-extracting them would collide ("volume already exists").
+	IgnoreVolumes bool
+
 	// LocalEnv overrides os.Environ() for the reattached primary
 	// workspace's substituter (parity with RestoreOptions.LocalEnv).
 	LocalEnv map[string]string
@@ -199,11 +207,49 @@ func (e *Engine) RestoreProject(ctx context.Context, opts ProjectRestoreOptions)
 		return nil, fmt.Errorf("RestoreProject: %w", err)
 	}
 
+	// A cross-node restore lands on a fresh store with no project network.
+	// The checkpointed containers were attached to <project>_default, and
+	// libpod restore fails ("network not found") unless it exists first.
+	// Recreate it before restoring any container, mirroring how
+	// compose.Orchestrator.Up names + labels it (CreateNetwork is
+	// idempotent — a label-matching network is reused, so same-node
+	// restore is unaffected). Custom/extra compose networks aren't yet
+	// recorded in the manifest — see design/checkpoint-restore-fixes.md.
+	if _, err := e.runtime.CreateNetwork(ctx, runtime.NetworkSpec{
+		Name: manifest.Project + "_default",
+		Labels: map[string]string{
+			compose.LabelComposeProject: manifest.Project,
+			compose.LabelEngine:         compose.EngineDisplayName,
+		},
+	}); err != nil {
+		return nil, fmt.Errorf("RestoreProject: recreate project network: %w", err)
+	}
+
 	out := &ProjectRestore{Project: manifest.Project, Services: map[string]*runtime.Container{}}
 	for _, svc := range manifest.Services {
+		// Restore (--import) re-creates the container under its archived,
+		// deterministic compose name. On a fresh/cross-node store nothing
+		// pre-exists. On a same-node restore the checkpoint left the source
+		// container *stopped* under this name (StopAfter stops, it does not
+		// remove), which collides with re-create ("that ID is already in
+		// use"). Clear a non-running leftover — its full state is in the
+		// archive — but refuse to clobber a *running* container: that would
+		// be destroying a live service, not restoring it. RemoveVolumes
+		// stays false so the service's data volume survives for reuse.
+		name := manifest.Project + "-" + svc.Service + "-1"
+		if d, ierr := e.runtime.InspectContainer(ctx, name); ierr == nil && d != nil {
+			if d.State == runtime.StateRunning {
+				return nil, fmt.Errorf("RestoreProject: service %q: a running container %q already exists — stop it before restoring", svc.Service, name)
+			}
+			if rerr := e.runtime.RemoveContainer(ctx, name, runtime.RemoveOptions{Force: true}); rerr != nil {
+				return nil, fmt.Errorf("RestoreProject: service %q: clearing stale container %q: %w", svc.Service, name, rerr)
+			}
+		}
+
 		c, err := cr.Restore(ctx, runtime.RestoreSpec{
 			ArchivePath:    filepath.Join(opts.ArchiveDir, svc.Archive),
 			TCPEstablished: opts.TCPEstablished,
+			IgnoreVolumes:  opts.IgnoreVolumes,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("RestoreProject: service %q: %w", svc.Service, err)
