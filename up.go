@@ -570,6 +570,15 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 			origEntrypoint = []string(svc.Entrypoint)
 		} else if details, err := e.runtime.InspectImage(ctx, finalImage); err == nil && details != nil {
 			origEntrypoint = details.Entrypoint
+		} else if err != nil {
+			// Non-fatal: we still apply the entrypoint wrapper, but the
+			// image's own ENTRYPOINT can't be preserved underneath it.
+			// Surface it so this silent fallback is diagnosable.
+			opts.bus.Emit(events.WarnEvent{
+				Code: "compose_entrypoint_image_inspect_failed",
+				Message: fmt.Sprintf("could not inspect %s to preserve its ENTRYPOINT under the feature-entrypoint wrapper for service %q: %v",
+					finalImage, src.Service, err),
+			})
 		}
 	}
 
