@@ -239,6 +239,11 @@ func snapshotToDetails(s containerSnapshot) *runtime.ContainerDetails {
 		// Created / FinishedAt / ExitCode are not in Apple's
 		// ContainerSnapshot. Left as zero values; later PRs can
 		// surface them via an additional XPC call if exposed.
+		//
+		// Privileged / CapAdd / SecurityOpt likewise have no
+		// equivalent in Apple's snapshot (the VM-isolation model
+		// doesn't expose docker-style HostConfig security flags), so
+		// they stay at zero values.
 	}
 }
 

@@ -559,13 +559,56 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 	}
 	overrideEnv := mergeEnv(cfg.ContainerEnv, extraEnv)
 
+	// When features/image metadata declare entrypoint scripts (e.g.
+	// docker-in-docker's docker-init.sh), they must run before the
+	// service's command — see RenderEntrypointWrapper. The wrapper
+	// preserves the "original" entrypoint underneath: the service's own
+	// `entrypoint:` if it declared one, else the image's ENTRYPOINT.
+	var origEntrypoint []string
+	if len(cfg.Entrypoints) > 0 {
+		if svc, ok := project.Services[src.Service]; ok && len(svc.Entrypoint) > 0 {
+			origEntrypoint = []string(svc.Entrypoint)
+		} else if details, err := e.runtime.InspectImage(ctx, finalImage); err == nil && details != nil {
+			origEntrypoint = details.Entrypoint
+		} else if err != nil {
+			// Non-fatal: we still apply the entrypoint wrapper, but the
+			// image's own ENTRYPOINT can't be preserved underneath it.
+			// Surface it so this silent fallback is diagnosable.
+			opts.bus.Emit(events.WarnEvent{
+				Code: "compose_entrypoint_image_inspect_failed",
+				Message: fmt.Sprintf("could not inspect %s to preserve its ENTRYPOINT under the feature-entrypoint wrapper for service %q: %v",
+					finalImage, src.Service, err),
+			})
+		}
+	}
+
+	// Run-time override layered onto the primary service. Mirrors the
+	// flags the image path applies in newRunSpec: workspace/cfg mounts,
+	// container env, convergence labels, the security options merged from
+	// feature+image metadata (Privileged/Init/CapAdd/SecurityOpt), and the
+	// feature-entrypoint chain — without these, features like
+	// docker-in-docker that declare privileged/init/entrypoint silently
+	// fail on compose-source devcontainers.
+	runOverride := compose.Override{
+		Service:            src.Service,
+		ExtraBindMounts:    bindMounts,
+		ExtraEnvironment:   overrideEnv,
+		Labels:             overrideLabels,
+		Privileged:         cfg.Privileged,
+		Init:               cfg.Init,
+		CapAdd:             cfg.CapAdd,
+		SecurityOpt:        cfg.SecurityOpt,
+		Entrypoints:        cfg.Entrypoints,
+		OriginalEntrypoint: origEntrypoint,
+	}
+
 	switch e.opts.ComposeBackend {
 	case ComposeBackendNative:
 		return e.upComposeNative(ctx, cfg, opts, project, src, projectName,
-			finalImage, bindMounts, overrideEnv, overrideLabels)
+			finalImage, runOverride)
 	case ComposeBackendShellout:
 		return e.upComposeShellout(ctx, cfg, opts, project, src, projectName,
-			workingDir, finalImage, bindMounts, overrideEnv, overrideLabels, existingContainer)
+			workingDir, finalImage, runOverride, existingContainer)
 	default:
 		// Reject unknown values explicitly so a typo in
 		// EngineOptions.ComposeBackend doesn't silently route to
@@ -583,9 +626,7 @@ func (e *Engine) upComposeShellout(
 	project *composetypes.Project,
 	src *config.ComposeSource,
 	projectName, workingDir, finalImage string,
-	bindMounts []compose.BindMount,
-	overrideEnv map[string]string,
-	overrideLabels map[string]string,
+	runOverride compose.Override,
 	existingContainer bool,
 ) (*Workspace, error) {
 	cr, ok := e.runtime.(runtime.ComposeRuntime)
@@ -609,12 +650,7 @@ func (e *Engine) upComposeShellout(
 		return nil, err
 	}
 
-	if err := compose.WriteRunOverride(runOverridePath, project, compose.Override{
-		Service:          src.Service,
-		ExtraBindMounts:  bindMounts,
-		ExtraEnvironment: overrideEnv,
-		Labels:           overrideLabels,
-	}); err != nil {
+	if err := compose.WriteRunOverride(runOverridePath, project, runOverride); err != nil {
 		return nil, err
 	}
 
@@ -663,19 +699,12 @@ func (e *Engine) upComposeNative(
 	project *composetypes.Project,
 	src *config.ComposeSource,
 	projectName, finalImage string,
-	bindMounts []compose.BindMount,
-	overrideEnv map[string]string,
-	overrideLabels map[string]string,
+	runOverride compose.Override,
 ) (*Workspace, error) {
 	if err := compose.ApplyBuildOverride(project, src.Service, finalImage); err != nil {
 		return nil, err
 	}
-	if err := compose.ApplyRunOverride(project, src.Service, compose.Override{
-		Service:          src.Service,
-		ExtraBindMounts:  bindMounts,
-		ExtraEnvironment: overrideEnv,
-		Labels:           overrideLabels,
-	}); err != nil {
+	if err := compose.ApplyRunOverride(project, src.Service, runOverride); err != nil {
 		return nil, err
 	}
 

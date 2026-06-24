@@ -759,12 +759,12 @@ func healthProbeCmd(hc *runtime.HealthCheckSpec) []string {
 }
 
 // serviceToRunSpec is the in-memory translation from compose's
-// ServiceConfig to runtime.RunSpec. This is intentionally minimal
-// for C6 — env / labels / mounts / command / entrypoint / user /
-// workdir / init / cap_add. RunArgs / Privileged / SecurityOpt are
-// not in compose's typed model (those are docker-cli concepts), so
-// they stay at their zero values. Ports / restart / healthcheck
-// are RunSpec gaps to fix in a later PR.
+// ServiceConfig to runtime.RunSpec — env / labels / mounts / command /
+// entrypoint / user / workdir / init / cap_add / privileged /
+// security_opt. The security fields are populated by ApplyRunOverride
+// from merged feature+image metadata (e.g. docker-in-docker's
+// privileged/init/capAdd), mirroring the flags the image path applies.
+// RunArgs has no compose-typed equivalent and stays zero.
 func serviceToRunSpec(
 	plan *Plan,
 	svc composetypes.ServiceConfig,
@@ -823,6 +823,8 @@ func serviceToRunSpec(
 		HealthCheck:   healthCheckOf(svc.HealthCheck),
 		Init:          svc.Init != nil && *svc.Init,
 		CapAdd:        svc.CapAdd,
+		Privileged:    svc.Privileged,
+		SecurityOpt:   svc.SecurityOpt,
 		MemoryBytes:   memBytes,
 		NanoCPUs:      nanoCPUs,
 	}

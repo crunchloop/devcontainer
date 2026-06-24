@@ -107,6 +107,30 @@ func ApplyRunOverride(project *composetypes.Project, primaryService string, ov O
 		}
 	}
 
+	// Security/entrypoint options from merged feature+image metadata.
+	// Pointers: nil means "leave the service's own value untouched" so we
+	// never downgrade a user's `privileged: true` when no feature asked
+	// for it. Slices: union (dedup) with the service's existing entries.
+	if ov.Privileged != nil {
+		svc.Privileged = *ov.Privileged
+	}
+	if ov.Init != nil {
+		svc.Init = ov.Init
+	}
+	svc.CapAdd = unionStrings(svc.CapAdd, ov.CapAdd)
+	svc.SecurityOpt = unionStrings(svc.SecurityOpt, ov.SecurityOpt)
+
+	// Feature-entrypoint chaining. Replace the service entrypoint with a
+	// wrapper that runs each feature entrypoint then execs the original
+	// entrypoint+command. Not escaped: the in-memory project is consumed
+	// directly (no compose re-interpolation). The service's `command`
+	// (svc.Command) is left untouched.
+	if len(ov.Entrypoints) > 0 {
+		svc.Entrypoint = composetypes.ShellCommand(
+			RenderEntrypointWrapper(ov.Entrypoints, ov.OriginalEntrypoint, false),
+		)
+	}
+
 	project.Services[primaryService] = svc
 	return nil
 }

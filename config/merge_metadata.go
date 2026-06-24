@@ -76,6 +76,19 @@ func MergeMetadata(cfg *ResolvedConfig, subCtx SubstitutionContext, layers []Fea
 	cfg.CapAdd = unionDedup(layerStrings(layers, func(l FeatureMetadata) []string { return l.CapAdd }), cfg.CapAdd)
 	cfg.SecurityOpt = unionDedup(layerStrings(layers, func(l FeatureMetadata) []string { return l.SecurityOpt }), cfg.SecurityOpt)
 
+	// Entrypoints: accumulate every non-empty layer entrypoint in chain
+	// order (base-image label entries first, features last). Unlike the
+	// scalar fields these do NOT follow last-wins — every feature that
+	// declares an entrypoint must run. Assigned fresh (not appended) so
+	// MergeMetadata stays idempotent; devcontainer.json contributes none.
+	var entrypoints []string
+	for _, l := range layers {
+		if l.Entrypoint != "" {
+			entrypoints = append(entrypoints, l.Entrypoint)
+		}
+	}
+	cfg.Entrypoints = entrypoints
+
 	// Maps: layered union with user overlay last.
 	cfg.ContainerEnv = mergeStringMaps(layerMaps(layers, func(l FeatureMetadata) map[string]string { return l.ContainerEnv }), cfg.ContainerEnv)
 	cfg.RemoteEnv = mergeStringMaps(layerMaps(layers, func(l FeatureMetadata) map[string]string { return l.RemoteEnv }), cfg.RemoteEnv)
