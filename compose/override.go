@@ -44,6 +44,65 @@ type Override struct {
 	// Labels written on the primary service so Engine.Attach's
 	// label-based lookup works (`dev.containers.id`, etc.).
 	Labels map[string]string
+
+	// Security/entrypoint options merged from feature + image metadata
+	// (config.ResolvedConfig.{Privileged,Init,CapAdd,SecurityOpt}).
+	// These mirror the `docker run --privileged/--init/--cap-add/
+	// --security-opt` flags the image/Dockerfile path applies; on the
+	// compose path upstream devcontainers/cli emits the equivalent
+	// service fields into its generated override compose file. Without
+	// them a feature like docker-in-docker (which declares
+	// privileged/init/capAdd) silently fails on compose-source
+	// devcontainers.
+	//
+	// Privileged / Init are pointers so nil means "no change" — we must
+	// not clobber a user's `privileged: true` in their compose file when
+	// no feature requested it. CapAdd / SecurityOpt are unioned with the
+	// service's existing entries (dedup, user entries preserved).
+	Privileged  *bool
+	Init        *bool
+	CapAdd      []string
+	SecurityOpt []string
+
+	// Entrypoints is the ordered chain of feature/image-metadata
+	// entrypoint scripts (config.ResolvedConfig.Entrypoints). When
+	// non-empty the primary service's entrypoint is replaced with a
+	// generated wrapper that runs each in sequence then execs the
+	// original entrypoint+command — mirroring devcontainers/cli's
+	// generated compose override. Required for features like
+	// docker-in-docker whose dockerd is launched by docker-init.sh.
+	Entrypoints []string
+
+	// OriginalEntrypoint is the entrypoint to preserve underneath the
+	// wrapper: the service's own `entrypoint:` if it declared one, else
+	// the image's ENTRYPOINT. The service's `command` is left untouched
+	// (the wrapper execs entrypoint+command together). Only consulted
+	// when Entrypoints is non-empty.
+	OriginalEntrypoint []string
+}
+
+// RenderEntrypointWrapper builds the wrapper entrypoint array that runs
+// each feature entrypoint in order, then execs the original
+// entrypoint+command (`exec "$@"`), then falls back to a keep-alive
+// loop. Mirrors devcontainers/cli's generated compose override entrypoint.
+//
+// escapeDollar controls $-escaping: the shellout path writes a YAML file
+// that `docker compose` re-interpolates, so `$` must be doubled to `$$`
+// to survive as a literal; the native path mutates the in-memory project
+// (no interpolation) and must keep a single `$`.
+func RenderEntrypointWrapper(entrypoints, original []string, escapeDollar bool) []string {
+	script := "echo Container started\n" +
+		"trap \"exit 0\" 15\n" +
+		strings.Join(entrypoints, "\n") + "\n" +
+		"exec \"$@\"\n" +
+		"while sleep 1 & wait $!; do :; done"
+	arr := append([]string{"/bin/sh", "-c", script, "-"}, original...)
+	if escapeDollar {
+		for i := range arr {
+			arr[i] = strings.ReplaceAll(arr[i], "$", "$$")
+		}
+	}
+	return arr
 }
 
 // BindMount describes one bind volume in the override.
@@ -99,9 +158,20 @@ func WriteRunOverride(dst string, project *composetypes.Project, ov Override) er
 		return err
 	}
 
+	// cap_add / security_opt use compose v2's sequence-REPLACE merge, so
+	// (like volumes) we union with the user's existing service entries
+	// and re-emit the full list rather than risk dropping them.
+	emit := ov
+	if project != nil {
+		if svc, err := PrimaryService(project, ov.Service); err == nil {
+			emit.CapAdd = unionStrings(svc.CapAdd, ov.CapAdd)
+			emit.SecurityOpt = unionStrings(svc.SecurityOpt, ov.SecurityOpt)
+		}
+	}
+
 	doc := map[string]any{
 		"services": map[string]any{
-			ov.Service: buildServiceOverride(merged, ov),
+			ov.Service: buildServiceOverride(merged, emit),
 		},
 	}
 	body, err := yaml.Marshal(doc)
@@ -178,7 +248,50 @@ func buildServiceOverride(volumes []any, ov Override) map[string]any {
 		}
 		svc["labels"] = labels
 	}
+	if ov.Privileged != nil {
+		svc["privileged"] = *ov.Privileged
+	}
+	if ov.Init != nil {
+		svc["init"] = *ov.Init
+	}
+	if len(ov.CapAdd) > 0 {
+		svc["cap_add"] = append([]string(nil), ov.CapAdd...)
+	}
+	if len(ov.SecurityOpt) > 0 {
+		svc["security_opt"] = append([]string(nil), ov.SecurityOpt...)
+	}
+	if len(ov.Entrypoints) > 0 {
+		// Escaped: this YAML is re-interpolated by `docker compose`.
+		svc["entrypoint"] = RenderEntrypointWrapper(ov.Entrypoints, ov.OriginalEntrypoint, true)
+	}
 	return svc
+}
+
+// unionStrings returns existing followed by any entries in add not
+// already present, preserving order and dropping duplicates. Used to
+// merge feature-contributed cap_add / security_opt into a service's
+// own entries without clobbering either.
+func unionStrings(existing, add []string) []string {
+	if len(add) == 0 {
+		return existing
+	}
+	seen := make(map[string]struct{}, len(existing)+len(add))
+	out := make([]string, 0, len(existing)+len(add))
+	for _, s := range existing {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	for _, s := range add {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 // yamlScalar quotes a value if it contains characters that would

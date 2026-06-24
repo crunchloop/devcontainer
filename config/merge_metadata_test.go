@@ -75,6 +75,29 @@ func TestMergeMetadata_CapAdd_UnionDedup(t *testing.T) {
 	}
 }
 
+func TestMergeMetadata_Entrypoints_OrderedChainSkipEmpty(t *testing.T) {
+	cfg := &ResolvedConfig{}
+	MergeMetadata(cfg, SubstitutionContext{}, []FeatureMetadata{
+		{ID: "base", Entrypoint: "/base-init.sh"},
+		{ID: "no-ep"}, // contributes nothing
+		{ID: "dind", Entrypoint: "/usr/local/share/docker-init.sh"},
+	})
+	want := []string{"/base-init.sh", "/usr/local/share/docker-init.sh"}
+	if !reflect.DeepEqual(cfg.Entrypoints, want) {
+		t.Errorf("got %v, want %v", cfg.Entrypoints, want)
+	}
+}
+
+func TestMergeMetadata_Entrypoints_Idempotent(t *testing.T) {
+	cfg := &ResolvedConfig{}
+	layers := []FeatureMetadata{{ID: "dind", Entrypoint: "/init.sh"}}
+	MergeMetadata(cfg, SubstitutionContext{}, layers)
+	MergeMetadata(cfg, SubstitutionContext{}, layers)
+	if want := []string{"/init.sh"}; !reflect.DeepEqual(cfg.Entrypoints, want) {
+		t.Errorf("merge not idempotent: got %v, want %v", cfg.Entrypoints, want)
+	}
+}
+
 func TestMergeMetadata_LifecycleHooks_OrderedAndUserLast(t *testing.T) {
 	cfg := &ResolvedConfig{
 		Lifecycle: LifecycleCommands{

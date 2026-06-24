@@ -29,6 +29,7 @@ func (r *Runtime) InspectImage(ctx context.Context, ref string) (*runtime.ImageD
 		out.Labels = copyLabels(res.Config.Labels)
 		out.Env = append([]string(nil), res.Config.Env...)
 		out.User = res.Config.User
+		out.Entrypoint = append([]string(nil), res.Config.Entrypoint...)
 	}
 	return out, nil
 }
@@ -61,6 +62,11 @@ func (r *Runtime) InspectContainer(ctx context.Context, id string) (*runtime.Con
 		out.User = c.Config.User
 		out.Env = append([]string(nil), c.Config.Env...)
 		out.Labels = copyLabels(c.Config.Labels)
+	}
+	if c.HostConfig != nil {
+		out.Privileged = c.HostConfig.Privileged
+		out.CapAdd = append([]string(nil), c.HostConfig.CapAdd...)
+		out.SecurityOpt = append([]string(nil), c.HostConfig.SecurityOpt...)
 	}
 	return out, nil
 }

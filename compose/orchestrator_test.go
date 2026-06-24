@@ -299,6 +299,32 @@ func TestUp_SingleService(t *testing.T) {
 	}
 }
 
+func TestServiceToRunSpec_CarriesSecurityFields(t *testing.T) {
+	initT := true
+	svc := composetypes.ServiceConfig{
+		Name:        "app",
+		Image:       "alpine",
+		Init:        &initT,
+		Privileged:  true,
+		CapAdd:      []string{"SYS_ADMIN"},
+		SecurityOpt: []string{"seccomp=unconfined"},
+	}
+	spec := serviceToRunSpec(&Plan{ProjectName: "dc-x"}, svc, nil, "hash", "")
+
+	if !spec.Privileged {
+		t.Error("Privileged not carried into RunSpec")
+	}
+	if !spec.Init {
+		t.Error("Init not carried into RunSpec")
+	}
+	if len(spec.CapAdd) != 1 || spec.CapAdd[0] != "SYS_ADMIN" {
+		t.Errorf("CapAdd = %v, want [SYS_ADMIN]", spec.CapAdd)
+	}
+	if len(spec.SecurityOpt) != 1 || spec.SecurityOpt[0] != "seccomp=unconfined" {
+		t.Errorf("SecurityOpt = %v, want [seccomp=unconfined]", spec.SecurityOpt)
+	}
+}
+
 func TestUp_DependencyOrder(t *testing.T) {
 	rt := newMockRuntime()
 	orch := NewOrchestrator(rt, "docker")

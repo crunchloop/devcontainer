@@ -310,6 +310,16 @@ type ContainerDetails struct {
 	Mounts    []MountInspect
 	Labels    map[string]string
 
+	// Security options as actually applied to the container, read back
+	// from the backend's inspect (docker/podman HostConfig). Lets callers
+	// verify that RunSpec.Privileged/CapAdd/SecurityOpt — including the
+	// values merged from feature metadata onto compose services — landed
+	// on the real container. Backends that don't surface these (e.g.
+	// applecontainer) leave them at zero values.
+	Privileged  bool
+	CapAdd      []string
+	SecurityOpt []string
+
 	// ExitCode is the container's last exit code. Zero is ambiguous:
 	// either "process is still running" or "process exited cleanly".
 	// Use State to disambiguate (running vs exited).
@@ -368,6 +378,13 @@ type ImageDetails struct {
 	// reconciliation when devcontainer.json's remoteUser/containerUser
 	// are also empty.
 	User string
+
+	// Entrypoint is the image's ENTRYPOINT (Config.Entrypoint), nil if
+	// unset. Used to preserve the image's own entrypoint underneath the
+	// feature-entrypoint wrapper when a feature declares an entrypoint
+	// (e.g. docker-in-docker) and the consumer (compose service) declares
+	// none of its own.
+	Entrypoint []string
 }
 
 // MountInspect describes a mount as reported by the runtime, not what

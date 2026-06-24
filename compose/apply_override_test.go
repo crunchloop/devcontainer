@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"strings"
 	"testing"
 
 	composetypes "github.com/compose-spec/compose-go/v2/types"
@@ -84,6 +85,102 @@ func TestApplyRunOverride_AppendsVolumeAndEnvAndLabels(t *testing.T) {
 	if svc.Labels["dev.containers.id"] != "abc" {
 		t.Error("new label not added")
 	}
+}
+
+func TestApplyRunOverride_AppliesSecurityMetadata(t *testing.T) {
+	proj := projectForApply()
+	// Service already declares one cap and a privileged:false implied by zero.
+	svc := proj.Services["app"]
+	svc.CapAdd = []string{"NET_ADMIN"}
+	proj.Services["app"] = svc
+
+	priv := true
+	initT := true
+	ov := Override{
+		Service:     "app",
+		Privileged:  &priv,
+		Init:        &initT,
+		CapAdd:      []string{"SYS_ADMIN", "NET_ADMIN"}, // NET_ADMIN dup
+		SecurityOpt: []string{"seccomp=unconfined"},
+	}
+	if err := ApplyRunOverride(proj, "app", ov); err != nil {
+		t.Fatalf("ApplyRunOverride: %v", err)
+	}
+	got := proj.Services["app"]
+
+	if !got.Privileged {
+		t.Error("Privileged not set")
+	}
+	if got.Init == nil || !*got.Init {
+		t.Error("Init not set")
+	}
+	// Union: existing NET_ADMIN preserved first, SYS_ADMIN appended, no dup.
+	if want := []string{"NET_ADMIN", "SYS_ADMIN"}; !equalStrings(got.CapAdd, want) {
+		t.Errorf("CapAdd = %v, want %v", got.CapAdd, want)
+	}
+	if want := []string{"seccomp=unconfined"}; !equalStrings(got.SecurityOpt, want) {
+		t.Errorf("SecurityOpt = %v, want %v", got.SecurityOpt, want)
+	}
+}
+
+func TestApplyRunOverride_AppliesEntrypointWrapper(t *testing.T) {
+	proj := projectForApply()
+	ov := Override{
+		Service:     "app",
+		Entrypoints: []string{"/usr/local/share/docker-init.sh"},
+	}
+	if err := ApplyRunOverride(proj, "app", ov); err != nil {
+		t.Fatalf("ApplyRunOverride: %v", err)
+	}
+	ep := []string(proj.Services["app"].Entrypoint)
+	if len(ep) < 4 || ep[0] != "/bin/sh" || ep[3] != "-" {
+		t.Fatalf("entrypoint wrapper not applied: %v", ep)
+	}
+	// Native path: single-dollar (no compose re-interpolation).
+	if !strings.Contains(ep[2], `exec "$@"`) || strings.Contains(ep[2], "$$") {
+		t.Errorf("native entrypoint should use single-dollar exec: %q", ep[2])
+	}
+	if !strings.Contains(ep[2], "docker-init.sh") {
+		t.Errorf("feature entrypoint missing from wrapper: %q", ep[2])
+	}
+}
+
+func TestApplyRunOverride_NoEntrypointWhenNoneDeclared(t *testing.T) {
+	proj := projectForApply()
+	if err := ApplyRunOverride(proj, "app", Override{Service: "app"}); err != nil {
+		t.Fatalf("ApplyRunOverride: %v", err)
+	}
+	if ep := proj.Services["app"].Entrypoint; len(ep) != 0 {
+		t.Errorf("entrypoint should be untouched when no feature entrypoints; got %v", ep)
+	}
+}
+
+// TestApplyRunOverride_NilPrivilegedLeavesServiceValue confirms a nil
+// Override.Privileged does not downgrade a user's `privileged: true`.
+func TestApplyRunOverride_NilPrivilegedLeavesServiceValue(t *testing.T) {
+	proj := projectForApply()
+	svc := proj.Services["app"]
+	svc.Privileged = true
+	proj.Services["app"] = svc
+
+	if err := ApplyRunOverride(proj, "app", Override{Service: "app"}); err != nil {
+		t.Fatalf("ApplyRunOverride: %v", err)
+	}
+	if !proj.Services["app"].Privileged {
+		t.Error("nil Override.Privileged clobbered the service's privileged:true")
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestApplyRunOverride_HandlesNilMaps(t *testing.T) {

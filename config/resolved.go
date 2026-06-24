@@ -35,6 +35,14 @@ type ResolvedConfig struct {
 	OverrideCommand *bool
 	ShutdownAction  ShutdownAction
 
+	// Entrypoints is the ordered chain of feature/image-metadata
+	// `entrypoint` scripts (e.g. docker-in-docker's docker-init.sh).
+	// At container start each runs in sequence before the original
+	// entrypoint/command, via a generated wrapper. Sourced only from
+	// metadata layers (base-image label entries first, then features) —
+	// devcontainer.json has no top-level entrypoint. Empty = no chaining.
+	Entrypoints []string
+
 	Features []ResolvedFeature
 
 	Lifecycle LifecycleCommands
