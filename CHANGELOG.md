@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-24
+
+### Added
+
+- **runtime/engine** — checkpoint/restore via an optional
+  `CheckpointRuntime` sub-interface plus a new **Podman backend** that
+  implements it. Docker's checkpoint/restore is broken on current
+  engines (the netns bind-mount on restore — upstream containerd#12141 /
+  moby#37344), so Podman does the full round trip (`checkpoint --export`
+  / `restore --import`: process + memory + writable rootfs in a portable,
+  node-independent archive). Adds `runtime.CheckpointRuntime`,
+  `CheckpointSpec`/`RestoreSpec`/`CheckpointRef`, `Capabilities.Checkpoint`,
+  typed errors (`ErrCheckpointUnsupported`, `CheckpointFailedError`,
+  `RestoreFailedError`), `Engine.Checkpoint`/`Engine.Restore` (Restore
+  returns a fully reattached `*Workspace`), and
+  `Engine.CheckpointProject`/`RestoreProject` for multi-service compose
+  projects (enumerated by the `com.docker.compose.project` label). (#98)
+
+### Fixed
+
+- **compose** — Dev Container Feature security metadata (`privileged`,
+  `init`, `capAdd`, `securityOpt`) and `entrypoint` scripts are now
+  applied to docker-compose services, matching the reference
+  `devcontainers/cli`. Previously the metadata was merged into
+  `ResolvedConfig` but never carried onto the service, so features like
+  **docker-in-docker** silently failed on compose-source devcontainers:
+  the daemon came up unprivileged and its `docker-init.sh` entrypoint
+  never ran. Feature entrypoints are now chained ahead of the service
+  command via a generated wrapper (native and shellout paths), and
+  `ContainerDetails` surfaces `Privileged`/`CapAdd`/`SecurityOpt` from
+  inspect. A failed image inspect in the entrypoint-preservation fallback
+  now emits a `WarnEvent` instead of silently dropping the image
+  `ENTRYPOINT`. Image-source (non-compose) entrypoint chaining and
+  `overrideCommand` gating remain follow-ups (#104). (#103)
+- **compose/podman** — orchestrator-driven health probing on Podman.
+  Podman runs a container's `HEALTHCHECK` as root and fires the first
+  probe immediately at start (ignoring `start_period`), which breaks
+  privilege-dropping images — e.g. RabbitMQ's `rabbitmq-diagnostics`
+  probe creates a root-owned `.erlang.cookie` the gosu-dropped uid-999
+  server can't read. The compose orchestrator now probes health itself on
+  backends that opt in (Podman returns true; Docker and Apple unchanged),
+  deferring the first probe until after the service initializes, matching
+  Docker. Also fixes multi-service checkpoint/restore. See
+  `design/compose-native-health.md`. (#102)
+
+### Changed
+
+- **deps** — bump `github.com/google/go-containerregistry` 0.21.6 →
+  0.21.7. (#101)
+- **dev environment / CI** — prebuild-based dev environment + CI (#88);
+  pin prebuild base to bookworm (#89); use Compose v2 in
+  docker-in-docker (#90); skip legacy `docker-compose` in
+  docker-in-docker (#91); pin docker-in-docker to 2.x (#92); add `:sha`
+  image tag and prune stale build intermediates (#93).
+
 ## [0.3.0] - 2026-06-01
 
 ### Added
@@ -324,7 +379,8 @@ shelling out to `@devcontainers/cli`.
 - `events` is doc-tagged **experimental** until v1.0.0 — type shapes may evolve
   without a SemVer-major bump.
 
-[Unreleased]: https://github.com/crunchloop/devcontainer/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/crunchloop/devcontainer/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/crunchloop/devcontainer/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/crunchloop/devcontainer/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/crunchloop/devcontainer/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/crunchloop/devcontainer/compare/v0.1.3...v0.1.4
