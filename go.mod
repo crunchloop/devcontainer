@@ -3,7 +3,7 @@ module github.com/crunchloop/devcontainer
 go 1.25.0
 
 require (
-	github.com/compose-spec/compose-go/v2 v2.11.0
+	github.com/compose-spec/compose-go/v2 v2.14.0
 	github.com/google/go-containerregistry v0.21.7
 	github.com/moby/moby/api v1.54.2
 	github.com/moby/moby/client v0.4.1
