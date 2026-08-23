@@ -898,3 +898,72 @@ func TestDown_Idempotent(t *testing.T) {
 		t.Errorf("Down on empty: %v", err)
 	}
 }
+
+// A container for the (project, service) pair that this orchestrator
+// did not create — the shellout backend or a plain `docker compose up`
+// — has the compose labels but none of the dev.containers ones. It
+// must be adopted, not recreated: removing it destroys the writable
+// layer the shellout path's NoRecreate contract preserved. Recreate-
+// mode Ups tear the project down before the orchestrator runs, so
+// adoption only ever applies to reattach/resume flows.
+func TestUp_AdoptsForeignContainerWithoutOurLabels(t *testing.T) {
+	rt := newMockRuntime()
+	orch := NewOrchestrator(rt, "docker")
+	proj := newProject(t, map[string][]string{"app": nil})
+
+	rt.containers["legacy-1"] = &mockContainer{
+		id: "legacy-1", name: "dc-x-app-1", image: "alpine",
+		labels: map[string]string{
+			LabelComposeProject: "dc-x",
+			LabelComposeService: "app",
+		},
+		state: runtime.StateExited,
+	}
+
+	res, err := orch.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-x"})
+	if err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if res.ContainerIDs["app"] != "legacy-1" {
+		t.Errorf("ContainerIDs[app] = %q, want the adopted legacy-1", res.ContainerIDs["app"])
+	}
+	if rt.removeCalls != 0 {
+		t.Errorf("removeCalls = %d; adopting must not remove the foreign container", rt.removeCalls)
+	}
+	if rt.runCalls != 0 {
+		t.Errorf("runCalls = %d; adopting must not create a replacement", rt.runCalls)
+	}
+	// The exited container must be started, mirroring the reuse path.
+	if rt.containers["legacy-1"].state != runtime.StateRunning {
+		t.Errorf("adopted container state = %v, want running", rt.containers["legacy-1"].state)
+	}
+}
+
+// Same adoption when the foreign container is already running: fully
+// hands-off.
+func TestUp_AdoptsRunningForeignContainerWithoutStarting(t *testing.T) {
+	rt := newMockRuntime()
+	orch := NewOrchestrator(rt, "docker")
+	proj := newProject(t, map[string][]string{"app": nil})
+
+	rt.containers["legacy-2"] = &mockContainer{
+		id: "legacy-2", name: "dc-x-app-1", image: "alpine",
+		labels: map[string]string{
+			LabelComposeProject: "dc-x",
+			LabelComposeService: "app",
+		},
+		state: runtime.StateRunning,
+	}
+
+	res, err := orch.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-x"})
+	if err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if res.ContainerIDs["app"] != "legacy-2" {
+		t.Errorf("ContainerIDs[app] = %q, want legacy-2", res.ContainerIDs["app"])
+	}
+	if rt.removeCalls != 0 || rt.runCalls != 0 || rt.startCalls != 0 {
+		t.Errorf("adoption of a running container must be hands-off (remove=%d run=%d start=%d)",
+			rt.removeCalls, rt.runCalls, rt.startCalls)
+	}
+}

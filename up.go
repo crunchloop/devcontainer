@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"time"
 
 	composetypes "github.com/compose-spec/compose-go/v2/types"
@@ -605,7 +607,7 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 	switch e.opts.ComposeBackend {
 	case ComposeBackendNative:
 		return e.upComposeNative(ctx, cfg, opts, project, src, projectName,
-			finalImage, runOverride)
+			workingDir, finalImage, runOverride)
 	case ComposeBackendShellout:
 		return e.upComposeShellout(ctx, cfg, opts, project, src, projectName,
 			workingDir, finalImage, runOverride, existingContainer)
@@ -698,10 +700,13 @@ func (e *Engine) upComposeNative(
 	opts UpOptions,
 	project *composetypes.Project,
 	src *config.ComposeSource,
-	projectName, finalImage string,
+	projectName, workingDir, finalImage string,
 	runOverride compose.Override,
 ) (*Workspace, error) {
 	if err := compose.ApplyBuildOverride(project, src.Service, finalImage); err != nil {
+		return nil, err
+	}
+	if err := e.buildComposeSidecarImages(ctx, project, src, projectName, workingDir, opts); err != nil {
 		return nil, err
 	}
 	if err := compose.ApplyRunOverride(project, src.Service, runOverride); err != nil {
@@ -755,6 +760,73 @@ func composeBindMounts(cfg *config.ResolvedConfig, opts UpOptions) []compose.Bin
 		}
 	}
 	return out
+}
+
+// buildComposeSidecarImages builds every selected non-primary service
+// that declares `build:`. The shellout backend delegated these to
+// `docker compose up`, which builds missing images implicitly; the
+// native orchestrator only creates containers from images, so the
+// builds must happen before it runs. Compose semantics are preserved:
+// a service with both `image:` and `build:` gets the built image
+// tagged with its `image:`, a build-only service gets compose v2's
+// default `<project>-<service>` name. Either way the service's
+// `build:` is cleared and `image:` set, so the orchestrator's hash,
+// pull-retry, and drift checks all see a concrete reference.
+func (e *Engine) buildComposeSidecarImages(
+	ctx context.Context,
+	project *composetypes.Project,
+	src *config.ComposeSource,
+	projectName, workingDir string,
+	opts UpOptions,
+) error {
+	selected := func(name string) bool {
+		if len(src.RunServices) == 0 {
+			return true
+		}
+		return slices.Contains(src.RunServices, name)
+	}
+	// Deterministic build order: map iteration would shuffle build
+	// output (and any failure) between runs.
+	names := make([]string, 0, len(project.Services))
+	for name := range project.Services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		svc := project.Services[name]
+		// The primary service's build already happened in
+		// prepareComposeServiceImage (with feature layering on top);
+		// ApplyBuildOverride cleared its Build field before this runs.
+		if name == src.Service || svc.Build == nil || !selected(name) {
+			continue
+		}
+		tag := svc.Image
+		if tag == "" {
+			tag = projectName + "-" + name
+		}
+		ctxPath := svc.Build.Context
+		if ctxPath == "" {
+			ctxPath = workingDir
+		}
+		if !filepath.IsAbs(ctxPath) {
+			ctxPath = filepath.Join(workingDir, ctxPath)
+		}
+		opts.bus.Emit(events.BuildStartEvent{Source: events.BuildSourceDockerfile, Ref: tag})
+		if _, err := e.runtime.BuildImage(ctx, runtime.BuildSpec{
+			ContextPath: ctxPath,
+			Dockerfile:  svc.Build.Dockerfile,
+			Tag:         tag,
+			Args:        flattenStringMap(svc.Build.Args),
+			Target:      svc.Build.Target,
+		}, opts.bus.BuildChan(events.BuildSourceDockerfile)); err != nil {
+			return fmt.Errorf("build compose service %q image: %w", name, err)
+		}
+		if err := compose.ApplyBuildOverride(project, name, tag); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // prepareComposeServiceImage resolves the base image for a compose

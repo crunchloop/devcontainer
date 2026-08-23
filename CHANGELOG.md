@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **compose (native)** — non-primary services that declare `build:` are
+  now built before the orchestrator runs, matching the shellout backend
+  (where `docker compose up` builds them implicitly). Previously a
+  `build:` sidecar reached `ContainerCreate` with an empty image and the
+  Up failed. Compose semantics are preserved: `image:` + `build:` tags
+  the built image with `image:`, a build-only service gets compose v2's
+  default `<project>-<service>` name.
+- **compose (native)** — containers the native orchestrator did not
+  create (shellout backend, plain `docker compose up`) are now adopted
+  on a non-recreate Up instead of being stopped and removed. Without the
+  `dev.containers.config-hash` / `image-digest` labels there is no drift
+  to detect, and removal destroyed the writable layer (in-container
+  `$HOME` and friends) that the shellout path's `NoRecreate` contract
+  preserved across restarts — a data-loss hazard for every workspace
+  migrating from the shellout backend. Recreate-mode Ups still tear the
+  whole project down first, so forced refreshes behave as before.
+
 ## [0.4.0] - 2026-06-24
 
 ### Added
