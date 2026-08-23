@@ -313,7 +313,10 @@ func TestServiceToRunSpec_CarriesSecurityFields(t *testing.T) {
 		CapAdd:      []string{"SYS_ADMIN"},
 		SecurityOpt: []string{"seccomp=unconfined"},
 	}
-	spec := serviceToRunSpec(&Plan{ProjectName: "dc-x"}, svc, nil, "hash", "")
+	spec, err := serviceToRunSpec(&Plan{ProjectName: "dc-x"}, svc, nil, "hash", "", func(string) string { return "" })
+	if err != nil {
+		t.Fatalf("serviceToRunSpec: %v", err)
+	}
 
 	if !spec.Privileged {
 		t.Error("Privileged not carried into RunSpec")
@@ -965,5 +968,110 @@ func TestUp_AdoptsRunningForeignContainerWithoutStarting(t *testing.T) {
 	if rt.removeCalls != 0 || rt.runCalls != 0 || rt.startCalls != 0 {
 		t.Errorf("adoption of a running container must be hands-off (remove=%d run=%d start=%d)",
 			rt.removeCalls, rt.runCalls, rt.startCalls)
+	}
+}
+
+// Restricting a plan to a service subset must keep `docker compose up
+// <names...>` semantics: dependencies (including `service:<x>`
+// namespace targets) come up too.
+func TestUp_RestrictedServicesStartDependencyClosure(t *testing.T) {
+	rt := newMockRuntime()
+	orch := NewOrchestrator(rt, "docker")
+	proj := newProject(t, map[string][]string{
+		"db":       nil,
+		"app":      {"db"},
+		"unwanted": nil,
+	})
+
+	res, err := orch.Up(context.Background(), &Plan{
+		Project: proj, ProjectName: "dc-x", Services: []string{"app"},
+	})
+	if err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if res.ContainerIDs["app"] == "" || res.ContainerIDs["db"] == "" {
+		t.Errorf("ContainerIDs = %+v, want app AND its dependency db", res.ContainerIDs)
+	}
+	if _, started := res.ContainerIDs["unwanted"]; started {
+		t.Error("service outside the closure was started")
+	}
+}
+
+func TestServiceClosure_FollowsNamespaceEdges(t *testing.T) {
+	proj := newProject(t, map[string][]string{"proxy": nil, "app": nil, "other": nil})
+	app := proj.Services["app"]
+	app.NetworkMode = "service:proxy"
+	proj.Services["app"] = app
+
+	got := ServiceClosure(proj, []string{"app"})
+	want := []string{"app", "proxy"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("ServiceClosure = %v, want %v", got, want)
+	}
+}
+
+// network_mode must reach the backend, not be silently replaced by
+// the project network — `none` in particular is an isolation request.
+func TestUp_NetworkModeCarriedAndProjectNetworkSkipped(t *testing.T) {
+	rt := newMockRuntime()
+	orch := NewOrchestrator(rt, "docker")
+	proj := newProject(t, map[string][]string{"app": nil, "sandboxed": nil})
+	sandboxed := proj.Services["sandboxed"]
+	sandboxed.NetworkMode = "none"
+	sandboxed.Pid = "host"
+	proj.Services["sandboxed"] = sandboxed
+
+	var mu sync.Mutex
+	specs := map[string]runtime.RunSpec{}
+	rt.OnRunContainer = func(spec runtime.RunSpec) (*runtime.Container, error) {
+		mu.Lock()
+		specs[spec.Labels[LabelComposeService]] = spec
+		mu.Unlock()
+		return nil, nil
+	}
+
+	if _, err := orch.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-x"}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if got := specs["sandboxed"].NetworkMode; got != "none" {
+		t.Errorf("sandboxed NetworkMode = %q, want none", got)
+	}
+	if got := specs["sandboxed"].PidMode; got != "host" {
+		t.Errorf("sandboxed PidMode = %q, want host", got)
+	}
+	if nets := specs["sandboxed"].Networks; len(nets) != 0 {
+		t.Errorf("sandboxed Networks = %v; a namespace mode excludes the project network", nets)
+	}
+	if nets := specs["app"].Networks; len(nets) != 1 {
+		t.Errorf("app Networks = %v, want the project network", nets)
+	}
+}
+
+// `service:<x>` resolves to the dependency's container ID, which the
+// topo order guarantees exists by the time the dependent is created.
+func TestUp_ServiceNetworkModeResolvesToContainer(t *testing.T) {
+	rt := newMockRuntime()
+	orch := NewOrchestrator(rt, "docker")
+	proj := newProject(t, map[string][]string{"proxy": nil, "app": nil})
+	app := proj.Services["app"]
+	app.NetworkMode = "service:proxy"
+	proj.Services["app"] = app
+
+	var mu sync.Mutex
+	specs := map[string]runtime.RunSpec{}
+	rt.OnRunContainer = func(spec runtime.RunSpec) (*runtime.Container, error) {
+		mu.Lock()
+		specs[spec.Labels[LabelComposeService]] = spec
+		mu.Unlock()
+		return nil, nil
+	}
+
+	res, err := orch.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-x"})
+	if err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	want := "container:" + res.ContainerIDs["proxy"]
+	if got := specs["app"].NetworkMode; got != want {
+		t.Errorf("app NetworkMode = %q, want %q", got, want)
 	}
 }

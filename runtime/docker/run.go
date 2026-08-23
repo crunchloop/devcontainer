@@ -66,6 +66,18 @@ func (r *Runtime) RunContainer(ctx context.Context, spec runtime.RunSpec) (*runt
 		t := true
 		hostCfg.Init = &t
 	}
+	// Namespace modes are exclusive with per-network endpoint config at
+	// the Docker API level; the orchestrator leaves Networks empty when
+	// NetworkMode is set, so toNetworkingConfig below returns nil.
+	if spec.NetworkMode != "" {
+		hostCfg.NetworkMode = container.NetworkMode(spec.NetworkMode)
+	}
+	if spec.PidMode != "" {
+		hostCfg.PidMode = container.PidMode(spec.PidMode)
+	}
+	if spec.IpcMode != "" {
+		hostCfg.IpcMode = container.IpcMode(spec.IpcMode)
+	}
 
 	res, err := r.api.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name:             spec.Name,

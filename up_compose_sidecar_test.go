@@ -129,3 +129,26 @@ func TestBuildComposeSidecarImages_HonorsRunServices(t *testing.T) {
 		t.Error("unselected service was mutated")
 	}
 }
+
+// A dependency of a selected service must be built even when
+// runServices doesn't name it directly — `docker compose up app`
+// builds app's depends_on closure.
+func TestBuildComposeSidecarImages_BuildsDependenciesOfSelection(t *testing.T) {
+	eng, rt := sidecarEngine(t)
+
+	project := sidecarProject(map[string]composetypes.ServiceConfig{
+		"app": {Image: "dc-final:latest", DependsOn: composetypes.DependsOnConfig{
+			"db": composetypes.ServiceDependency{Condition: "service_started"},
+		}},
+		"db":       {Build: &composetypes.BuildConfig{Context: "./db"}},
+		"excluded": {Build: &composetypes.BuildConfig{Context: "./excluded"}},
+	})
+	src := &config.ComposeSource{Service: "app", RunServices: []string{"app"}}
+
+	if err := eng.buildComposeSidecarImages(context.Background(), project, src, "dc-x", t.TempDir(), sidecarUpOptions()); err != nil {
+		t.Fatalf("buildComposeSidecarImages: %v", err)
+	}
+	if len(rt.builds) != 1 || rt.builds[0].Tag != "dc-x-db" {
+		t.Fatalf("builds = %+v, want app's dependency db and nothing else", rt.builds)
+	}
+}

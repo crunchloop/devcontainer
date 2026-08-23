@@ -169,6 +169,18 @@ func (o *Orchestrator) Up(ctx context.Context, plan *Plan) (UpResult, error) {
 	// limited which services to bring up.
 	keep := makeKeepSet(plan)
 
+	// resolveContainer maps a service name to its already-started
+	// container ID, for `service:<x>` namespace-mode references. The
+	// target is always in an earlier level (serviceEdges makes it a
+	// TopoSort dependency), but same-level writes to the map are
+	// concurrent, so reads take the same lock.
+	var idsMu sync.Mutex
+	resolveContainer := func(name string) string {
+		idsMu.Lock()
+		defer idsMu.Unlock()
+		return res.ContainerIDs[name]
+	}
+
 	for _, level := range levels {
 		var started []string
 		var startMu sync.Mutex
@@ -188,7 +200,7 @@ func (o *Orchestrator) Up(ctx context.Context, plan *Plan) (UpResult, error) {
 				if !ok {
 					return
 				}
-				id, err := o.ensureService(ctx, plan, svc, projectLabels)
+				id, err := o.ensureService(ctx, plan, svc, projectLabels, resolveContainer)
 				startMu.Lock()
 				defer startMu.Unlock()
 				if err != nil {
@@ -198,7 +210,9 @@ func (o *Orchestrator) Up(ctx context.Context, plan *Plan) (UpResult, error) {
 					}
 					return
 				}
+				idsMu.Lock()
 				res.ContainerIDs[svcName] = id
+				idsMu.Unlock()
 				started = append(started, svcName)
 			}()
 		}
@@ -449,6 +463,7 @@ func (o *Orchestrator) ensureService(
 	plan *Plan,
 	svc composetypes.ServiceConfig,
 	projectLabels map[string]string,
+	resolveContainer func(string) string,
 ) (string, error) {
 	// Resolve the service's image to its digest before hashing. The
 	// compose file carries a tag (e.g. "postgres:17-alpine") which is
@@ -520,7 +535,10 @@ func (o *Orchestrator) ensureService(
 		}
 	}
 
-	spec := serviceToRunSpec(plan, svc, projectLabels, hash, imageDigest)
+	spec, err := serviceToRunSpec(plan, svc, projectLabels, hash, imageDigest, resolveContainer)
+	if err != nil {
+		return "", err
+	}
 	if o.selfProbe {
 		// The orchestrator probes health itself (see waitFor); explicitly
 		// DISABLE the backend's native HEALTHCHECK. Nil would mean "inherit
@@ -788,7 +806,8 @@ func serviceToRunSpec(
 	svc composetypes.ServiceConfig,
 	projectLabels map[string]string,
 	hash, imageDigest string,
-) runtime.RunSpec {
+	resolveContainer func(string) string,
+) (runtime.RunSpec, error) {
 	labels := copyLabels(plan.Labels)
 	for k, v := range projectLabels {
 		labels[k] = v
@@ -824,6 +843,29 @@ func serviceToRunSpec(
 		})
 	}
 
+	// Namespace modes, resolved to HostConfig syntax. A service that
+	// joins another container's network namespace (or opts out with
+	// "none"/"host") must not also get per-network endpoint config —
+	// Docker rejects the combination — so the project network is
+	// skipped for it. Service-name DNS is then the joined namespace's
+	// concern, matching `docker compose` semantics.
+	networkMode, err := resolveNamespaceMode(svc.NetworkMode, resolveContainer)
+	if err != nil {
+		return runtime.RunSpec{}, fmt.Errorf("service %q network_mode: %w", svc.Name, err)
+	}
+	pidMode, err := resolveNamespaceMode(svc.Pid, resolveContainer)
+	if err != nil {
+		return runtime.RunSpec{}, fmt.Errorf("service %q pid: %w", svc.Name, err)
+	}
+	ipcMode, err := resolveNamespaceMode(svc.Ipc, resolveContainer)
+	if err != nil {
+		return runtime.RunSpec{}, fmt.Errorf("service %q ipc: %w", svc.Name, err)
+	}
+	networks := []string{plan.ProjectName + "_default"}
+	if networkMode != "" {
+		networks = nil
+	}
+
 	memBytes, nanoCPUs := resourcesOf(svc)
 	return runtime.RunSpec{
 		Image:         svc.Image,
@@ -835,7 +877,10 @@ func serviceToRunSpec(
 		Env:           env,
 		Labels:        labels,
 		Mounts:        mounts,
-		Networks:      []string{plan.ProjectName + "_default"},
+		Networks:      networks,
+		NetworkMode:   networkMode,
+		PidMode:       pidMode,
+		IpcMode:       ipcMode,
 		Ports:         portsOf(svc.Ports),
 		RestartPolicy: restartPolicyOf(svc.Restart),
 		HealthCheck:   healthCheckOf(svc.HealthCheck),
@@ -845,7 +890,25 @@ func serviceToRunSpec(
 		SecurityOpt:   svc.SecurityOpt,
 		MemoryBytes:   memBytes,
 		NanoCPUs:      nanoCPUs,
+	}, nil
+}
+
+// resolveNamespaceMode translates a compose namespace-mode value into
+// Docker HostConfig syntax. `service:<x>` becomes `container:<id>`
+// via the dependency's already-started container (serviceEdges makes
+// the target a TopoSort dependency, so it lives in an earlier level);
+// everything else — "", "host", "none", "container:<id>" — passes
+// through verbatim.
+func resolveNamespaceMode(v string, resolveContainer func(string) string) (string, error) {
+	target := serviceRefTarget(v)
+	if target == "" {
+		return v, nil
 	}
+	id := resolveContainer(target)
+	if id == "" {
+		return "", fmt.Errorf("mode %q: service %q has no started container to join", v, target)
+	}
+	return "container:" + id, nil
 }
 
 // resourcesOf extracts the memory + CPU limits from a compose service.
@@ -992,7 +1055,11 @@ func makeKeepSet(plan *Plan) map[string]bool {
 		}
 		return keep
 	}
-	for _, name := range plan.Services {
+	// `docker compose up <names...>` starts the named services and
+	// their transitive dependencies; a restricted Plan keeps that
+	// contract, or a kept service would come up with its depends_on
+	// (or `service:<x>` namespace target) absent.
+	for _, name := range ServiceClosure(plan.Project, plan.Services) {
 		keep[name] = true
 	}
 	return keep
