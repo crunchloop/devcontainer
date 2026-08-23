@@ -15,25 +15,26 @@ import (
 // existing WriteBuildOverride / WriteRunOverride file emitters
 // until PR17 deletes that path.
 
-// ApplyBuildOverride mutates project so the primary service's image
-// is pinned to imageRef and any build: directive is cleared. Mirrors
+// ApplyBuildOverride mutates project so the named service's image is
+// pinned to imageRef and any build: directive is cleared. Mirrors
 // WriteBuildOverride's behavior; safe to call on a freshly loaded
-// project.
+// project. Engine.Up applies it to the primary service (with the
+// feature-extended image) and to every sidecar it built.
 //
-// Returns an error if the primary service is missing.
-func ApplyBuildOverride(project *composetypes.Project, primaryService, imageRef string) error {
+// Returns an error if the service is missing.
+func ApplyBuildOverride(project *composetypes.Project, service, imageRef string) error {
 	if project == nil {
 		return fmt.Errorf("ApplyBuildOverride: nil project")
 	}
-	if primaryService == "" {
-		return fmt.Errorf("ApplyBuildOverride: primaryService required")
+	if service == "" {
+		return fmt.Errorf("ApplyBuildOverride: service required")
 	}
 	if imageRef == "" {
 		return fmt.Errorf("ApplyBuildOverride: imageRef required")
 	}
-	svc, ok := project.Services[primaryService]
+	svc, ok := project.Services[service]
 	if !ok {
-		return fmt.Errorf("ApplyBuildOverride: primary service %q not found in project", primaryService)
+		return fmt.Errorf("ApplyBuildOverride: service %q not found in project", service)
 	}
 	svc.Image = imageRef
 	// Compose v2 keeps Image and Build mutually exclusive at orchestration
@@ -41,7 +42,7 @@ func ApplyBuildOverride(project *composetypes.Project, primaryService, imageRef 
 	// in the YAML override. compose-go represents the field as a pointer
 	// so nil = unset.
 	svc.Build = nil
-	project.Services[primaryService] = svc
+	project.Services[service] = svc
 	return nil
 }
 

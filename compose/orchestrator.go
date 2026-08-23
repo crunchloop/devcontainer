@@ -479,21 +479,39 @@ func (o *Orchestrator) ensureService(
 		// might match by accident (e.g. a digest probe that returned
 		// empty).
 		details, ierr := o.rt.InspectContainer(ctx, c.ID)
-		if ierr == nil && details != nil &&
-			details.Labels[LabelConfigHash] == hash &&
-			details.Labels[LabelImageDigest] == imageDigest {
-			// Config and image match — the container is reusable.
-			// If it's not currently Running (e.g. dockerd was just
-			// restarted and brought stopped containers back from
-			// on-disk state), start it instead of destroying it.
-			// Recreating would lose the writable layer (the user's
-			// $HOME inside the container, etc.) — see issue #71.
-			if c.State != runtime.StateRunning {
-				if err := o.rt.StartContainer(ctx, c.ID); err != nil {
-					return "", fmt.Errorf("StartContainer(%s): %w", svc.Name, err)
+		if ierr == nil && details != nil {
+			if _, managed := details.Labels[LabelConfigHash]; !managed {
+				// A container for this (project, service) that this
+				// orchestrator did not create — the shellout backend or a
+				// plain `docker compose up`. Adopt it instead of
+				// recreating: without our labels there is no stored hash
+				// to detect drift against, and removing it would destroy
+				// the writable layer (the user's $HOME inside the
+				// container, etc.) that the shellout path's NoRecreate
+				// contract preserved across restarts. A caller that wants
+				// these replaced asks for it explicitly: a Recreate-mode
+				// Up tears the whole project down before reaching here.
+				if c.State != runtime.StateRunning {
+					if err := o.rt.StartContainer(ctx, c.ID); err != nil {
+						return "", fmt.Errorf("StartContainer(adopted %s): %w", svc.Name, err)
+					}
 				}
+				return c.ID, nil
 			}
-			return c.ID, nil
+			if details.Labels[LabelConfigHash] == hash &&
+				details.Labels[LabelImageDigest] == imageDigest {
+				// Config and image match — the container is reusable.
+				// If it's not currently Running (e.g. dockerd was just
+				// restarted and brought stopped containers back from
+				// on-disk state), start it instead of destroying it.
+				// Recreating would lose the writable layer — see issue #71.
+				if c.State != runtime.StateRunning {
+					if err := o.rt.StartContainer(ctx, c.ID); err != nil {
+						return "", fmt.Errorf("StartContainer(%s): %w", svc.Name, err)
+					}
+				}
+				return c.ID, nil
+			}
 		}
 		// Different config — recreate.
 		_ = o.rt.StopContainer(ctx, c.ID, runtime.StopOptions{Timeout: 10 * time.Second})
