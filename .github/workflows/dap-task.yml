@@ -1,0 +1,38 @@
+name: DAP Task
+
+# The dispatch surface DAP session triggers listen on.
+#
+# DAP consumes the `workflow_dispatch` webhook this file emits and looks up the
+# session trigger definition registered for `(repository, name)`. The job body
+# is deliberately inert — the echo is there so the run has a step; the webhook
+# is the payload.
+#
+# `prompt` overrides the prompt stored on the trigger definition, which is what
+# lets one definition serve many targets (a pull request number, an issue) from
+# the dispatching side.
+
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: "Session trigger name (must match a registered trigger definition)"
+        required: true
+        type: string
+      prompt:
+        description: "Session prompt (overrides the definition's stored prompt)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger sent
+        # Through env, not interpolated into the script: a trigger name containing
+        # shell metacharacters would otherwise be evaluated by the runner.
+        env:
+          TRIGGER_NAME: ${{ inputs.name }}
+        run: echo "Dispatched DAP task '${TRIGGER_NAME}'"
