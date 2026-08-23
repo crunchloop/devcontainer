@@ -438,8 +438,21 @@ type RunSpec struct {
 	// means "backend default" — docker assigns the default bridge;
 	// apple assigns the built-in vmnet network. Used by the compose
 	// orchestrator to attach services to the project network it
-	// just created via CreateNetwork.
+	// just created via CreateNetwork. Mutually exclusive with
+	// NetworkMode.
 	Networks []string
+
+	// NetworkMode, PidMode and IpcMode carry the container's kernel
+	// namespace modes in Docker HostConfig syntax ("none", "host",
+	// "container:<id-or-name>"). Empty means the backend default.
+	// The compose orchestrator translates `network_mode:` / `pid:` /
+	// `ipc:` directives here, resolving `service:<x>` references to
+	// the dependency's container first. Backends without namespace
+	// sharing never see these: compose.Plan.Validate refuses such
+	// projects via Capabilities.NamespaceSharing.
+	NetworkMode string
+	PidMode     string
+	IpcMode     string
 
 	// Ports lists the ports this container publishes to the host.
 	// Empty means no publishing (the container's ports are reachable

@@ -779,11 +779,16 @@ func (e *Engine) buildComposeSidecarImages(
 	projectName, workingDir string,
 	opts UpOptions,
 ) error {
-	selected := func(name string) bool {
-		if len(src.RunServices) == 0 {
-			return true
-		}
-		return slices.Contains(src.RunServices, name)
+	// Selection mirrors `docker compose up <primary> <runServices...>`:
+	// the named services plus their transitive dependencies (the same
+	// closure the orchestrator keeps), so a dependency of a selected
+	// service gets its image built even when runServices doesn't name
+	// it directly.
+	selected := func(string) bool { return true }
+	if len(src.RunServices) > 0 {
+		closure := compose.ServiceClosure(project,
+			append(append([]string(nil), src.RunServices...), src.Service))
+		selected = func(name string) bool { return slices.Contains(closure, name) }
 	}
 	// Deterministic build order: map iteration would shuffle build
 	// output (and any failure) between runs.

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **compose (native)** — a plan restricted to a service subset
+  (devcontainer `runServices`) now starts and builds the transitive
+  dependency closure of the selection, matching `docker compose up
+  <names...>`. Previously a dependency outside the list was neither
+  built nor started, so the primary came up with its `depends_on`
+  absent.
+- **compose (native)** — `network_mode:`, `pid:` and `ipc:` are now
+  carried through to the backend instead of being silently replaced by
+  the project network. `service:<x>` references resolve to the
+  dependency's container (ordering already guaranteed by the
+  dependency graph); a service with a network mode is not attached to
+  the project network, matching Docker's API constraints. In
+  particular `network_mode: none` — an explicit isolation request —
+  previously received full project-network connectivity.
+
 ## [0.4.1] - 2026-08-22
 
 ### Fixed

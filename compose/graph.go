@@ -40,16 +40,9 @@ func TopoSort(project *composetypes.Project) ([]Level, error) {
 		deps[name] = map[string]struct{}{}
 	}
 	for name, svc := range services {
-		for dep := range svc.DependsOn {
-			if _, ok := services[dep]; !ok {
-				continue
-			}
-			deps[name][dep] = struct{}{}
-		}
-		if nm := svc.NetworkMode; isServiceNetworkMode(nm) {
-			peer := nm[len("service:"):]
-			if _, ok := services[peer]; ok && peer != name {
-				deps[name][peer] = struct{}{}
+		for _, dep := range serviceEdges(svc) {
+			if _, ok := services[dep]; ok && dep != name {
+				deps[name][dep] = struct{}{}
 			}
 		}
 	}
@@ -145,6 +138,67 @@ func findCycle(deps map[string]map[string]struct{}, remaining map[string]struct{
 // orchestrator surfaces the dep edge here so topo-sort respects the
 // ordering even though compose-go doesn't model it under DependsOn.
 func isServiceNetworkMode(nm string) bool {
+	return serviceRefTarget(nm) != ""
+}
+
+// serviceRefTarget returns the service name a `service:<name>`
+// namespace-mode value points at, or "" when the value is anything
+// else (empty, "host", "none", "container:<id>", ...).
+func serviceRefTarget(v string) string {
 	const p = "service:"
-	return len(nm) > len(p) && nm[:len(p)] == p
+	if len(v) > len(p) && v[:len(p)] == p {
+		return v[len(p):]
+	}
+	return ""
+}
+
+// serviceEdges lists the services svc depends on: depends_on entries
+// plus the implicit edges from `network_mode: service:<x>` and the
+// pid/ipc equivalents — joining another service's namespace requires
+// that service's container to exist first.
+func serviceEdges(svc composetypes.ServiceConfig) []string {
+	var out []string
+	for dep := range svc.DependsOn {
+		out = append(out, dep)
+	}
+	for _, mode := range []string{svc.NetworkMode, svc.Pid, svc.Ipc} {
+		if peer := serviceRefTarget(mode); peer != "" {
+			out = append(out, peer)
+		}
+	}
+	return out
+}
+
+// ServiceClosure returns names plus the transitive closure of their
+// dependencies (the same edge set TopoSort orders by). `docker
+// compose up <names...>` starts the named services AND everything
+// they depend on; callers restricting a Plan to a service subset use
+// this to reproduce that contract. Names not present in the project
+// are kept verbatim (Plan validation surfaces them); the result is
+// sorted for determinism.
+func ServiceClosure(project *composetypes.Project, names []string) []string {
+	if project == nil {
+		return append([]string(nil), names...)
+	}
+	seen := map[string]bool{}
+	queue := append([]string(nil), names...)
+	for len(queue) > 0 {
+		name := queue[0]
+		queue = queue[1:]
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		svc, ok := project.Services[name]
+		if !ok {
+			continue
+		}
+		queue = append(queue, serviceEdges(svc)...)
+	}
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
