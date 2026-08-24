@@ -488,6 +488,23 @@ func (o *Orchestrator) ensureService(
 
 	if len(existing) > 0 {
 		c := existing[0]
+		// Resume: reattach on-disk state exactly. Reuse the existing
+		// container unconditionally — start if stopped, attach if
+		// running — without consulting the config-hash. A restored
+		// workspace's primary image is feature-layered fresh every boot
+		// (new digest), so a hash check would force a recreate that
+		// abandons the container's upperdir and binds a new empty
+		// anonymous volume; adoption keeps both. Recreate-mode Up has
+		// already torn the project down before reaching here, so this
+		// only fires on non-recreating (resume) Ups.
+		if plan.AdoptExisting {
+			if c.State != runtime.StateRunning {
+				if err := o.rt.StartContainer(ctx, c.ID); err != nil {
+					return "", fmt.Errorf("StartContainer(resumed %s): %w", svc.Name, err)
+				}
+			}
+			return c.ID, nil
+		}
 		// Inspect to read the stored hash + image digest. Recreate if
 		// either has drifted; the image-digest check is the second
 		// line of defense for tag-update scenarios where ConfigHash

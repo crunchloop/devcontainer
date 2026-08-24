@@ -35,6 +35,12 @@ type Plan struct {
 	// fills these in with the devcontainer ID label set so
 	// Engine.Attach can find the primary container.
 	Labels map[string]string
+
+	// AdoptExisting reuses any existing (project, service) container
+	// unconditionally — start if stopped, attach if running, never
+	// recreate on a config-hash / image-digest mismatch. The resume
+	// contract: reattach on-disk state exactly, do not reconcile drift.
+	AdoptExisting bool
 }
 
 // DownPlan describes a teardown request. Used by Orchestrator.Down
