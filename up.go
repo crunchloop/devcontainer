@@ -37,6 +37,18 @@ type UpOptions struct {
 	// running container is attached to.
 	Recreate bool
 
+	// AdoptExisting, for compose sources, reuses any existing container
+	// found for a (project, service) regardless of whether its stored
+	// config-hash / image-digest still match — start it if stopped,
+	// attach if running, never recreate. This is the RESUME contract:
+	// reattach the workspace exactly as it was left, preserving every
+	// container's writable upperdir and its (possibly anonymous) volumes,
+	// rather than reconciling against config drift (a rebuilt
+	// feature-layered primary image has a fresh digest every boot, which
+	// otherwise forces a recreate that abandons the upperdir and binds a
+	// new empty anonymous volume). Ignored when Recreate is true.
+	AdoptExisting bool
+
 	// PullPolicy controls image pulling. Default IfNotPresent.
 	PullPolicy PullPolicy
 
@@ -715,9 +727,10 @@ func (e *Engine) upComposeNative(
 
 	orch := compose.NewOrchestrator(e.runtime, "")
 	res, err := orch.Up(ctx, &compose.Plan{
-		Project:     project,
-		ProjectName: projectName,
-		Services:    src.RunServices,
+		Project:       project,
+		ProjectName:   projectName,
+		Services:      src.RunServices,
+		AdoptExisting: opts.AdoptExisting && !opts.Recreate,
 		Labels: map[string]string{
 			LabelDevcontainerID: cfg.DevcontainerID,
 		},

@@ -1075,3 +1075,65 @@ func TestUp_ServiceNetworkModeResolvesToContainer(t *testing.T) {
 		t.Errorf("app NetworkMode = %q, want %q", got, want)
 	}
 }
+
+// AdoptExisting (resume) reuses an existing container even when its stored
+// config-hash no longer matches — a restored workspace's primary image is
+// feature-layered fresh every boot, so the hash always drifts; adoption must
+// keep the container (and its upperdir + anon volumes) anyway.
+func TestUp_AdoptExistingReusesDespiteHashDrift(t *testing.T) {
+	rt := newMockRuntime()
+	orch := NewOrchestrator(rt, "docker")
+	proj := newProject(t, map[string][]string{"app": nil})
+
+	// A prior orchestrator-made container whose stored hash is stale.
+	rt.containers["resumed-1"] = &mockContainer{
+		id: "resumed-1", name: "dc-x-app-1", image: "alpine",
+		labels: map[string]string{
+			LabelComposeProject: "dc-x",
+			LabelComposeService: "app",
+			LabelConfigHash:     "STALE-hash-from-a-previous-boot",
+			LabelImageDigest:    "sha256:stale",
+		},
+		state: runtime.StateExited,
+	}
+
+	res, err := orch.Up(context.Background(), &Plan{
+		Project: proj, ProjectName: "dc-x", AdoptExisting: true,
+	})
+	if err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if res.ContainerIDs["app"] != "resumed-1" {
+		t.Errorf("ContainerIDs[app] = %q, want the adopted resumed-1", res.ContainerIDs["app"])
+	}
+	if rt.removeCalls != 0 {
+		t.Errorf("removeCalls = %d; adoption must not recreate despite hash drift", rt.removeCalls)
+	}
+	if rt.runCalls != 0 {
+		t.Errorf("runCalls = %d; adoption must not create a replacement", rt.runCalls)
+	}
+	if rt.containers["resumed-1"].state != runtime.StateRunning {
+		t.Errorf("adopted container not started: state=%v", rt.containers["resumed-1"].state)
+	}
+}
+
+// Without AdoptExisting, hash drift still recreates (guards the default path).
+func TestUp_NoAdoptRecreatesOnHashDrift(t *testing.T) {
+	rt := newMockRuntime()
+	orch := NewOrchestrator(rt, "docker")
+	proj := newProject(t, map[string][]string{"app": nil})
+	rt.containers["old-1"] = &mockContainer{
+		id: "old-1", name: "dc-x-app-1", image: "alpine",
+		labels: map[string]string{
+			LabelComposeProject: "dc-x", LabelComposeService: "app",
+			LabelConfigHash: "STALE", LabelImageDigest: "sha256:stale",
+		},
+		state: runtime.StateExited,
+	}
+	if _, err := orch.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-x"}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if rt.removeCalls == 0 {
+		t.Error("expected recreate (remove) on hash drift without AdoptExisting")
+	}
+}
