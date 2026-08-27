@@ -296,9 +296,9 @@ Docker daemon isn't reachable.
 
 Apple-container integration tests are tagged
 `integration && darwin && arm64` and run against a live `container`
-apiserver — skipped when the daemon isn't running. CI runs both the
-Linux + Docker suite and a `macos-26` job that builds the Swift
-bridge and runs the applecontainer unit tests.
+apiserver — skipped when the daemon isn't running. They are not
+currently run in hosted CI; CI covers the Linux + Docker and Podman
+suites.
 
 ## Design
 
