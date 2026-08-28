@@ -28,68 +28,16 @@ explicitly experimental.
 
 ### Backends
 
-The container backend is pluggable. Pick one at engine construction time:
+The container backend is pluggable: anything implementing
+`runtime.Runtime` can be wired in at engine construction time. The
+documented backend is:
 
-- **`runtime/docker`** — Docker Engine over `moby/moby/client`. Default
-  choice; requires a reachable Docker daemon socket.
-- **`runtime/applecontainer`** — Apple's `container` runtime on
-  darwin/arm64 (macOS 15+). Talks to Apple's apiserver through an
-  embedded Swift bridge (`libACBridge.dylib`, dlopen'd at runtime).
-  Lets you run devcontainers on Apple Silicon without Docker
-  Desktop.
-- **`runtime/podman`** — Podman over its docker-compatible socket (the
-  same `moby/moby/client`, embedded), plus CRIU-backed
-  **checkpoint/restore** (`runtime.CheckpointRuntime`) driven through the
-  libpod REST API on that one socket. The only backend that can migrate a
-  running devcontainer — process + memory — to another node; see
-  [`design/checkpoint-restore.md`](design/checkpoint-restore.md). Linux
-  only; needs a running `podman system service`.
+- **`runtime/docker`** — Docker Engine over `moby/moby/client`.
+  Requires a reachable Docker daemon socket.
 
-All three backends implement the same `runtime.Runtime` interface — the
-engine, feature pipeline, lifecycle, and compose paths don't care which
-one you wire in.
-
-#### Apple-container gotchas
-
-Things specific to `runtime/applecontainer` that don't apply to the
-Docker backend. None of these are bugs in this library; they reflect
-the current state of Apple's `container` runtime (0.12.x).
-
-- **Daemon + builder lifecycle is manual.** Run `container system start`
-  once per boot; `container builder start` once per machine before any
-  `build`-source devcontainer or `features` install. Engine surfaces a
-  typed `runtime.BuilderUnavailableError` with a remediation hint when
-  the builder is down.
-- **Image-store credentials are separate from Docker's.** Pulls from
-  private registries require `container registry login <host>` before
-  Up; `~/.docker/config.json` is not consulted.
-- **Multi-arch base images.** Apple's BuildKit shim ships amd64-only,
-  so the builder VM always runs amd64 (Rosetta on Apple Silicon).
-  *Output* images target the host platform (`arm64`) by default —
-  feature builds produce native arm64 images that run without Rosetta.
-  If your `FROM` base image is amd64-only, the resulting image is also
-  amd64 and the runtime container needs Rosetta-for-Linux to boot.
-- **No amd64 default kernel.** Running amd64 containers requires
-  installing the amd64 kernel explicitly:
-  `container system kernel set --tar <url-to-amd64-tarball> --arch amd64`.
-  Don't use `--force` without `--arch`; it can overwrite the arm64
-  default registration.
-- **Port forwarding (`forwardPorts` / compose `ports:`) is parsed but
-  not actuated.** Apple's networking model differs from Docker's
-  host-port-publish; on this backend ports are silently dropped today.
-- **Compose feature gates that depend on upstream apple/container
-  fixes are refused at Plan-validate time** with typed errors:
-  `service_healthy` / `service_completed_successfully` (no healthcheck
-  surface yet — apple/container #1502, #1501), namespace sharing
-  modes (`network_mode: service:<x>`, `pid:`, `ipc:` — architectural,
-  VM-per-container), shared named volumes (ext4 single-mount —
-  apple/container #889). `restart:` policies are silently ignored with
-  a one-shot warning (apple/container #286).
-- **Service-name DNS** is not native on the project network
-  (apple/container #856). The compose orchestrator patches `/etc/hosts`
-  in each running container after each level so `depends_on`-declared
-  peers resolve; intra-level peers without an explicit edge can lose
-  a first lookup. Documented limitation.
+The engine, feature pipeline, lifecycle, and compose paths are written
+against the `runtime.Runtime` interface rather than against Docker
+directly.
 
 ### Spec compliance
 
@@ -102,7 +50,7 @@ field/behavior the library covers. Legend: ✅ acted on · ⚠️ parsed but not
 | --- | --- | --- |
 | `image` | ✅ | Pull, run, exec |
 | `build` (`dockerfile`, `context`, `args`, `target`, `cacheFrom`) | ✅ | User Dockerfile + features layered atop |
-| `dockerComposeFile`, `service`, `runServices` | ✅ | compose-go parse + either shell-out to `docker compose` (default) or an in-process orchestrator (`EngineOptions.ComposeBackend = ComposeBackendNative`). The native orchestrator drives any `Runtime` implementing the compose primitives — works against both `runtime/docker` and `runtime/applecontainer`. |
+| `dockerComposeFile`, `service`, `runServices` | ✅ | compose-go parse + either shell-out to `docker compose` (default) or an in-process orchestrator (`EngineOptions.ComposeBackend = ComposeBackendNative`). The native orchestrator drives any `Runtime` implementing the compose primitives. |
 
 **Container config**
 
@@ -164,7 +112,7 @@ field/behavior the library covers. Legend: ✅ acted on · ⚠️ parsed but not
 | GPG / SSH agent forwarding | ❌ | [#28](https://github.com/crunchloop/devcontainer/issues/28) |
 
 **Out of scope** (➖): Templates spec, dotfiles repos, IDE injection
-hooks, Kubernetes / podman drivers.
+hooks, Kubernetes drivers.
 
 ## Install
 
@@ -175,22 +123,9 @@ go get github.com/crunchloop/devcontainer
 Requires:
 
 - Go 1.25+
-- A container backend, one of:
-  - **Docker:** daemon socket reachable; Docker Compose v2 plugin
-    only when running `dockerComposeFile` projects under the default
-    shellout backend (skip the plugin if you opt into
-    `ComposeBackendNative`).
-  - **Apple `container`:** macOS 15+ on Apple Silicon, `container
-    system start` already up. Swift toolchain only if you're
-    building the bridge from source — releases embed the
-    pre-built dylib.
-  - **Podman:** Linux only. A running `podman system service` exposing
-    its socket (it serves both the docker-compatible and libpod APIs);
-    point the backend at it with `podman.Options{Socket}`.
-    Checkpoint/restore additionally requires `criu` (a CRIU-capable
-    kernel and an OCI runtime such as `crun`/`runc`). No BuildKit:
-    in-container builds go through buildah, so pre-built/pulled images
-    are the fast path.
+- Docker: daemon socket reachable; Docker Compose v2 plugin only when
+  running `dockerComposeFile` projects under the default shellout
+  backend (skip the plugin if you opt into `ComposeBackendNative`).
 
 ## Quick start
 
@@ -238,16 +173,6 @@ func main() {
 }
 ```
 
-To target Apple's `container` runtime instead of Docker, swap the
-backend import — the rest of the engine code is unchanged:
-
-```go
-import "github.com/crunchloop/devcontainer/runtime/applecontainer"
-
-rt, err := applecontainer.New(ctx, applecontainer.Options{})
-// ... pass to devcontainer.New the same way
-```
-
 Runnable end-to-end examples in [`examples/`](examples/):
 
 - [`image-source/`](examples/image-source/) — minimal image-only devcontainer
@@ -277,7 +202,6 @@ Sub-packages:
 - `config` — devcontainer.json parsing, merging, host-context substitution
 - `runtime` — container backend abstraction (`Runtime`, `ComposeRuntime`, capabilities, network/volume/list primitives)
 - `runtime/docker` — Docker Engine API implementation (uses `moby/moby/client`)
-- `runtime/applecontainer` — Apple `container` implementation; darwin/arm64 only, cgo-linked Swift bridge
 - `feature` — feature resolution (OCI / HTTPS / local), DAG ordering, dockerfile generation
 - `compose` — `dockerComposeFile` parsing via `compose-spec/compose-go`, plus a runtime-agnostic in-process orchestrator (`Orchestrator`, `Plan`, topological + health gating) used when `ComposeBackendNative` is selected
 
@@ -293,12 +217,6 @@ The integration suite (build tag `integration`) exercises real Docker:
 pulls public images from GHCR, builds Dockerfiles, runs feature install
 scripts, drives `docker compose up/down`. Skipped automatically if a
 Docker daemon isn't reachable.
-
-Apple-container integration tests are tagged
-`integration && darwin && arm64` and run against a live `container`
-apiserver — skipped when the daemon isn't running. They are not
-currently run in hosted CI; CI covers the Linux + Docker and Podman
-suites.
 
 ## Design
 
