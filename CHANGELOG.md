@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **BREAKING — checkpoint/restore is gone.** The feature only ever
+  worked on Podman (docker's restore is broken upstream on
+  containerd-integrated engines), and the Podman backend existed to
+  carry it. Neither of the remaining backends can checkpoint — docker
+  for the reason above, applecontainer because it has no CRIU — so with
+  Podman gone the feature has no implementation and both go. Removed
+  from the public API: `runtime.CheckpointRuntime`,
+  `runtime.CheckpointSpec`, `runtime.RestoreSpec`,
+  `runtime.CheckpointRef`, `runtime.ErrCheckpointUnsupported`,
+  `runtime.CheckpointFailedError`, `runtime.RestoreFailedError`,
+  `runtime.Capabilities.Checkpoint`, `Engine.Checkpoint`,
+  `Engine.Restore`, `Engine.CheckpointProject`,
+  `Engine.RestoreProject`, and their option/result types
+  (`ProjectCheckpointOptions`, `ProjectRestoreOptions`,
+  `ProjectCheckpointRef`, `ServiceCheckpoint`).
+- **BREAKING — the `runtime/podman` backend is removed.** It reached
+  Podman through the docker-compatible socket purely so it could add
+  CRIU checkpoint/restore via libpod; nothing else depended on it.
+- **compose (native)** — the orchestrator-driven health-probing path is
+  removed with it. The `selfHealthProber` opt-in
+  (`PreferSelfProbedHealth()`) existed solely because Podman runs a
+  container's HEALTHCHECK eagerly as root, which races
+  privilege-dropping images; Docker and Apple never opted in, so the
+  path was unreachable. Health gating now always reads the backend's
+  native health status, which is what Docker and Apple already did.
+- The design records for the removed subsystems —
+  `design/checkpoint-restore.md`, `design/podman-backend.md` and
+  `design/compose-native-health.md` — are deleted with the code they
+  described. The 0.4.0 entry below names
+  `design/compose-native-health.md`; all three remain readable in git
+  history at tag `v0.4.3`.
+
 ## [0.4.2] - 2026-08-23
 
 ### Fixed

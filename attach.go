@@ -67,10 +67,9 @@ func (e *Engine) AttachWith(ctx context.Context, id WorkspaceID, opts AttachOpti
 }
 
 // reattachWorkspace rebuilds a *Workspace from an already-inspected,
-// running container. It is shared by Attach (container found by label)
-// and Restore (container freshly imported from a checkpoint archive):
-// both have a live container and need the same MINIMAL config + bound
-// substituter + userEnv probe, without re-reading devcontainer.json.
+// running container found by label. It needs only the MINIMAL config +
+// bound substituter + userEnv probe, without re-reading
+// devcontainer.json.
 //
 // It reconstructs just enough config for the substituter (Attach can't
 // reproduce the full ResolvedConfig — the source devcontainer.json may

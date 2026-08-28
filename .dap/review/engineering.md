@@ -46,11 +46,11 @@ Refines `D1`. This repository implements the same behaviour more than once by de
   (`docker compose`). A fix, guard, or flag added to one and not the other is a finding —
   name the sibling call site and say what it does instead. Both paths carried the same
   recreate bug (#71, #72) and the same entrypoint gap (#103).
-- **runtime** has `docker`, `podman`, and `applecontainer` backends behind one interface.
+- **runtime** has `docker` and `applecontainer` backends behind one interface.
   A change to shared orchestration must state what each backend does with it; a change
-  inside one backend must say whether the others need the same. Podman and Apple both
-  diverge from Docker in ways that have already broken workspaces (below).
-- A capability probe or opt-in flag (the health-probing opt-in, for instance) is the
+  inside one backend must say whether the other needs the same. Apple diverges from
+  Docker in ways that have already broken workspaces (below).
+- A capability flag on `Capabilities()` (`ServiceNameDNS`, for instance) is the
   legitimate way to encode divergence. A silent assumption that all backends behave like
   Docker is not.
 

@@ -10,42 +10,6 @@ import (
 // CLI-shim runtime in v1).
 var ErrNotImplemented = errors.New("runtime: not implemented")
 
-// ErrCheckpointUnsupported is returned by Engine.Checkpoint /
-// Engine.Restore when the active runtime does not implement
-// CheckpointRuntime, or advertises Capabilities().Checkpoint == false.
-// Callers can errors.Is against it to fall back to a cold start.
-var ErrCheckpointUnsupported = errors.New("runtime: checkpoint/restore not supported by this backend")
-
-// CheckpointFailedError indicates a checkpoint/export call failed.
-// Carries the container id and the backend's captured output.
-type CheckpointFailedError struct {
-	ID     string
-	Stderr string
-	Err    error
-}
-
-func (e *CheckpointFailedError) Error() string {
-	return fmt.Sprintf("checkpoint failed for %s: %v: %s", e.ID, e.Err, e.Stderr)
-}
-
-func (e *CheckpointFailedError) Unwrap() error { return e.Err }
-
-// RestoreFailedError indicates a restore/import call failed. Distinct
-// from a cold-start failure so callers can deterministically fall back
-// to a cold Up: the workspace data survives on the volume; only the
-// in-memory state is lost.
-type RestoreFailedError struct {
-	ArchivePath string
-	Stderr      string
-	Err         error
-}
-
-func (e *RestoreFailedError) Error() string {
-	return fmt.Sprintf("restore failed from %s: %v: %s", e.ArchivePath, e.Err, e.Stderr)
-}
-
-func (e *RestoreFailedError) Unwrap() error { return e.Err }
-
 // ImageNotFoundError indicates the requested image is not present
 // locally and could not be pulled.
 type ImageNotFoundError struct {
