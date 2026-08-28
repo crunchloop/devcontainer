@@ -37,8 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The design records for the removed subsystems —
   `design/checkpoint-restore.md`, `design/podman-backend.md` and
   `design/compose-native-health.md` — are deleted with the code they
-  described. The 0.4.0 and 0.4.1 entries below still name them; those
-  files remain readable in git history at tag `v0.4.3`.
+  described. The 0.4.0 entry below names
+  `design/compose-native-health.md`; all three remain readable in git
+  history at tag `v0.4.3`.
 
 ## [0.4.2] - 2026-08-23
 
