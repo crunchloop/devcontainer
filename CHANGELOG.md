@@ -12,7 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING — checkpoint/restore is gone.** The feature only ever
   worked on Podman (docker's restore is broken upstream on
   containerd-integrated engines), and the Podman backend existed to
-  carry it. With Docker the only supported backend, both go. Removed
+  carry it. Neither of the remaining backends can checkpoint — docker
+  for the reason above, applecontainer because it has no CRIU — so with
+  Podman gone the feature has no implementation and both go. Removed
   from the public API: `runtime.CheckpointRuntime`,
   `runtime.CheckpointSpec`, `runtime.RestoreSpec`,
   `runtime.CheckpointRef`, `runtime.ErrCheckpointUnsupported`,
@@ -32,6 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   privilege-dropping images; Docker and Apple never opted in, so the
   path was unreachable. Health gating now always reads the backend's
   native health status, which is what Docker and Apple already did.
+- The design records for the removed subsystems —
+  `design/checkpoint-restore.md`, `design/podman-backend.md` and
+  `design/compose-native-health.md` — are deleted with the code they
+  described. The 0.4.0 and 0.4.1 entries below still name them; those
+  files remain readable in git history at tag `v0.4.3`.
 
 ## [0.4.2] - 2026-08-23
 

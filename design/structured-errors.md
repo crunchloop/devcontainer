@@ -312,7 +312,7 @@ func codeForPullError(err error) Code {
 }
 ```
 
-When a new runtime backend lands (e.g. `runtime/podman/`), it defines
+When a new runtime backend lands (e.g. `runtime/k8s/`), it defines
 its own typed errors and the classifier learns to `errors.As` them.
 Codes stay runtime-agnostic.
 

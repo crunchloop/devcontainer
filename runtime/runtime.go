@@ -236,7 +236,7 @@ type ContainerDetails struct {
 	Labels    map[string]string
 
 	// Security options as actually applied to the container, read back
-	// from the backend's inspect (docker/podman HostConfig). Lets callers
+	// from the backend's inspect (docker HostConfig). Lets callers
 	// verify that RunSpec.Privileged/CapAdd/SecurityOpt — including the
 	// values merged from feature metadata onto compose services — landed
 	// on the real container. Backends that don't surface these (e.g.
