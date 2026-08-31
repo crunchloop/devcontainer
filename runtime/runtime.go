@@ -141,9 +141,7 @@ type Runtime interface {
 	// orchestrator under compose/ (see design/compose-native.md §4).
 	// Types live in runtime/compose_primitives.go. A backend that
 	// returns ErrNotImplemented from any of these effectively opts
-	// out of compose source — Plan.Validate(Capabilities()) catches
-	// such projects at validation time and refuses with a typed
-	// error before any side effect.
+	// out of compose source.
 
 	// CreateNetwork creates a network with the given name and
 	// labels. Returns the backend's network ID for later
@@ -180,13 +178,6 @@ type Runtime interface {
 	// RemoveImage removes a local image by ID or reference. No-op
 	// if missing.
 	RemoveImage(ctx context.Context, ref string) error
-
-	// Capabilities advertises optional features this backend
-	// supports. compose.Plan.Validate keys feature gates off this
-	// struct so per-backend conditionals stay out of the validator.
-	// The returned value should be a constant for the lifetime of
-	// the Runtime; callers may cache it.
-	Capabilities() Capabilities
 }
 
 // ImageRef identifies an image by digest and any associated tags.
@@ -362,9 +353,7 @@ type RunSpec struct {
 	// "container:<id-or-name>"). Empty means the backend default.
 	// The compose orchestrator translates `network_mode:` / `pid:` /
 	// `ipc:` directives here, resolving `service:<x>` references to
-	// the dependency's container first. Backends without namespace
-	// sharing never see these: compose.Plan.Validate refuses such
-	// projects via Capabilities.NamespaceSharing.
+	// the dependency's container first.
 	NetworkMode string
 	PidMode     string
 	IpcMode     string

@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **BREAKING — the per-backend capability gating is removed.** `runtime.Capabilities`
+  and `Runtime.Capabilities()` existed to describe where a backend diverged from
+  Docker: every field's only `false` case was the Apple backend, and `runtime/docker`
+  reported all six `true`. With Docker the only backend the struct was
+  unconditionally all-true, so the code it gated was unreachable. Removed:
+  `runtime.Capabilities`, `Runtime.Capabilities()`, `compose.Plan.Validate`'s
+  `backendName` and `caps` parameters (now `Validate()`),
+  `compose.UnsupportedFeatureOnBackendError`,
+  `compose.VolumeSharedAcrossServicesError`, and `Orchestrator.BackendName` with
+  the `NewOrchestrator` parameter that set it (the Engine already passed `""`; the
+  field's only reader was the deleted error).
+- **compose (native)** — the `/etc/hosts` post-start patch is removed with it. It
+  existed only for backends without service-name DNS (`ServiceNameDNS: false`, Apple
+  only); Docker has built-in DNS aliases on the project network, so the branch was a
+  no-op there and its only coverage was the deleted Apple integration suite.
+  `Plan.Validate` no longer refuses health-gated `depends_on`, namespace-sharing
+  modes, or volumes shared across services — Docker supports all of them, so those
+  refusals could not fire.
+- **BREAKING — three `runtime` error types with no remaining producer are removed:**
+  `runtime.BuilderUnavailableError` and `runtime.UnsupportedOptionError` (constructed
+  only by the Apple backend) and `runtime.ExecFailedError`, which has had no producer
+  since well before the backend removals.
 - **BREAKING — the Apple Containers backend is removed.** `runtime/applecontainer`
   and the `applecontainer-bridge` Swift package (reached through a cgo shim) are
   deleted, along with the `--runtime applecontainer` CLI value: `--runtime` now

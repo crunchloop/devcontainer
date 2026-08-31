@@ -46,23 +46,3 @@ func TestMapContainerState(t *testing.T) {
 		}
 	}
 }
-
-// TestCapabilities locks in docker's all-true compose feature set.
-// Flipping any of these to false silently could let the compose
-// orchestrator's Plan validator accept a project Docker can run
-// but our other backends can't, eroding parity guarantees.
-func TestCapabilities(t *testing.T) {
-	r := &Runtime{}
-	got := r.Capabilities()
-	want := runtime.Capabilities{
-		Healthchecks:     true,
-		ExitCodes:        true,
-		NamespaceSharing: true,
-		RestartPolicies:  true,
-		SharedVolumes:    true,
-		ServiceNameDNS:   true,
-	}
-	if got != want {
-		t.Errorf("Capabilities = %+v, want %+v", got, want)
-	}
-}

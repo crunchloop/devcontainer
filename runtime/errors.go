@@ -42,17 +42,6 @@ func (e *ContainerNotFoundError) Error() string {
 
 func (e *ContainerNotFoundError) Unwrap() error { return e.Err }
 
-// ExecFailedError indicates an exec call completed with a non-zero
-// exit code. Captured stderr is included for diagnostics.
-type ExecFailedError struct {
-	ExitCode int
-	Stderr   string
-}
-
-func (e *ExecFailedError) Error() string {
-	return fmt.Sprintf("exec failed (exit=%d): %s", e.ExitCode, e.Stderr)
-}
-
 // ComposeUnavailableError indicates the `docker compose` v2 plugin is
 // not installed / not on PATH. Returned by ComposeRuntime methods on
 // first attempted use; cached on the runtime so subsequent calls
@@ -91,37 +80,3 @@ func (e *DaemonUnavailableError) Error() string {
 }
 
 func (e *DaemonUnavailableError) Unwrap() error { return e.Err }
-
-// BuilderUnavailableError indicates the container engine's image-build
-// component is missing or not running. Distinct from
-// DaemonUnavailableError because the build engine is typically a
-// separate process / VM that can be started independently (e.g.
-// Docker's BuildKit daemon).
-type BuilderUnavailableError struct {
-	// Hint is a backend-specific message telling the user how to
-	// remediate (e.g. "start the BuildKit daemon").
-	Hint string
-	Err  error
-}
-
-func (e *BuilderUnavailableError) Error() string {
-	if e.Hint != "" {
-		return fmt.Sprintf("image build engine unavailable (%s): %v", e.Hint, e.Err)
-	}
-	return fmt.Sprintf("image build engine unavailable: %v", e.Err)
-}
-
-func (e *BuilderUnavailableError) Unwrap() error { return e.Err }
-
-// UnsupportedOptionError indicates a RunSpec / BuildSpec field that
-// the chosen backend cannot honor. Returned at the boundary instead
-// of silently dropping the option, so callers fail fast rather than
-// observing apparent success with missing behavior.
-type UnsupportedOptionError struct {
-	Backend string
-	Option  string
-}
-
-func (e *UnsupportedOptionError) Error() string {
-	return fmt.Sprintf("%s: option %q is not supported on this backend", e.Backend, e.Option)
-}

@@ -5,28 +5,11 @@ import (
 	"testing"
 
 	composetypes "github.com/compose-spec/compose-go/v2/types"
-
-	"github.com/crunchloop/devcontainer/runtime"
 )
-
-func dockerCaps() runtime.Capabilities {
-	return runtime.Capabilities{
-		Healthchecks:     true,
-		ExitCodes:        true,
-		NamespaceSharing: true,
-		RestartPolicies:  true,
-		SharedVolumes:    true,
-		ServiceNameDNS:   true,
-	}
-}
-
-func limitedCaps() runtime.Capabilities {
-	return runtime.Capabilities{}
-}
 
 func TestValidate_NilProject(t *testing.T) {
 	p := &Plan{}
-	if err := p.Validate("docker", dockerCaps()); err == nil {
+	if err := p.Validate(); err == nil {
 		t.Fatal("want error on nil project")
 	}
 }
@@ -38,7 +21,7 @@ func TestValidate_Clean(t *testing.T) {
 		},
 	}
 	p := &Plan{Project: proj, ProjectName: "dc-x"}
-	if err := p.Validate("docker", dockerCaps()); err != nil {
+	if err := p.Validate(); err != nil {
 		t.Errorf("Validate: %v", err)
 	}
 }
@@ -57,7 +40,7 @@ func TestValidate_RefusesSwarmFields(t *testing.T) {
 		},
 	}
 	p := &Plan{Project: proj, ProjectName: "dc-x"}
-	err := p.Validate("docker", dockerCaps())
+	err := p.Validate()
 	var unsup *UnsupportedFieldError
 	if !errors.As(err, &unsup) {
 		t.Fatalf("want *UnsupportedFieldError, got %T: %v", err, err)
@@ -75,7 +58,7 @@ func TestValidate_RefusesScaleMulti(t *testing.T) {
 		},
 	}
 	p := &Plan{Project: proj, ProjectName: "dc-x"}
-	err := p.Validate("docker", dockerCaps())
+	err := p.Validate()
 	var unsup *UnsupportedFieldError
 	if !errors.As(err, &unsup) {
 		t.Fatalf("want *UnsupportedFieldError, got %T: %v", err, err)
@@ -90,58 +73,14 @@ func TestValidate_AcceptsScaleOne(t *testing.T) {
 		},
 	}
 	p := &Plan{Project: proj, ProjectName: "dc-x"}
-	if err := p.Validate("docker", dockerCaps()); err != nil {
+	if err := p.Validate(); err != nil {
 		t.Errorf("Validate: %v", err)
 	}
 }
 
-func TestValidate_RefusesHealthyOnLimitedCaps(t *testing.T) {
-	proj := &composetypes.Project{
-		Services: composetypes.Services{
-			"app": composetypes.ServiceConfig{
-				Name: "app", Image: "alpine",
-				DependsOn: composetypes.DependsOnConfig{
-					"db": composetypes.ServiceDependency{Condition: "service_healthy"},
-				},
-			},
-		},
-	}
-	p := &Plan{Project: proj, ProjectName: "dc-x"}
-	err := p.Validate("limited", limitedCaps())
-	var bad *UnsupportedFeatureOnBackendError
-	if !errors.As(err, &bad) {
-		t.Fatalf("want *UnsupportedFeatureOnBackendError, got %T: %v", err, err)
-	}
-	if bad.Capability != "Healthchecks" {
-		t.Errorf("capability = %q, want Healthchecks", bad.Capability)
-	}
-}
-
-func TestValidate_RefusesCompletedSuccessfullyOnLimitedCaps(t *testing.T) {
-	proj := &composetypes.Project{
-		Services: composetypes.Services{
-			"app": composetypes.ServiceConfig{
-				Name: "app", Image: "alpine",
-				DependsOn: composetypes.DependsOnConfig{
-					"setup": composetypes.ServiceDependency{Condition: "service_completed_successfully"},
-				},
-			},
-		},
-	}
-	p := &Plan{Project: proj, ProjectName: "dc-x"}
-	err := p.Validate("limited", limitedCaps())
-	var bad *UnsupportedFeatureOnBackendError
-	if !errors.As(err, &bad) {
-		t.Fatalf("want *UnsupportedFeatureOnBackendError, got %T: %v", err, err)
-	}
-	if bad.Capability != "ExitCodes" {
-		t.Errorf("capability = %q, want ExitCodes", bad.Capability)
-	}
-}
-
-func TestValidate_AcceptsServiceStartedOnLimitedCaps(t *testing.T) {
+func TestValidate_AcceptsServiceStarted(t *testing.T) {
 	// service_started is the v1 / default condition — no health
-	// gate, just "exists." Limited caps must allow it.
+	// gate, just "exists."
 	proj := &composetypes.Project{
 		Services: composetypes.Services{
 			"app": composetypes.ServiceConfig{
@@ -154,60 +93,8 @@ func TestValidate_AcceptsServiceStartedOnLimitedCaps(t *testing.T) {
 		},
 	}
 	p := &Plan{Project: proj, ProjectName: "dc-x"}
-	if err := p.Validate("limited", limitedCaps()); err != nil {
+	if err := p.Validate(); err != nil {
 		t.Errorf("service_started must be accepted: %v", err)
-	}
-}
-
-func TestValidate_RefusesNamespaceSharingOnLimitedCaps(t *testing.T) {
-	proj := &composetypes.Project{
-		Services: composetypes.Services{
-			"app":     composetypes.ServiceConfig{Name: "app", Image: "alpine", NetworkMode: "service:primary"},
-			"primary": composetypes.ServiceConfig{Name: "primary", Image: "alpine"},
-		},
-	}
-	p := &Plan{Project: proj, ProjectName: "dc-x"}
-	err := p.Validate("limited", limitedCaps())
-	var bad *UnsupportedFeatureOnBackendError
-	if !errors.As(err, &bad) {
-		t.Fatalf("want *UnsupportedFeatureOnBackendError, got %T: %v", err, err)
-	}
-	if bad.Capability != "NamespaceSharing" {
-		t.Errorf("capability = %q, want NamespaceSharing", bad.Capability)
-	}
-}
-
-func TestValidate_RefusesSharedVolumeOnLimitedCaps(t *testing.T) {
-	proj := &composetypes.Project{
-		Volumes: composetypes.Volumes{
-			"data": composetypes.VolumeConfig{Name: "data"},
-		},
-		Services: composetypes.Services{
-			"reader": composetypes.ServiceConfig{
-				Name: "reader", Image: "alpine",
-				Volumes: []composetypes.ServiceVolumeConfig{
-					{Type: composetypes.VolumeTypeVolume, Source: "data", Target: "/data"},
-				},
-			},
-			"writer": composetypes.ServiceConfig{
-				Name: "writer", Image: "alpine",
-				Volumes: []composetypes.ServiceVolumeConfig{
-					{Type: composetypes.VolumeTypeVolume, Source: "data", Target: "/data"},
-				},
-			},
-		},
-	}
-	p := &Plan{Project: proj, ProjectName: "dc-x"}
-	err := p.Validate("limited", limitedCaps())
-	var bad *VolumeSharedAcrossServicesError
-	if !errors.As(err, &bad) {
-		t.Fatalf("want *VolumeSharedAcrossServicesError, got %T: %v", err, err)
-	}
-	if bad.Volume != "data" {
-		t.Errorf("volume = %q, want data", bad.Volume)
-	}
-	if len(bad.Services) != 2 {
-		t.Errorf("want 2 services, got %v", bad.Services)
 	}
 }
 
@@ -226,7 +113,7 @@ func TestValidate_AcceptsSingleServiceVolume(t *testing.T) {
 		},
 	}
 	p := &Plan{Project: proj, ProjectName: "dc-x"}
-	if err := p.Validate("limited", limitedCaps()); err != nil {
+	if err := p.Validate(); err != nil {
 		t.Errorf("single-service volume must be accepted: %v", err)
 	}
 }

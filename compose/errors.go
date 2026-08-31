@@ -62,49 +62,6 @@ func sortFields(in []UnsupportedField) []UnsupportedField {
 	return out
 }
 
-// UnsupportedFeatureOnBackendError is returned by Plan.Validate when
-// the project uses a compose feature the active backend cannot
-// satisfy — e.g. depends_on.condition: service_healthy against a
-// backend whose Capabilities().Healthchecks is false.
-//
-// Distinct from UnsupportedFieldError (which lists fields we never
-// implement) because the gating is backend-specific and may flip if
-// the backend gains the capability later.
-type UnsupportedFeatureOnBackendError struct {
-	Backend    string // backend display name (e.g. "docker")
-	Capability string // Capabilities struct field name (e.g. "Healthchecks")
-	Service    string // service that triggered the refusal
-	Detail     string // one-sentence explanation
-}
-
-func (e *UnsupportedFeatureOnBackendError) Error() string {
-	if e.Service != "" {
-		return fmt.Sprintf(
-			"compose: service %q uses %s, which the %s backend does not support: %s",
-			e.Service, e.Capability, e.Backend, e.Detail,
-		)
-	}
-	return fmt.Sprintf(
-		"compose: project uses %s, which the %s backend does not support: %s",
-		e.Capability, e.Backend, e.Detail,
-	)
-}
-
-// VolumeSharedAcrossServicesError is returned by Plan.Validate when
-// the project mounts a single named volume into 2+ services and the
-// active backend's Capabilities().SharedVolumes is false.
-type VolumeSharedAcrossServicesError struct {
-	Volume   string
-	Services []string // sorted
-}
-
-func (e *VolumeSharedAcrossServicesError) Error() string {
-	return fmt.Sprintf(
-		"compose: volume %q is mounted into %d services (%s); the active backend does not allow shared volumes",
-		e.Volume, len(e.Services), strings.Join(e.Services, ", "),
-	)
-}
-
 // PartialUpError signals that Up brought some services online and
 // then failed before completing. Returned with the names of the
 // services that did and didn't start so the caller (Engine.Up) can

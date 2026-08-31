@@ -51,9 +51,6 @@ Refines `D1`. This repository implements the same behaviour more than once by de
   interface. Shared orchestration (engine, compose) must reach it through that
   interface; a diff that leaks Docker-specific behaviour into shared code is a
   finding, because the interface is what keeps a second backend possible.
-- A capability flag on `Capabilities()` (`ServiceNameDNS`, for instance) is the
-  legitimate way to encode divergence. A silent assumption that all backends behave like
-  Docker is not.
 
 ## R3. Destructive recreate
 
