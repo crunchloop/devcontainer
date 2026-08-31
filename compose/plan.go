@@ -72,11 +72,13 @@ type DownPlan struct {
 // Validation order:
 //  1. Hard refusals (§2.2 fields we never implement): one
 //     UnsupportedFieldError listing every offending site.
-//  2. depends_on.condition: service_completed_successfully against a
-//     backend that does not surface exit codes: one
-//     UnsupportedFeatureOnBackendError. This is refused here rather
-//     than at the gate because a backend that reports no exit code
-//     reports zero, which is indistinguishable from a clean exit.
+//  2. depends_on conditions the backend cannot honour, per its
+//     Capabilities: one UnsupportedFeatureOnBackendError. Refused
+//     here rather than at the gate because neither absence is
+//     detectable there — a backend reporting no exit code reports
+//     zero, indistinguishable from a clean exit, and a service may
+//     inherit its healthcheck from the image, which the compose file
+//     cannot see.
 func (p *Plan) Validate(caps runtime.Capabilities) error {
 	if p == nil || p.Project == nil {
 		return fmt.Errorf("compose.Plan.Validate: nil plan or project")
@@ -92,16 +94,24 @@ func (p *Plan) Validate(caps runtime.Capabilities) error {
 // service_healthy is enforced by Orchestrator.waitFor, which can tell
 // "no health reported" from "no healthcheck declared" at the gate.
 func refuseUnsupportedConditions(caps runtime.Capabilities, proj *composetypes.Project) error {
-	if caps.ExitCodes {
-		return nil
-	}
 	for name, svc := range proj.Services {
 		for _, dep := range svc.DependsOn {
-			if dep.Condition == "service_completed_successfully" {
-				return &UnsupportedFeatureOnBackendError{
-					Capability: "ExitCodes",
-					Service:    name,
-					Detail:     "depends_on.condition: service_completed_successfully requires backend exit-code surfacing",
+			switch dep.Condition {
+			case "service_healthy":
+				if !caps.Healthchecks {
+					return &UnsupportedFeatureOnBackendError{
+						Capability: "Healthchecks",
+						Service:    name,
+						Detail:     "depends_on.condition: service_healthy requires backend healthcheck support",
+					}
+				}
+			case "service_completed_successfully":
+				if !caps.ExitCodes {
+					return &UnsupportedFeatureOnBackendError{
+						Capability: "ExitCodes",
+						Service:    name,
+						Detail:     "depends_on.condition: service_completed_successfully requires backend exit-code surfacing",
+					}
 				}
 			}
 		}

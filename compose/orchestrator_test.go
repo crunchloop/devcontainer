@@ -64,7 +64,7 @@ type mockContainer struct {
 
 func newMockRuntime() *mockRuntime {
 	return &mockRuntime{
-		Caps:       runtime.Capabilities{ExitCodes: true, ServiceNameDNS: true},
+		Caps:       runtime.Capabilities{Healthchecks: true, ExitCodes: true, ServiceNameDNS: true},
 		networks:   map[string]map[string]string{},
 		volumes:    map[string]map[string]string{},
 		containers: map[string]*mockContainer{},
@@ -1257,7 +1257,7 @@ func TestUp_HealthGateAcceptsDisabledHealthchecks(t *testing.T) {
 // stays a declared capability rather than a check at the gate.
 func TestUp_PatchesHostsWithoutServiceNameDNS(t *testing.T) {
 	rt := newMockRuntime()
-	rt.Caps = runtime.Capabilities{ExitCodes: true, ServiceNameDNS: false}
+	rt.Caps = runtime.Capabilities{Healthchecks: true, ExitCodes: true, ServiceNameDNS: false}
 
 	// Report an IP for every container so the patch has a map to write.
 	rt.OnInspect = func(id string, base *runtime.ContainerDetails) *runtime.ContainerDetails {

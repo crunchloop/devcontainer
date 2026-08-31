@@ -235,6 +235,7 @@ func mapContainerState(s string) runtime.State {
 // provides service-name DNS aliases on user-defined networks.
 func (r *Runtime) Capabilities() runtime.Capabilities {
 	return runtime.Capabilities{
+		Healthchecks:   true,
 		ExitCodes:      true,
 		ServiceNameDNS: true,
 	}

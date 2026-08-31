@@ -207,7 +207,7 @@ func (f *fakeRuntime) RemoveImage(ctx context.Context, ref string) error {
 
 func (f *fakeRuntime) Capabilities() runtime.Capabilities {
 	// The docker baseline; non-compose tests never read this.
-	return runtime.Capabilities{ExitCodes: true, ServiceNameDNS: true}
+	return runtime.Capabilities{Healthchecks: true, ExitCodes: true, ServiceNameDNS: true}
 }
 
 func (f *fakeRuntime) FindContainerByLabel(ctx context.Context, key, value string) (*runtime.Container, error) {

@@ -9,15 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- **BREAKING — `runtime.Capabilities` is cut from six fields to two.** The struct
+- **BREAKING — `runtime.Capabilities` is cut from six fields to three.** The struct
   described where a backend diverged from Docker; every field's only `false` case was
   the Apple backend and `runtime/docker` reported all of them `true`, so most of what
-  it gated was unreachable. What survives is the two behaviours whose absence the
-  orchestrator cannot detect at the point of use: `ExitCodes` (a backend that reports
-  no exit code reports zero, which is indistinguishable from a clean exit) and
-  `ServiceNameDNS` (broken name resolution surfaces inside the container, never at
-  `Up` time). Removed fields: `Healthchecks`, now enforced at the gate instead — see
-  Changed below; `NamespaceSharing` and `SharedVolumes`, where a backend that cannot
+  it gated was unreachable. What survives is the three behaviours whose absence the
+  orchestrator cannot fully detect at the point of use: `Healthchecks` (a service may
+  inherit its healthcheck from the image, which the compose file cannot see),
+  `ExitCodes` (a backend that reports no exit code reports zero, which is
+  indistinguishable from a clean exit) and `ServiceNameDNS` (broken name resolution
+  surfaces inside the container, never at `Up` time). Removed fields:
+  `NamespaceSharing` and `SharedVolumes`, where a backend that cannot
   honour the request fails loudly from the primitive itself, so the plan-time refusal
   was UX rather than correctness; and `RestartPolicies`, which gated a
   `WarnRestartPolicyIgnoredOnBackend` event that was never implemented.
@@ -25,9 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `backendName` parameter, and `Orchestrator.BackendName` and the `NewOrchestrator`
   parameter that set it are gone: the Engine passed `""` at all three call sites and
   the field's only reader was an error message, so it never carried information.
-  `Validate` now refuses exactly one backend-gated feature —
-  `depends_on.condition: service_completed_successfully` against a backend without
-  `ExitCodes`. `compose.UnsupportedFeatureOnBackendError` loses its `Backend` field
+  `Validate` refuses the two backend-gated `depends_on` conditions —
+  `service_healthy` without `Healthchecks` and `service_completed_successfully`
+  without `ExitCodes`. `compose.UnsupportedFeatureOnBackendError` loses its `Backend` field
   and `compose.VolumeSharedAcrossServicesError` is removed with the refusal that
   produced it. The `/etc/hosts` post-start patch behind `ServiceNameDNS` is unchanged
   and still runs on a backend that reports no service-name DNS.
@@ -91,13 +92,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `runtime.HealthStatus` documents `HealthNone` as ambiguous — the image declared no
   `HEALTHCHECK`, or the backend does not surface health at all — and the gate reads it
   as "no healthcheck" so healthcheck-less projects still come up. That reading is
-  wrong when the service names a real test command itself, and previously
-  `Capabilities.Healthchecks` refused such plans up front. The guarantee now lives at
-  the gate: `Orchestrator.waitFor` keeps polling and fails with an explicit error
-  rather than starting dependents before the check ever succeeded. Docker is
-  unaffected — it reports `starting` / `healthy` / `unhealthy` for any container with
-  a healthcheck — but the check now covers every `runtime.Runtime` implementation,
-  including one that misreports its own capabilities.
+  wrong when the service names a real test command itself. `Orchestrator.waitFor`
+  keeps polling and fails with an explicit error rather than starting dependents
+  before the check ever succeeded. This is a second line of defence, not a
+  replacement for `Capabilities.Healthchecks`: the capability refuses a backend that
+  honestly reports it cannot do healthchecks, while the gate also catches one that
+  claims the capability and then reports nothing. Docker is unaffected — it reports
+  `starting` / `healthy` / `unhealthy` for any container with a healthcheck.
   Only an explicit, non-`NONE` test command counts as declaring one: `disable: true`,
   compose's inline `test: ["NONE"]`, and an empty test (where the image's own
   `HEALTHCHECK` applies) all keep the permissive fallback, so no valid project blocks

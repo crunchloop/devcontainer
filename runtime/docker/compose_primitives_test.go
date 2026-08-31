@@ -54,7 +54,7 @@ func TestMapContainerState(t *testing.T) {
 // patch.
 func TestCapabilities(t *testing.T) {
 	r := &Runtime{}
-	want := runtime.Capabilities{ExitCodes: true, ServiceNameDNS: true}
+	want := runtime.Capabilities{Healthchecks: true, ExitCodes: true, ServiceNameDNS: true}
 	if got := r.Capabilities(); got != want {
 		t.Errorf("Capabilities = %+v, want %+v", got, want)
 	}

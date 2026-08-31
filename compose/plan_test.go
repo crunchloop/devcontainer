@@ -10,7 +10,7 @@ import (
 )
 
 func dockerCaps() runtime.Capabilities {
-	return runtime.Capabilities{ExitCodes: true, ServiceNameDNS: true}
+	return runtime.Capabilities{Healthchecks: true, ExitCodes: true, ServiceNameDNS: true}
 }
 
 func TestValidate_NilProject(t *testing.T) {
@@ -154,5 +154,39 @@ func TestValidate_RefusesCompletedSuccessfullyWithoutExitCodes(t *testing.T) {
 	// The same plan is accepted when the backend does surface them.
 	if err := p.Validate(dockerCaps()); err != nil {
 		t.Errorf("want accepted on a backend with ExitCodes: %v", err)
+	}
+}
+
+// TestValidate_RefusesHealthyWithoutHealthchecks pins the plan-time
+// refusal of service_healthy. Orchestrator.waitFor also guards this at
+// the gate, but only when compose declares the test itself: a service
+// inheriting its healthcheck from the image is indistinguishable there
+// from one with no healthcheck at all. The plan-time refusal does not
+// depend on where the healthcheck is declared, so it covers both.
+func TestValidate_RefusesHealthyWithoutHealthchecks(t *testing.T) {
+	// No healthcheck declared in compose — the case waitFor cannot see.
+	proj := &composetypes.Project{
+		Services: composetypes.Services{
+			"db": composetypes.ServiceConfig{Name: "db", Image: "alpine"},
+			"app": composetypes.ServiceConfig{
+				Name: "app", Image: "alpine",
+				DependsOn: composetypes.DependsOnConfig{
+					"db": composetypes.ServiceDependency{Condition: "service_healthy"},
+				},
+			},
+		},
+	}
+	p := &Plan{Project: proj, ProjectName: "dc-x"}
+
+	err := p.Validate(runtime.Capabilities{ExitCodes: true, ServiceNameDNS: true})
+	var bad *UnsupportedFeatureOnBackendError
+	if !errors.As(err, &bad) {
+		t.Fatalf("want *UnsupportedFeatureOnBackendError, got %T: %v", err, err)
+	}
+	if bad.Capability != "Healthchecks" {
+		t.Errorf("Capability = %q, want Healthchecks", bad.Capability)
+	}
+	if err := p.Validate(dockerCaps()); err != nil {
+		t.Errorf("want accepted on a backend with Healthchecks: %v", err)
 	}
 }

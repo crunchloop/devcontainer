@@ -76,6 +76,14 @@ type LabelFilter struct {
 // Backends self-describe; the docker baseline is both true. The
 // returned value should be constant for the lifetime of the Runtime.
 type Capabilities struct {
+	// Healthchecks: InspectContainer surfaces State.Health.Status.
+	// Required for compose's depends_on condition: service_healthy.
+	// Refused at plan time rather than at the gate because a service
+	// may inherit its healthcheck from the image, which the compose
+	// file cannot see — Orchestrator.waitFor catches only the case
+	// where compose declares the test itself.
+	Healthchecks bool
+
 	// ExitCodes: InspectContainer returns a meaningful exit code for
 	// a stopped container (ContainerDetails.ExitCode is real for
 	// state=exited, not a zero placeholder). Required for compose's
