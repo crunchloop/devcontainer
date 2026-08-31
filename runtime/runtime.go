@@ -178,6 +178,11 @@ type Runtime interface {
 	// RemoveImage removes a local image by ID or reference. No-op
 	// if missing.
 	RemoveImage(ctx context.Context, ref string) error
+
+	// Capabilities advertises the compose behaviours this backend
+	// provides that the orchestrator cannot verify itself. See
+	// runtime.Capabilities for why these two and no others.
+	Capabilities() Capabilities
 }
 
 // ImageRef identifies an image by digest and any associated tags.

@@ -229,3 +229,13 @@ func mapContainerState(s string) runtime.State {
 	}
 	return runtime.State(s)
 }
+
+// Capabilities advertises the docker backend's compose behaviours.
+// Both true: docker surfaces real exit codes on stopped containers and
+// provides service-name DNS aliases on user-defined networks.
+func (r *Runtime) Capabilities() runtime.Capabilities {
+	return runtime.Capabilities{
+		ExitCodes:      true,
+		ServiceNameDNS: true,
+	}
+}

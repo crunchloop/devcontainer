@@ -200,7 +200,7 @@ func (*Engine) Down(ctx, *Workspace, DownOptions) error
 Sub-packages:
 
 - `config` — devcontainer.json parsing, merging, host-context substitution
-- `runtime` — container backend abstraction (`Runtime`, `ComposeRuntime`, network/volume/list primitives)
+- `runtime` — container backend abstraction (`Runtime`, `ComposeRuntime`, capabilities, network/volume/list primitives)
 - `runtime/docker` — Docker Engine API implementation (uses `moby/moby/client`)
 - `feature` — feature resolution (OCI / HTTPS / local), DAG ordering, dockerfile generation
 - `compose` — `dockerComposeFile` parsing via `compose-spec/compose-go`, plus a runtime-agnostic in-process orchestrator (`Orchestrator`, `Plan`, topological + health gating) used when `ComposeBackendNative` is selected

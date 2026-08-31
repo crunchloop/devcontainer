@@ -4,12 +4,18 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/crunchloop/devcontainer/runtime"
+
 	composetypes "github.com/compose-spec/compose-go/v2/types"
 )
 
+func dockerCaps() runtime.Capabilities {
+	return runtime.Capabilities{ExitCodes: true, ServiceNameDNS: true}
+}
+
 func TestValidate_NilProject(t *testing.T) {
 	p := &Plan{}
-	if err := p.Validate(); err == nil {
+	if err := p.Validate(dockerCaps()); err == nil {
 		t.Fatal("want error on nil project")
 	}
 }
@@ -21,7 +27,7 @@ func TestValidate_Clean(t *testing.T) {
 		},
 	}
 	p := &Plan{Project: proj, ProjectName: "dc-x"}
-	if err := p.Validate(); err != nil {
+	if err := p.Validate(dockerCaps()); err != nil {
 		t.Errorf("Validate: %v", err)
 	}
 }
@@ -40,7 +46,7 @@ func TestValidate_RefusesSwarmFields(t *testing.T) {
 		},
 	}
 	p := &Plan{Project: proj, ProjectName: "dc-x"}
-	err := p.Validate()
+	err := p.Validate(dockerCaps())
 	var unsup *UnsupportedFieldError
 	if !errors.As(err, &unsup) {
 		t.Fatalf("want *UnsupportedFieldError, got %T: %v", err, err)
@@ -58,7 +64,7 @@ func TestValidate_RefusesScaleMulti(t *testing.T) {
 		},
 	}
 	p := &Plan{Project: proj, ProjectName: "dc-x"}
-	err := p.Validate()
+	err := p.Validate(dockerCaps())
 	var unsup *UnsupportedFieldError
 	if !errors.As(err, &unsup) {
 		t.Fatalf("want *UnsupportedFieldError, got %T: %v", err, err)
@@ -73,7 +79,7 @@ func TestValidate_AcceptsScaleOne(t *testing.T) {
 		},
 	}
 	p := &Plan{Project: proj, ProjectName: "dc-x"}
-	if err := p.Validate(); err != nil {
+	if err := p.Validate(dockerCaps()); err != nil {
 		t.Errorf("Validate: %v", err)
 	}
 }
@@ -93,7 +99,7 @@ func TestValidate_AcceptsServiceStarted(t *testing.T) {
 		},
 	}
 	p := &Plan{Project: proj, ProjectName: "dc-x"}
-	if err := p.Validate(); err != nil {
+	if err := p.Validate(dockerCaps()); err != nil {
 		t.Errorf("service_started must be accepted: %v", err)
 	}
 }
@@ -113,7 +119,40 @@ func TestValidate_AcceptsSingleServiceVolume(t *testing.T) {
 		},
 	}
 	p := &Plan{Project: proj, ProjectName: "dc-x"}
-	if err := p.Validate(); err != nil {
+	if err := p.Validate(dockerCaps()); err != nil {
 		t.Errorf("single-service volume must be accepted: %v", err)
+	}
+}
+
+// TestValidate_RefusesCompletedSuccessfullyWithoutExitCodes pins the
+// one condition still refused at plan time. A backend that does not
+// surface exit codes reports the zero value for a stopped container,
+// which is indistinguishable from a clean exit — so the gate cannot
+// tell a failed job from a successful one and the plan is refused
+// before any side effect.
+func TestValidate_RefusesCompletedSuccessfullyWithoutExitCodes(t *testing.T) {
+	proj := &composetypes.Project{
+		Services: composetypes.Services{
+			"app": composetypes.ServiceConfig{
+				Name: "app", Image: "alpine",
+				DependsOn: composetypes.DependsOnConfig{
+					"setup": composetypes.ServiceDependency{Condition: "service_completed_successfully"},
+				},
+			},
+		},
+	}
+	p := &Plan{Project: proj, ProjectName: "dc-x"}
+
+	err := p.Validate(runtime.Capabilities{ServiceNameDNS: true})
+	var bad *UnsupportedFeatureOnBackendError
+	if !errors.As(err, &bad) {
+		t.Fatalf("want *UnsupportedFeatureOnBackendError, got %T: %v", err, err)
+	}
+	if bad.Capability != "ExitCodes" {
+		t.Errorf("Capability = %q, want ExitCodes", bad.Capability)
+	}
+	// The same plan is accepted when the backend does surface them.
+	if err := p.Validate(dockerCaps()); err != nil {
+		t.Errorf("want accepted on a backend with ExitCodes: %v", err)
 	}
 }

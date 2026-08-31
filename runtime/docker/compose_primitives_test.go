@@ -46,3 +46,16 @@ func TestMapContainerState(t *testing.T) {
 		}
 	}
 }
+
+// TestCapabilities locks in the docker backend's compose baseline.
+// Flipping either to false would send the orchestrator down a fallback
+// path docker doesn't need: ExitCodes gates plan-time refusal of
+// service_completed_successfully, ServiceNameDNS gates the /etc/hosts
+// patch.
+func TestCapabilities(t *testing.T) {
+	r := &Runtime{}
+	want := runtime.Capabilities{ExitCodes: true, ServiceNameDNS: true}
+	if got := r.Capabilities(); got != want {
+		t.Errorf("Capabilities = %+v, want %+v", got, want)
+	}
+}

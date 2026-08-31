@@ -30,6 +30,10 @@ type mockRuntime struct {
 	containers map[string]*mockContainer    // id -> container
 
 	// Call log for assertions
+	// Caps is what Capabilities() reports. newMockRuntime defaults to
+	// the docker baseline; tests exercising the fallback paths set it.
+	Caps runtime.Capabilities
+
 	createNetworkCalls int
 	createVolumeCalls  int
 	runCalls           int
@@ -60,6 +64,7 @@ type mockContainer struct {
 
 func newMockRuntime() *mockRuntime {
 	return &mockRuntime{
+		Caps:       runtime.Capabilities{ExitCodes: true, ServiceNameDNS: true},
 		networks:   map[string]map[string]string{},
 		volumes:    map[string]map[string]string{},
 		containers: map[string]*mockContainer{},
@@ -159,6 +164,10 @@ func (m *mockRuntime) InspectContainer(ctx context.Context, id string) (*runtime
 		}
 	}
 	return d, nil
+}
+
+func (m *mockRuntime) Capabilities() runtime.Capabilities {
+	return m.Caps
 }
 
 func (m *mockRuntime) InspectImage(ctx context.Context, ref string) (*runtime.ImageDetails, error) {
@@ -1237,5 +1246,59 @@ func TestUp_HealthGateAcceptsDisabledHealthchecks(t *testing.T) {
 				t.Fatalf("Up: %v", err)
 			}
 		})
+	}
+}
+
+// TestUp_PatchesHostsWithoutServiceNameDNS pins the service-name DNS
+// fallback: on a backend that does not resolve peers by service name,
+// Up patches /etc/hosts inside every started container. Nothing
+// observable at Up time distinguishes working DNS from broken DNS —
+// the failure shows up inside the container later — which is why this
+// stays a declared capability rather than a check at the gate.
+func TestUp_PatchesHostsWithoutServiceNameDNS(t *testing.T) {
+	rt := newMockRuntime()
+	rt.Caps = runtime.Capabilities{ExitCodes: true, ServiceNameDNS: false}
+
+	// Report an IP for every container so the patch has a map to write.
+	rt.OnInspect = func(id string, base *runtime.ContainerDetails) *runtime.ContainerDetails {
+		base.Labels["dev.containers.network-ip"] = "192.168.66.2"
+		return base
+	}
+	var patched []string
+	rt.OnExec = func(id string, opts runtime.ExecOptions) (runtime.ExecResult, error) {
+		if len(opts.Cmd) > 0 && strings.Contains(strings.Join(opts.Cmd, " "), "/etc/hosts") {
+			patched = append(patched, id)
+		}
+		return runtime.ExecResult{}, nil
+	}
+
+	orch := NewOrchestrator(rt)
+	proj := &composetypes.Project{Services: composetypes.Services{
+		"db":  composetypes.ServiceConfig{Name: "db", Image: "alpine"},
+		"app": composetypes.ServiceConfig{Name: "app", Image: "alpine"},
+	}}
+
+	if _, err := orch.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-x"}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if len(patched) == 0 {
+		t.Error("want /etc/hosts patched on a backend without service-name DNS")
+	}
+
+	// And the inverse: the docker baseline never touches /etc/hosts.
+	rt2 := newMockRuntime()
+	var patched2 []string
+	rt2.OnExec = func(id string, opts runtime.ExecOptions) (runtime.ExecResult, error) {
+		if len(opts.Cmd) > 0 && strings.Contains(strings.Join(opts.Cmd, " "), "/etc/hosts") {
+			patched2 = append(patched2, id)
+		}
+		return runtime.ExecResult{}, nil
+	}
+	orch2 := NewOrchestrator(rt2)
+	if _, err := orch2.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-y"}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if len(patched2) != 0 {
+		t.Errorf("docker baseline must not patch /etc/hosts, got %v", patched2)
 	}
 }

@@ -67,3 +67,30 @@ type LabelFilter struct {
 	// client-side after enumeration.
 	Match map[string]string
 }
+
+// Capabilities advertises the two compose behaviours a backend cannot
+// be assumed to provide and whose absence the orchestrator cannot
+// detect at the point of use. Everything else a backend can't do
+// surfaces as an error from the primitive itself.
+//
+// Backends self-describe; the docker baseline is both true. The
+// returned value should be constant for the lifetime of the Runtime.
+type Capabilities struct {
+	// ExitCodes: InspectContainer returns a meaningful exit code for
+	// a stopped container (ContainerDetails.ExitCode is real for
+	// state=exited, not a zero placeholder). Required for compose's
+	// depends_on condition: service_completed_successfully — a
+	// backend that reports zero regardless would make a failed job
+	// look successful, and zero is indistinguishable from a clean
+	// exit, so this cannot be checked at the gate.
+	ExitCodes bool
+
+	// ServiceNameDNS: containers on the project network resolve peers
+	// by service name out of the box, which is compose's default
+	// contract. When false the orchestrator patches /etc/hosts in
+	// every started container from the service→IP map. Nothing
+	// observable at Up time distinguishes working DNS from broken
+	// DNS — the failure appears inside the container later — so this
+	// cannot be checked at the gate either.
+	ServiceNameDNS bool
+}

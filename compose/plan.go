@@ -3,6 +3,8 @@ package compose
 import (
 	"fmt"
 
+	"github.com/crunchloop/devcontainer/runtime"
+
 	composetypes "github.com/compose-spec/compose-go/v2/types"
 )
 
@@ -62,16 +64,49 @@ type DownPlan struct {
 	Project *composetypes.Project
 }
 
-// Validate inspects the Plan against the refused-feature list,
-// returning a typed UnsupportedFieldError that lists every offending
-// (service, field) site so the user can fix them in a single edit.
-// Calls are side-effect-free; safe to invoke before any backend
-// interaction. Returns nil when the project uses nothing we refuse.
-func (p *Plan) Validate() error {
+// Validate inspects the Plan against the refused-feature list and the
+// backend's Capabilities, returning a typed error on the first refusal
+// found. Calls are side-effect-free; safe to invoke before any backend
+// interaction.
+//
+// Validation order:
+//  1. Hard refusals (§2.2 fields we never implement): one
+//     UnsupportedFieldError listing every offending site.
+//  2. depends_on.condition: service_completed_successfully against a
+//     backend that does not surface exit codes: one
+//     UnsupportedFeatureOnBackendError. This is refused here rather
+//     than at the gate because a backend that reports no exit code
+//     reports zero, which is indistinguishable from a clean exit.
+func (p *Plan) Validate(caps runtime.Capabilities) error {
 	if p == nil || p.Project == nil {
 		return fmt.Errorf("compose.Plan.Validate: nil plan or project")
 	}
-	return refuseUnsupportedFields(p.Project)
+	if err := refuseUnsupportedFields(p.Project); err != nil {
+		return err
+	}
+	return refuseUnsupportedConditions(caps, p.Project)
+}
+
+// refuseUnsupportedConditions refuses depends_on conditions the active
+// backend cannot honour. Only service_completed_successfully is gated:
+// service_healthy is enforced by Orchestrator.waitFor, which can tell
+// "no health reported" from "no healthcheck declared" at the gate.
+func refuseUnsupportedConditions(caps runtime.Capabilities, proj *composetypes.Project) error {
+	if caps.ExitCodes {
+		return nil
+	}
+	for name, svc := range proj.Services {
+		for _, dep := range svc.DependsOn {
+			if dep.Condition == "service_completed_successfully" {
+				return &UnsupportedFeatureOnBackendError{
+					Capability: "ExitCodes",
+					Service:    name,
+					Detail:     "depends_on.condition: service_completed_successfully requires backend exit-code surfacing",
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // refuseUnsupportedFields walks the project and collects every use

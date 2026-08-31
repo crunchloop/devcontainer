@@ -9,25 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- **BREAKING — the per-backend capability gating is removed.** `runtime.Capabilities`
-  and `Runtime.Capabilities()` existed to describe where a backend diverged from
-  Docker: every field's only `false` case was the Apple backend, and `runtime/docker`
-  reported all six remaining fields `true` (`Checkpoint` went with the Podman backend
-  in the entry below). With Docker the only backend the struct was
-  unconditionally all-true, so the code it gated was unreachable. Removed:
-  `runtime.Capabilities`, `Runtime.Capabilities()`, `compose.Plan.Validate`'s
-  `backendName` and `caps` parameters (now `Validate()`),
-  `compose.UnsupportedFeatureOnBackendError`,
-  `compose.VolumeSharedAcrossServicesError`, and `Orchestrator.BackendName` with
-  the `NewOrchestrator` parameter that set it (the Engine already passed `""`; the
-  field's only reader was the deleted error).
-- **compose (native)** — the `/etc/hosts` post-start patch is removed with it. It
-  existed only for backends without service-name DNS (`ServiceNameDNS: false`, Apple
-  only); Docker has built-in DNS aliases on the project network, so the branch was a
-  no-op there and its only coverage was the deleted Apple integration suite.
-  `Plan.Validate` no longer refuses health-gated `depends_on`, namespace-sharing
-  modes, or volumes shared across services — Docker supports all of them, so those
-  refusals could not fire.
+- **BREAKING — `runtime.Capabilities` is cut from six fields to two.** The struct
+  described where a backend diverged from Docker; every field's only `false` case was
+  the Apple backend and `runtime/docker` reported all of them `true`, so most of what
+  it gated was unreachable. What survives is the two behaviours whose absence the
+  orchestrator cannot detect at the point of use: `ExitCodes` (a backend that reports
+  no exit code reports zero, which is indistinguishable from a clean exit) and
+  `ServiceNameDNS` (broken name resolution surfaces inside the container, never at
+  `Up` time). Removed fields: `Healthchecks`, now enforced at the gate instead — see
+  Changed below; `NamespaceSharing` and `SharedVolumes`, where a backend that cannot
+  honour the request fails loudly from the primitive itself, so the plan-time refusal
+  was UX rather than correctness; and `RestartPolicies`, which gated a
+  `WarnRestartPolicyIgnoredOnBackend` event that was never implemented.
+- **BREAKING — `compose.Plan.Validate(caps runtime.Capabilities)`** drops its
+  `backendName` parameter, and `Orchestrator.BackendName` and the `NewOrchestrator`
+  parameter that set it are gone: the Engine passed `""` at all three call sites and
+  the field's only reader was an error message, so it never carried information.
+  `Validate` now refuses exactly one backend-gated feature —
+  `depends_on.condition: service_completed_successfully` against a backend without
+  `ExitCodes`. `compose.UnsupportedFeatureOnBackendError` loses its `Backend` field
+  and `compose.VolumeSharedAcrossServicesError` is removed with the refusal that
+  produced it. The `/etc/hosts` post-start patch behind `ServiceNameDNS` is unchanged
+  and still runs on a backend that reports no service-name DNS.
 - **BREAKING — three `runtime` error types with no remaining producer are removed:**
   `runtime.BuilderUnavailableError` and `runtime.UnsupportedOptionError` (constructed
   only by the Apple backend) and `runtime.ExecFailedError`, which has had no producer

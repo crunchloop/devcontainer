@@ -113,3 +113,29 @@ type CycleError struct {
 func (e *CycleError) Error() string {
 	return fmt.Sprintf("compose: depends_on cycle: %s", strings.Join(e.Cycle, " -> "))
 }
+
+// UnsupportedFeatureOnBackendError is returned by Plan.Validate when
+// the project uses a compose feature the active backend cannot
+// satisfy, as advertised by runtime.Capabilities.
+//
+// Distinct from UnsupportedFieldError (which lists fields we never
+// implement) because the gating is backend-specific and may flip if
+// the backend gains the capability later.
+type UnsupportedFeatureOnBackendError struct {
+	Capability string // Capabilities struct field name (e.g. "ExitCodes")
+	Service    string // service that triggered the refusal
+	Detail     string // one-sentence explanation
+}
+
+func (e *UnsupportedFeatureOnBackendError) Error() string {
+	if e.Service != "" {
+		return fmt.Sprintf(
+			"compose: service %q uses %s, which the active backend does not support: %s",
+			e.Service, e.Capability, e.Detail,
+		)
+	}
+	return fmt.Sprintf(
+		"compose: project uses %s, which the active backend does not support: %s",
+		e.Capability, e.Detail,
+	)
+}
