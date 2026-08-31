@@ -1195,3 +1195,47 @@ func TestUp_HealthGatePassesWithoutDeclaredHealthcheck(t *testing.T) {
 		t.Fatalf("Up: %v", err)
 	}
 }
+
+// TestUp_HealthGateAcceptsDisabledHealthchecks covers the ways a
+// compose service can have a HealthCheckConfig that is nonetheless not
+// an active healthcheck. Each must keep the permissive HealthNone +
+// State=Running fallback, or a valid project would block on its own
+// gate until the health timeout:
+//
+//   - test: ["NONE"] — compose's inline disable. compose-go accepts it
+//     verbatim (loader/validate.go allows CMD, CMD-SHELL and NONE) and
+//     does not fold it into Disable, and runtime/docker forwards it to
+//     docker's NONE sentinel, so docker reports no health for it.
+//   - disable: true — the explicit form.
+//   - no test at all — the image's HEALTHCHECK applies, and the
+//     compose file cannot tell us whether the image declares one.
+func TestUp_HealthGateAcceptsDisabledHealthchecks(t *testing.T) {
+	cases := map[string]*composetypes.HealthCheckConfig{
+		"test_none":  {Test: []string{"NONE"}},
+		"disable":    {Test: []string{"CMD", "true"}, Disable: true},
+		"no_test":    {},
+		"nil_config": nil,
+	}
+	for name, hc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rt := newMockRuntime()
+			orch := NewOrchestrator(rt)
+			orch.HealthTimeout = 100 * time.Millisecond
+			orch.PollInterval = 20 * time.Millisecond
+
+			proj := &composetypes.Project{Services: composetypes.Services{
+				"db": composetypes.ServiceConfig{Name: "db", Image: "alpine", HealthCheck: hc},
+				"app": composetypes.ServiceConfig{
+					Name: "app", Image: "alpine",
+					DependsOn: composetypes.DependsOnConfig{
+						"db": composetypes.ServiceDependency{Condition: "service_healthy", Required: true},
+					},
+				},
+			}}
+
+			if _, err := orch.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-x"}); err != nil {
+				t.Fatalf("Up: %v", err)
+			}
+		})
+	}
+}

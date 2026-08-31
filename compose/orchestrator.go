@@ -505,11 +505,11 @@ func (o *Orchestrator) gateLevel(
 			continue
 		}
 		// Whether the service itself declares an active healthcheck.
-		// Distinguishes "image has no HEALTHCHECK" from "backend does
+		// Distinguishes "no healthcheck to report on" from "backend does
 		// not surface health" below.
 		declaresHealthcheck := false
 		if cfg, ok := plan.Project.Services[svcName]; ok {
-			declaresHealthcheck = cfg.HealthCheck != nil && !cfg.HealthCheck.Disable
+			declaresHealthcheck = declaresActiveHealthcheck(cfg.HealthCheck)
 		}
 		if err := o.waitFor(ctx, svcName, cid, req.condition, declaresHealthcheck, deadline); err != nil {
 			if req.optional {
@@ -930,4 +930,30 @@ func serviceLabelOf(c runtime.Container) string {
 		return v
 	}
 	return c.Name
+}
+
+// declaresActiveHealthcheck reports whether a compose service declares
+// a healthcheck that the backend is expected to produce a status for.
+// Only an explicit, non-disabled test command counts:
+//
+//   - nil / `disable: true` — no healthcheck.
+//   - `test: ["NONE"]` — compose's inline way to disable one.
+//     compose-go's validator accepts NONE verbatim rather than folding
+//     it into Disable, and runtime/docker forwards it to docker's NONE
+//     sentinel, so the container reports HealthNone by design.
+//   - an empty test — the image's own HEALTHCHECK (if any) applies. We
+//     cannot tell from the compose file whether one exists, so this
+//     stays permissive.
+//
+// Only when the service names a real test command does HealthNone
+// unambiguously mean "the backend did not report", which is what
+// waitFor's service_healthy gate keys off.
+func declaresActiveHealthcheck(hc *composetypes.HealthCheckConfig) bool {
+	if hc == nil || hc.Disable {
+		return false
+	}
+	if len(hc.Test) == 0 {
+		return false
+	}
+	return hc.Test[0] != "NONE"
 }

@@ -84,17 +84,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **compose (native)** — the `service_healthy` gate no longer passes when the backend
-  reports no health status for a service that declares a healthcheck.
+  reports no health status for a service that declares an explicit healthcheck test.
   `runtime.HealthStatus` documents `HealthNone` as ambiguous — the image declared no
   `HEALTHCHECK`, or the backend does not surface health at all — and the gate reads it
   as "no healthcheck" so healthcheck-less projects still come up. That reading is
-  wrong when the service declares a healthcheck itself, and previously
+  wrong when the service names a real test command itself, and previously
   `Capabilities.Healthchecks` refused such plans up front. The guarantee now lives at
   the gate: `Orchestrator.waitFor` keeps polling and fails with an explicit error
   rather than starting dependents before the check ever succeeded. Docker is
   unaffected — it reports `starting` / `healthy` / `unhealthy` for any container with
   a healthcheck — but the check now covers every `runtime.Runtime` implementation,
   including one that misreports its own capabilities.
+  Only an explicit, non-`NONE` test command counts as declaring one: `disable: true`,
+  compose's inline `test: ["NONE"]`, and an empty test (where the image's own
+  `HEALTHCHECK` applies) all keep the permissive fallback, so no valid project blocks
+  on its own gate.
 
 ## [0.4.2] - 2026-08-23
 
