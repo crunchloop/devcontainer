@@ -1,9 +1,10 @@
 # Contributing
 
 Thanks for your interest. This project is in early alpha — the API is not
-stable and the public scope is defined by [PRD.md](PRD.md). Issues and PRs
-that fall outside the PRD's scope (see §4 Non-goals) will likely be closed
-with a pointer to the PRD.
+stable and the public scope is summarized by the supported backends and
+spec-compliance matrix in [README.md](README.md). Issues and PRs that fall
+outside the documented scope will likely be closed with a pointer to that
+matrix.
 
 ## Dev setup
 
@@ -34,7 +35,8 @@ make lint
 - Keep PRs focused; one logical change per PR.
 - Run `make lint test` locally before pushing.
 - Add or update tests for behavior changes.
-- Reference the relevant PRD section in the PR description when applicable.
+- Reference the relevant design record or README capability in the PR description when
+  applicable.
 
 ## Reporting issues
 

@@ -16,7 +16,8 @@ the `Fixed` entries in [`CHANGELOG.md`](../../CHANGELOG.md) — each one has alr
 escaped to `main` at least once. Lines that never fire in review should be deleted; a
 checklist nobody reads is worse than a short one.
 
-**Read these first**, from the base ref: [`PRD.md`](../../PRD.md) (scope and non-goals),
+**Read these first**, from the base ref: [`README.md`](../../README.md) (supported
+backends, spec compliance, and out-of-scope capabilities),
 [`CONTRIBUTING.md`](../../CONTRIBUTING.md), and whichever record under
 [`design/`](../../design) the diff touches. A change that contradicts its own design
 record is a finding, and you cannot see that without opening the record.
@@ -146,8 +147,9 @@ Do not file these here:
 
 - Style, formatting, naming, and lint-adjacent nits — `golangci-lint` runs in CI and owns
   them. A finding that `make lint` would have produced is noise.
-- Scope objections already settled by [`PRD.md`](../../PRD.md) §4 Non-goals, and the
-  documented `Known limitations` in the CHANGELOG. Absence of a non-goal is not a defect.
+- Scope objections already settled by the capability matrix and `Out of scope` section in
+  [`README.md`](../../README.md), and the documented `Known limitations` in the CHANGELOG.
+  Absence of a non-goal is not a defect.
 - Dependency version bumps with no code change, beyond an actual incompatibility you can
   point at in the diff.
 - The Swift bridge under `applecontainer-bridge/` unless the diff touches it.
