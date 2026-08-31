@@ -33,6 +33,3 @@ go.work.sum
 # work-in-progress drafts, milestone trackers, etc.
 PRD.md
 design/private/
-
-# Local applecontainer working directory (not committed).
-examples/applecontainer-spike/

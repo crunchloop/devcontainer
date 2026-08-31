@@ -20,7 +20,7 @@ func dockerCaps() runtime.Capabilities {
 	}
 }
 
-func appleCaps() runtime.Capabilities {
+func limitedCaps() runtime.Capabilities {
 	return runtime.Capabilities{}
 }
 
@@ -95,7 +95,7 @@ func TestValidate_AcceptsScaleOne(t *testing.T) {
 	}
 }
 
-func TestValidate_RefusesHealthyOnAppleCaps(t *testing.T) {
+func TestValidate_RefusesHealthyOnLimitedCaps(t *testing.T) {
 	proj := &composetypes.Project{
 		Services: composetypes.Services{
 			"app": composetypes.ServiceConfig{
@@ -107,7 +107,7 @@ func TestValidate_RefusesHealthyOnAppleCaps(t *testing.T) {
 		},
 	}
 	p := &Plan{Project: proj, ProjectName: "dc-x"}
-	err := p.Validate("applecontainer", appleCaps())
+	err := p.Validate("limited", limitedCaps())
 	var bad *UnsupportedFeatureOnBackendError
 	if !errors.As(err, &bad) {
 		t.Fatalf("want *UnsupportedFeatureOnBackendError, got %T: %v", err, err)
@@ -117,7 +117,7 @@ func TestValidate_RefusesHealthyOnAppleCaps(t *testing.T) {
 	}
 }
 
-func TestValidate_RefusesCompletedSuccessfullyOnAppleCaps(t *testing.T) {
+func TestValidate_RefusesCompletedSuccessfullyOnLimitedCaps(t *testing.T) {
 	proj := &composetypes.Project{
 		Services: composetypes.Services{
 			"app": composetypes.ServiceConfig{
@@ -129,7 +129,7 @@ func TestValidate_RefusesCompletedSuccessfullyOnAppleCaps(t *testing.T) {
 		},
 	}
 	p := &Plan{Project: proj, ProjectName: "dc-x"}
-	err := p.Validate("applecontainer", appleCaps())
+	err := p.Validate("limited", limitedCaps())
 	var bad *UnsupportedFeatureOnBackendError
 	if !errors.As(err, &bad) {
 		t.Fatalf("want *UnsupportedFeatureOnBackendError, got %T: %v", err, err)
@@ -139,9 +139,9 @@ func TestValidate_RefusesCompletedSuccessfullyOnAppleCaps(t *testing.T) {
 	}
 }
 
-func TestValidate_AcceptsServiceStartedOnAppleCaps(t *testing.T) {
+func TestValidate_AcceptsServiceStartedOnLimitedCaps(t *testing.T) {
 	// service_started is the v1 / default condition — no health
-	// gate, just "exists." Apple caps must allow it.
+	// gate, just "exists." Limited caps must allow it.
 	proj := &composetypes.Project{
 		Services: composetypes.Services{
 			"app": composetypes.ServiceConfig{
@@ -154,12 +154,12 @@ func TestValidate_AcceptsServiceStartedOnAppleCaps(t *testing.T) {
 		},
 	}
 	p := &Plan{Project: proj, ProjectName: "dc-x"}
-	if err := p.Validate("applecontainer", appleCaps()); err != nil {
+	if err := p.Validate("limited", limitedCaps()); err != nil {
 		t.Errorf("service_started must be accepted: %v", err)
 	}
 }
 
-func TestValidate_RefusesNamespaceSharingOnAppleCaps(t *testing.T) {
+func TestValidate_RefusesNamespaceSharingOnLimitedCaps(t *testing.T) {
 	proj := &composetypes.Project{
 		Services: composetypes.Services{
 			"app":     composetypes.ServiceConfig{Name: "app", Image: "alpine", NetworkMode: "service:primary"},
@@ -167,7 +167,7 @@ func TestValidate_RefusesNamespaceSharingOnAppleCaps(t *testing.T) {
 		},
 	}
 	p := &Plan{Project: proj, ProjectName: "dc-x"}
-	err := p.Validate("applecontainer", appleCaps())
+	err := p.Validate("limited", limitedCaps())
 	var bad *UnsupportedFeatureOnBackendError
 	if !errors.As(err, &bad) {
 		t.Fatalf("want *UnsupportedFeatureOnBackendError, got %T: %v", err, err)
@@ -177,7 +177,7 @@ func TestValidate_RefusesNamespaceSharingOnAppleCaps(t *testing.T) {
 	}
 }
 
-func TestValidate_RefusesSharedVolumeOnAppleCaps(t *testing.T) {
+func TestValidate_RefusesSharedVolumeOnLimitedCaps(t *testing.T) {
 	proj := &composetypes.Project{
 		Volumes: composetypes.Volumes{
 			"data": composetypes.VolumeConfig{Name: "data"},
@@ -198,7 +198,7 @@ func TestValidate_RefusesSharedVolumeOnAppleCaps(t *testing.T) {
 		},
 	}
 	p := &Plan{Project: proj, ProjectName: "dc-x"}
-	err := p.Validate("applecontainer", appleCaps())
+	err := p.Validate("limited", limitedCaps())
 	var bad *VolumeSharedAcrossServicesError
 	if !errors.As(err, &bad) {
 		t.Fatalf("want *VolumeSharedAcrossServicesError, got %T: %v", err, err)
@@ -226,7 +226,7 @@ func TestValidate_AcceptsSingleServiceVolume(t *testing.T) {
 		},
 	}
 	p := &Plan{Project: proj, ProjectName: "dc-x"}
-	if err := p.Validate("applecontainer", appleCaps()); err != nil {
+	if err := p.Validate("limited", limitedCaps()); err != nil {
 		t.Errorf("single-service volume must be accepted: %v", err)
 	}
 }

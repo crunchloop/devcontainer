@@ -370,11 +370,10 @@ func (o *Orchestrator) Down(ctx context.Context, plan *DownPlan) error {
 		}
 	}
 
-	// Remove the project network. Both backends accept the network
-	// name (docker's NetworkRemove and apple's NetworkClient.delete
-	// both resolve by id-or-name; our CreateNetwork uses
+	// Remove the project network by name. Docker's NetworkRemove
+	// resolves by id-or-name, and our CreateNetwork uses
 	// <project>_default as the name + id, so RemoveNetwork with the
-	// same string works). The call is idempotent — missing-network
+	// same string works. The call is idempotent — missing-network
 	// errors are swallowed at the backend.
 	_ = o.rt.RemoveNetwork(ctx, plan.ProjectName+"_default")
 

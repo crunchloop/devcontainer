@@ -5,7 +5,7 @@ package runtime
 // compose orchestrator (compose/) drives. The methods themselves are
 // declared on the Runtime interface in runtime.go; this file holds
 // the input/output shapes so backends can translate without leaking
-// Docker-API or Apple-bridge types into the orchestrator.
+// Docker-API types into the orchestrator.
 //
 // Naming follows the existing Spec/Details pattern: backends accept
 // *Spec inputs and return their backend ID or a typed error.
@@ -27,8 +27,8 @@ type NetworkSpec struct {
 	Labels map[string]string
 
 	// Driver selects the backend's network driver. Empty string means
-	// "backend default" (bridge on docker; vmnet-based default on
-	// apple). Non-default drivers are out of scope for v1.
+	// "backend default" (bridge on docker). Non-default drivers are
+	// out of scope for v1.
 	Driver string
 
 	// Options is the driver-options string map (compose's
@@ -50,7 +50,7 @@ type VolumeSpec struct {
 	Labels map[string]string
 
 	// Driver selects the backend's volume driver. Empty = backend
-	// default (local on docker; the file-backed driver on apple).
+	// default (local on docker).
 	Driver string
 
 	// Options is the driver-options string map. Pass-through.
@@ -63,8 +63,8 @@ type VolumeSpec struct {
 type LabelFilter struct {
 	// Match is the AND set: every key must be present on the
 	// resource AND its value must equal the requested value.
-	// Implementations that lack server-side filtering (apple, per
-	// design probe R1b) translate this client-side after enumeration.
+	// Implementations that lack server-side filtering translate this
+	// client-side after enumeration.
 	Match map[string]string
 }
 

@@ -8,6 +8,14 @@ orchestrator under `compose/` so the compose source path works against any
 `runtime.Runtime` backend — including `runtime/applecontainer`, which has no
 compose plugin and no Docker-API socket.
 
+> **On the companion records cited below.** `design/runtime-applecontainer.md` was
+> deleted along with the Apple Containers backend it described; it remains readable
+> in git history at tag `v0.4.3`. `design/compose.md` and `design/status.md` are
+> named here as companions but never landed in the repository. Per
+> `design/README.md`, this document records the state of the world as of its date
+> and is not kept in sync with `main`, so references to those three files — and to
+> their section numbers — are historical citations, not links you can open.
+
 Companion to `design/compose.md` (the existing shell-out path, kept as the
 historical record and the §13 "future Go-native" sketch that this design
 supersedes) and `design/runtime-applecontainer.md` (the second backend whose
