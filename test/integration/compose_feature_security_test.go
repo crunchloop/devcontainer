@@ -129,7 +129,7 @@ func TestComposeSource_FeatureSecurityOptionsApplied(t *testing.T) {
 			if !details.Privileged {
 				t.Error("container is not privileged; feature privileged:true was not applied to the compose service")
 			}
-			// Docker/podman normalize capability names to the CAP_-prefixed
+			// Docker normalizes capability names to the CAP_-prefixed
 			// form in inspect output (SYS_ADMIN -> CAP_SYS_ADMIN), so compare
 			// with the prefix stripped.
 			if !hasCapability(details.CapAdd, "SYS_ADMIN") {
