@@ -168,8 +168,7 @@ type Runtime interface {
 	// ListContainers returns containers matching every label in the
 	// filter. Empty filter is rejected — we never want to enumerate
 	// all containers. Implementations without server-side filtering
-	// (e.g. applecontainer per design probe R1b) filter client-side
-	// after a full enumeration.
+	// filter client-side after a full enumeration.
 	ListContainers(ctx context.Context, filter LabelFilter) ([]Container, error)
 
 	// ListImages returns local images matching the filter. Used by
@@ -239,8 +238,8 @@ type ContainerDetails struct {
 	// from the backend's inspect (docker HostConfig). Lets callers
 	// verify that RunSpec.Privileged/CapAdd/SecurityOpt — including the
 	// values merged from feature metadata onto compose services — landed
-	// on the real container. Backends that don't surface these (e.g.
-	// applecontainer) leave them at zero values.
+	// on the real container. Backends that don't surface these leave
+	// them at zero values.
 	Privileged  bool
 	CapAdd      []string
 	SecurityOpt []string
@@ -352,11 +351,10 @@ type RunSpec struct {
 	HealthCheck *HealthCheckSpec
 
 	// Networks lists project networks the container joins. Empty
-	// means "backend default" — docker assigns the default bridge;
-	// apple assigns the built-in vmnet network. Used by the compose
-	// orchestrator to attach services to the project network it
-	// just created via CreateNetwork. Mutually exclusive with
-	// NetworkMode.
+	// means "backend default" — docker assigns the default bridge.
+	// Used by the compose orchestrator to attach services to the
+	// project network it just created via CreateNetwork. Mutually
+	// exclusive with NetworkMode.
 	Networks []string
 
 	// NetworkMode, PidMode and IpcMode carry the container's kernel
@@ -388,23 +386,18 @@ type RunSpec struct {
 	OverrideCommand bool
 
 	// MemoryBytes is the hard memory limit for the container, in bytes.
-	// Zero means "unset": the backend's own default applies — for docker
-	// that's no cgroup limit; for apple it's the apiserver's per-VM
-	// default (1 GiB on 0.12.x). Negative values are rejected by the
-	// backend.
+	// Zero means "unset": the backend's own default applies — for
+	// docker that's no cgroup limit. Negative values are rejected by
+	// the backend.
 	//
-	// On apple, this sizes the per-container VM at boot; the guest
-	// kernel sees exactly this much memory and the value cannot be
-	// resized without container recreation. On docker, this maps to
-	// HostConfig.Memory and is enforced by cgroups.
+	// On docker, this maps to HostConfig.Memory and is enforced by
+	// cgroups.
 	MemoryBytes int64
 
 	// NanoCPUs is the CPU limit expressed in nano-units: 1_000_000_000
 	// = one full CPU, 2_500_000_000 = 2.5 CPUs. Matches docker's
 	// HostConfig.NanoCPUs convention so a single field works across
-	// backends. Zero means "unset". Apple's apiserver takes an integer
-	// CPU count, so the value is rounded up to the next whole CPU at
-	// the bridge boundary (e.g. 1_500_000_000 → 2 cpus).
+	// backends. Zero means "unset".
 	NanoCPUs int64
 }
 

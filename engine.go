@@ -94,7 +94,7 @@ const (
 	// ComposeBackendShellout (default) uses runtime.ComposeRuntime
 	// — `docker compose` v2 plugin under the hood. Reliable for
 	// Docker, refused-with-typed-error for backends that don't
-	// implement the sub-interface (i.e. applecontainer).
+	// implement the sub-interface.
 	ComposeBackendShellout ComposeBackend = 0
 
 	// ComposeBackendNative uses compose.Orchestrator driving

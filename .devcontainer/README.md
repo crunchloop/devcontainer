@@ -39,16 +39,11 @@ The prebuild image provides everything the Linux CI jobs need:
   `docker` / `docker compose` from inside the container.
 - **GitHub CLI** and `make`.
 
-> The Apple `container` backend (`runtime/applecontainer`) is darwin/arm64-only
-> and cannot be built inside this Linux container — exactly as on the Linux CI
-> jobs, where `make bridge` is a no-op. Use a native macOS checkout for that
-> backend.
-
 ## Common tasks
 
 ```bash
 make lint              # golangci-lint run ./...
-make test              # go test -race ./...   (bridge is a no-op on Linux)
+make test              # go test -race ./...
 make test-integration  # docker-backed integration suite
 ```
 

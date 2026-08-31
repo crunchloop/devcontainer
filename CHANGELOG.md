@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **BREAKING — the Apple Containers backend is removed.** `runtime/applecontainer`
+  and the `applecontainer-bridge` Swift package (reached through a cgo shim) are
+  deleted, along with the `--runtime applecontainer` CLI value: `--runtime` now
+  accepts `docker` only, and any other value is refused with
+  `unknown runtime %q (want docker)`. The backend was darwin/arm64-only, could not
+  be built or exercised on Linux CI. Its CI jobs were already removed earlier in
+  this same unreleased line, which is also when Docker became the only documented
+  backend. Also gone:
+  the `bridge` / `bridge-clean` Makefile targets (and the `test` /
+  `test-integration` dependency on them, so neither target shells out to `swift`
+  any more) and the eight `test/integration/applecontainer_*_test.go` suites.
+- The design record `design/runtime-applecontainer.md` is deleted with the code it
+  described, and its row removed from the `design/` index. It remains readable in
+  git history at tag `v0.4.3`. `design/compose-native.md` keeps its Apple sections:
+  per `design/README.md` those records document the state of the world when
+  written, and the probe results and rejected alternatives in them are still the
+  reasoning behind the compose orchestrator's shape.
 - **BREAKING — checkpoint/restore is gone.** The feature only ever
   worked on Podman (docker's restore is broken upstream on
   containerd-integrated engines), and the Podman backend existed to

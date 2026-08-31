@@ -369,9 +369,9 @@ func deployUnsupported(service string, d *composetypes.DeployConfig) []Unsupport
 
 // resourcesUnsupported refuses anything inside deploy.resources beyond
 // limits.memory and limits.cpus. Reservations are silently dropped on
-// our runtimes today (apple has no equivalent; docker honors them but
-// we don't currently translate them), so refusing them surfaces the
-// silent loss to the user.
+// our runtimes today (docker honors them but we don't currently
+// translate them), so refusing them surfaces the silent loss to the
+// user.
 func resourcesUnsupported(service string, r composetypes.Resources) []UnsupportedField {
 	var out []UnsupportedField
 	if r.Reservations != nil {

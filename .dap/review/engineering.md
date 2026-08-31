@@ -38,7 +38,7 @@ and is never read at the boundary produces a devcontainer that silently ignores 
   devcontainers — the daemon came up unprivileged and its entrypoint never ran (#103).
 - The inverse counts too: a value read at the boundary that no parsing path can ever set.
 
-## R2. Path parity — native, shell-out, and each backend
+## R2. Path parity — native, shell-out, and the backend boundary
 
 Refines `D1`. This repository implements the same behaviour more than once by design.
 
@@ -46,10 +46,10 @@ Refines `D1`. This repository implements the same behaviour more than once by de
   (`docker compose`). A fix, guard, or flag added to one and not the other is a finding —
   name the sibling call site and say what it does instead. Both paths carried the same
   recreate bug (#71, #72) and the same entrypoint gap (#103).
-- **runtime** has `docker` and `applecontainer` backends behind one interface.
-  A change to shared orchestration must state what each backend does with it; a change
-  inside one backend must say whether the other needs the same. Apple diverges from
-  Docker in ways that have already broken workspaces (below).
+- **runtime** has one backend today — `docker` — behind the `runtime.Runtime`
+  interface. Shared orchestration (engine, compose) must reach it through that
+  interface; a diff that leaks Docker-specific behaviour into shared code is a
+  finding, because the interface is what keeps a second backend possible.
 - A capability flag on `Capabilities()` (`ServiceNameDNS`, for instance) is the
   legitimate way to encode divergence. A silent assumption that all backends behave like
   Docker is not.
@@ -150,4 +150,3 @@ Do not file these here:
   documented `Known limitations` in the CHANGELOG. Absence of a non-goal is not a defect.
 - Dependency version bumps with no code change, beyond an actual incompatibility you can
   point at in the diff.
-- The Swift bridge under `applecontainer-bridge/` unless the diff touches it.

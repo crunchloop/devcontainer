@@ -20,8 +20,7 @@ work shipped.
 | --- | --- |
 | [`resolved-config.md`](resolved-config.md) | The `ResolvedConfig` type — the central data structure that flows out of `devcontainer.Resolve` into every downstream package. Locks down the data shape, the parse → merge → substitute pipeline, and `Source` polymorphism. |
 | [`runtime.md`](runtime.md) | The `runtime.Runtime` interface, the `Workspace` value object, the `Engine` layer, container-context substitution, and lifecycle idempotency. The boundary that makes a second backend possible. |
-| [`runtime-applecontainer.md`](runtime-applecontainer.md) | The second `Runtime` backend: Apple's `container` stack on macOS via a cgo + Swift bridge. Daemon model, bridge ABI, version pinning, build constraints. |
-| [`compose-native.md`](compose-native.md) | The runtime-agnostic compose orchestrator that drives any backend through `runtime.Runtime` primitives. Replaces (when opted in) the `docker compose` shell-out, and is what enables compose source on apple-container. |
+| [`compose-native.md`](compose-native.md) | The runtime-agnostic compose orchestrator that drives any backend through `runtime.Runtime` primitives. Replaces (when opted in) the `docker compose` shell-out. |
 | [`features.md`](features.md) | The Dev Container Features pipeline: OCI / HTTPS / local resolution, DAG ordering, dockerfile generation, the pre-baked-image fast path, and the content-addressed cache. |
 | [`structured-errors.md`](structured-errors.md) | The `*devcontainer.Error` surface returned from every public failure path. Code catalog, `Cause` chain conventions, and the `StderrCarrier` interface for subprocess-output access. |
 

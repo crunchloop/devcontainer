@@ -33,7 +33,7 @@ func newRootCmd() *cobra.Command {
 	pf := cmd.PersistentFlags()
 	pf.StringVar(&f.workspaceFolder, "workspace-folder", "", "Path to the project workspace (defaults to current directory)")
 	pf.StringVar(&f.configPath, "config", "", "Path to devcontainer.json (defaults to .devcontainer/devcontainer.json under the workspace)")
-	pf.StringVar(&f.runtimeName, "runtime", "docker", "Container backend: docker | applecontainer")
+	pf.StringVar(&f.runtimeName, "runtime", "docker", "Container backend: docker")
 	pf.StringVar(&f.logLevel, "log-level", "info", "Log verbosity: info | debug | trace")
 
 	cmd.AddCommand(
@@ -92,10 +92,8 @@ func (f *rootFlags) newRuntime(ctx context.Context) (runtime.Runtime, func(), er
 			return nil, nil, fmt.Errorf("docker runtime: %w", err)
 		}
 		return rt, func() { _ = rt.Close() }, nil
-	case "applecontainer":
-		return newAppleContainerRuntime(ctx)
 	default:
-		return nil, nil, fmt.Errorf("unknown runtime %q (want docker | applecontainer)", f.runtimeName)
+		return nil, nil, fmt.Errorf("unknown runtime %q (want docker)", f.runtimeName)
 	}
 }
 

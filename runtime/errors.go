@@ -96,10 +96,10 @@ func (e *DaemonUnavailableError) Unwrap() error { return e.Err }
 // component is missing or not running. Distinct from
 // DaemonUnavailableError because the build engine is typically a
 // separate process / VM that can be started independently (e.g.
-// Apple's `container builder start`, Docker's BuildKit daemon).
+// Docker's BuildKit daemon).
 type BuilderUnavailableError struct {
 	// Hint is a backend-specific message telling the user how to
-	// remediate (e.g. "run `container builder start`").
+	// remediate (e.g. "start the BuildKit daemon").
 	Hint string
 	Err  error
 }

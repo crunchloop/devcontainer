@@ -71,7 +71,7 @@ func sortFields(in []UnsupportedField) []UnsupportedField {
 // implement) because the gating is backend-specific and may flip if
 // the backend gains the capability later.
 type UnsupportedFeatureOnBackendError struct {
-	Backend    string // backend display name (e.g. "applecontainer")
+	Backend    string // backend display name (e.g. "docker")
 	Capability string // Capabilities struct field name (e.g. "Healthchecks")
 	Service    string // service that triggered the refusal
 	Detail     string // one-sentence explanation
@@ -92,9 +92,7 @@ func (e *UnsupportedFeatureOnBackendError) Error() string {
 
 // VolumeSharedAcrossServicesError is returned by Plan.Validate when
 // the project mounts a single named volume into 2+ services and the
-// active backend's Capabilities().SharedVolumes is false (today:
-// applecontainer, due to ext4-on-disk-image multi-attach
-// restrictions per design probe 4).
+// active backend's Capabilities().SharedVolumes is false.
 type VolumeSharedAcrossServicesError struct {
 	Volume   string
 	Services []string // sorted
