@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,13 +21,8 @@ import (
 // (container exit codes, label-stored hashes), and supports
 // concurrent access from the orchestrator's within-level parallel
 // service starts.
-//
-// Capabilities default to docker-baseline (all true). Override via
-// the Caps field per test.
 type mockRuntime struct {
 	mu sync.Mutex
-
-	Caps runtime.Capabilities
 
 	// Resources
 	networks   map[string]map[string]string // name -> labels
@@ -34,6 +30,10 @@ type mockRuntime struct {
 	containers map[string]*mockContainer    // id -> container
 
 	// Call log for assertions
+	// Caps is what Capabilities() reports. newMockRuntime defaults to
+	// the docker baseline; tests exercising the fallback paths set it.
+	Caps runtime.Capabilities
+
 	createNetworkCalls int
 	createVolumeCalls  int
 	runCalls           int
@@ -64,7 +64,7 @@ type mockContainer struct {
 
 func newMockRuntime() *mockRuntime {
 	return &mockRuntime{
-		Caps:       runtime.Capabilities{Healthchecks: true, ExitCodes: true, NamespaceSharing: true, RestartPolicies: true, SharedVolumes: true, ServiceNameDNS: true},
+		Caps:       runtime.Capabilities{Healthchecks: true, ExitCodes: true, ServiceNameDNS: true},
 		networks:   map[string]map[string]string{},
 		volumes:    map[string]map[string]string{},
 		containers: map[string]*mockContainer{},
@@ -166,6 +166,10 @@ func (m *mockRuntime) InspectContainer(ctx context.Context, id string) (*runtime
 	return d, nil
 }
 
+func (m *mockRuntime) Capabilities() runtime.Capabilities {
+	return m.Caps
+}
+
 func (m *mockRuntime) InspectImage(ctx context.Context, ref string) (*runtime.ImageDetails, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -250,10 +254,6 @@ func (m *mockRuntime) RemoveImage(ctx context.Context, ref string) error {
 	return nil
 }
 
-func (m *mockRuntime) Capabilities() runtime.Capabilities {
-	return m.Caps
-}
-
 // labelsSuperset is the same predicate as docker's labelsMatch, kept
 // local so test mocks don't import runtime/docker.
 func labelsSuperset(have, want map[string]string) bool {
@@ -285,7 +285,7 @@ func newProject(t *testing.T, deps map[string][]string) *composetypes.Project {
 
 func TestUp_SingleService(t *testing.T) {
 	rt := newMockRuntime()
-	orch := NewOrchestrator(rt, "docker")
+	orch := NewOrchestrator(rt)
 	proj := newProject(t, map[string][]string{"app": nil})
 
 	res, err := orch.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-x"})
@@ -334,7 +334,7 @@ func TestServiceToRunSpec_CarriesSecurityFields(t *testing.T) {
 
 func TestUp_DependencyOrder(t *testing.T) {
 	rt := newMockRuntime()
-	orch := NewOrchestrator(rt, "docker")
+	orch := NewOrchestrator(rt)
 	proj := newProject(t, map[string][]string{
 		"db":  nil,
 		"api": {"db"},
@@ -367,7 +367,7 @@ func TestUp_DependencyOrder(t *testing.T) {
 
 func TestUp_IdempotentReuseOnHashMatch(t *testing.T) {
 	rt := newMockRuntime()
-	orch := NewOrchestrator(rt, "docker")
+	orch := NewOrchestrator(rt)
 	proj := newProject(t, map[string][]string{"app": nil})
 	plan := &Plan{Project: proj, ProjectName: "dc-x"}
 
@@ -386,7 +386,7 @@ func TestUp_IdempotentReuseOnHashMatch(t *testing.T) {
 
 func TestUp_RecreateOnHashChange(t *testing.T) {
 	rt := newMockRuntime()
-	orch := NewOrchestrator(rt, "docker")
+	orch := NewOrchestrator(rt)
 	proj := newProject(t, map[string][]string{"app": nil})
 
 	if _, err := orch.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-x"}); err != nil {
@@ -420,7 +420,7 @@ func TestUp_RecreateOnHashChange(t *testing.T) {
 // a `docker pull`.
 func TestUp_RecreateOnImageDigestChange(t *testing.T) {
 	rt := newMockRuntime()
-	orch := NewOrchestrator(rt, "docker")
+	orch := NewOrchestrator(rt)
 	proj := newProject(t, map[string][]string{"app": nil})
 	plan := &Plan{Project: proj, ProjectName: "dc-x"}
 
@@ -455,7 +455,7 @@ func TestUp_RecreateOnImageDigestChange(t *testing.T) {
 // (issue #71).
 func TestUp_StartsStoppedContainerOnConfigMatch(t *testing.T) {
 	rt := newMockRuntime()
-	orch := NewOrchestrator(rt, "docker")
+	orch := NewOrchestrator(rt)
 	proj := newProject(t, map[string][]string{"app": nil})
 	plan := &Plan{Project: proj, ProjectName: "dc-x"}
 
@@ -506,7 +506,7 @@ func TestUp_PartialFailureSurfacesPartialError(t *testing.T) {
 		}
 		return nil, nil
 	}
-	orch := NewOrchestrator(rt, "docker")
+	orch := NewOrchestrator(rt)
 	proj := newProject(t, map[string][]string{
 		"db":  nil,
 		"api": {"db"},
@@ -533,7 +533,7 @@ func TestUp_HealthGateTimesOut(t *testing.T) {
 		base.State = runtime.StateCreated
 		return base
 	}
-	orch := NewOrchestrator(rt, "docker")
+	orch := NewOrchestrator(rt)
 	orch.HealthTimeout = 100 * time.Millisecond
 	orch.PollInterval = 20 * time.Millisecond
 
@@ -575,7 +575,7 @@ func TestUp_OptionalDependencySkipsOnTimeout(t *testing.T) {
 		base.State = runtime.StateCreated
 		return base
 	}
-	orch := NewOrchestrator(rt, "docker")
+	orch := NewOrchestrator(rt)
 	orch.HealthTimeout = 50 * time.Millisecond
 	orch.PollInterval = 10 * time.Millisecond
 
@@ -604,7 +604,7 @@ func TestUp_OptionalDependencySkipsOnTimeout(t *testing.T) {
 
 func TestUp_RefusesUnsupportedFields(t *testing.T) {
 	rt := newMockRuntime()
-	orch := NewOrchestrator(rt, "docker")
+	orch := NewOrchestrator(rt)
 	proj := &composetypes.Project{
 		Services: composetypes.Services{
 			"app": composetypes.ServiceConfig{Name: "app", Image: "alpine", Deploy: &composetypes.DeployConfig{Mode: "global"}},
@@ -643,7 +643,7 @@ func TestDown_RemovesProjectContainers(t *testing.T) {
 		labels: map[string]string{LabelComposeProject: "other"},
 	}
 
-	orch := NewOrchestrator(rt, "docker")
+	orch := NewOrchestrator(rt)
 	if err := orch.Down(context.Background(), &DownPlan{ProjectName: "dc-x"}); err != nil {
 		t.Fatalf("Down: %v", err)
 	}
@@ -707,7 +707,7 @@ func TestDown_ReverseTopoOrder(t *testing.T) {
 		stopFunc:    origStop,
 	}
 
-	orch := NewOrchestrator(wrapped, "docker")
+	orch := NewOrchestrator(wrapped)
 	proj := newProject(t, map[string][]string{
 		"db":  nil,
 		"api": {"db"},
@@ -754,7 +754,7 @@ func TestUp_AnonymousVolumesFlowThrough(t *testing.T) {
 		}
 		return nil, nil
 	}
-	orch := NewOrchestrator(rt, "docker")
+	orch := NewOrchestrator(rt)
 	svc := composetypes.ServiceConfig{
 		Name:  "app",
 		Image: "alpine",
@@ -848,7 +848,7 @@ func TestUp_ResourceLimitsTranslate(t *testing.T) {
 				seen = spec
 				return nil, nil
 			}
-			orch := NewOrchestrator(rt, "docker")
+			orch := NewOrchestrator(rt)
 			svc := composetypes.ServiceConfig{Name: "app", Image: "alpine"}
 			tc.mut(&svc)
 			proj := &composetypes.Project{Services: composetypes.Services{"app": svc}}
@@ -871,7 +871,7 @@ func TestUp_ResourceLimitsTranslate(t *testing.T) {
 // teardown would leak the project network.
 func TestDown_RemovesProjectNetwork(t *testing.T) {
 	rt := newMockRuntime()
-	orch := NewOrchestrator(rt, "docker")
+	orch := NewOrchestrator(rt)
 	proj := newProject(t, map[string][]string{"app": nil})
 	plan := &Plan{Project: proj, ProjectName: "dc-x"}
 	if _, err := orch.Up(context.Background(), plan); err != nil {
@@ -895,7 +895,7 @@ func TestDown_RemovesProjectNetwork(t *testing.T) {
 
 func TestDown_Idempotent(t *testing.T) {
 	rt := newMockRuntime()
-	orch := NewOrchestrator(rt, "docker")
+	orch := NewOrchestrator(rt)
 	// Project never up; Down must be a clean no-op.
 	if err := orch.Down(context.Background(), &DownPlan{ProjectName: "dc-x"}); err != nil {
 		t.Errorf("Down on empty: %v", err)
@@ -911,7 +911,7 @@ func TestDown_Idempotent(t *testing.T) {
 // adoption only ever applies to reattach/resume flows.
 func TestUp_AdoptsForeignContainerWithoutOurLabels(t *testing.T) {
 	rt := newMockRuntime()
-	orch := NewOrchestrator(rt, "docker")
+	orch := NewOrchestrator(rt)
 	proj := newProject(t, map[string][]string{"app": nil})
 
 	rt.containers["legacy-1"] = &mockContainer{
@@ -946,7 +946,7 @@ func TestUp_AdoptsForeignContainerWithoutOurLabels(t *testing.T) {
 // hands-off.
 func TestUp_AdoptsRunningForeignContainerWithoutStarting(t *testing.T) {
 	rt := newMockRuntime()
-	orch := NewOrchestrator(rt, "docker")
+	orch := NewOrchestrator(rt)
 	proj := newProject(t, map[string][]string{"app": nil})
 
 	rt.containers["legacy-2"] = &mockContainer{
@@ -976,7 +976,7 @@ func TestUp_AdoptsRunningForeignContainerWithoutStarting(t *testing.T) {
 // namespace targets) come up too.
 func TestUp_RestrictedServicesStartDependencyClosure(t *testing.T) {
 	rt := newMockRuntime()
-	orch := NewOrchestrator(rt, "docker")
+	orch := NewOrchestrator(rt)
 	proj := newProject(t, map[string][]string{
 		"db":       nil,
 		"app":      {"db"},
@@ -1014,7 +1014,7 @@ func TestServiceClosure_FollowsNamespaceEdges(t *testing.T) {
 // the project network — `none` in particular is an isolation request.
 func TestUp_NetworkModeCarriedAndProjectNetworkSkipped(t *testing.T) {
 	rt := newMockRuntime()
-	orch := NewOrchestrator(rt, "docker")
+	orch := NewOrchestrator(rt)
 	proj := newProject(t, map[string][]string{"app": nil, "sandboxed": nil})
 	sandboxed := proj.Services["sandboxed"]
 	sandboxed.NetworkMode = "none"
@@ -1051,7 +1051,7 @@ func TestUp_NetworkModeCarriedAndProjectNetworkSkipped(t *testing.T) {
 // topo order guarantees exists by the time the dependent is created.
 func TestUp_ServiceNetworkModeResolvesToContainer(t *testing.T) {
 	rt := newMockRuntime()
-	orch := NewOrchestrator(rt, "docker")
+	orch := NewOrchestrator(rt)
 	proj := newProject(t, map[string][]string{"proxy": nil, "app": nil})
 	app := proj.Services["app"]
 	app.NetworkMode = "service:proxy"
@@ -1082,7 +1082,7 @@ func TestUp_ServiceNetworkModeResolvesToContainer(t *testing.T) {
 // keep the container (and its upperdir + anon volumes) anyway.
 func TestUp_AdoptExistingReusesDespiteHashDrift(t *testing.T) {
 	rt := newMockRuntime()
-	orch := NewOrchestrator(rt, "docker")
+	orch := NewOrchestrator(rt)
 	proj := newProject(t, map[string][]string{"app": nil})
 
 	// A prior orchestrator-made container whose stored hash is stale.
@@ -1120,7 +1120,7 @@ func TestUp_AdoptExistingReusesDespiteHashDrift(t *testing.T) {
 // Without AdoptExisting, hash drift still recreates (guards the default path).
 func TestUp_NoAdoptRecreatesOnHashDrift(t *testing.T) {
 	rt := newMockRuntime()
-	orch := NewOrchestrator(rt, "docker")
+	orch := NewOrchestrator(rt)
 	proj := newProject(t, map[string][]string{"app": nil})
 	rt.containers["old-1"] = &mockContainer{
 		id: "old-1", name: "dc-x-app-1", image: "alpine",
@@ -1135,5 +1135,170 @@ func TestUp_NoAdoptRecreatesOnHashDrift(t *testing.T) {
 	}
 	if rt.removeCalls == 0 {
 		t.Error("expected recreate (remove) on hash drift without AdoptExisting")
+	}
+}
+
+// TestUp_HealthGateRefusesUnreportedHealth pins the contract for a
+// backend that does not surface health status. runtime.HealthStatus
+// documents HealthNone as ambiguous — either the image declared no
+// HEALTHCHECK, or the backend reports no health at all — and the gate
+// treats it as satisfied so healthcheck-less projects come up. When
+// the service declares a healthcheck of its own, that reading is
+// unavailable: passing the gate would start dependents before the
+// check ever succeeded. Until #128 removed the capability gating,
+// Plan.Validate refused these plans up front via
+// Capabilities.Healthchecks; this asserts the guarantee survives at
+// the gate that needs it, for any Runtime implementation.
+func TestUp_HealthGateRefusesUnreportedHealth(t *testing.T) {
+	// mockRuntime's inspect reports State=Running with the zero
+	// HealthStatus, which IS runtime.HealthNone.
+	rt := newMockRuntime()
+	orch := NewOrchestrator(rt)
+	orch.HealthTimeout = 100 * time.Millisecond
+	orch.PollInterval = 20 * time.Millisecond
+
+	proj := &composetypes.Project{Services: composetypes.Services{
+		"db": composetypes.ServiceConfig{
+			Name: "db", Image: "alpine",
+			HealthCheck: &composetypes.HealthCheckConfig{Test: []string{"CMD", "true"}},
+		},
+		"app": composetypes.ServiceConfig{
+			Name: "app", Image: "alpine",
+			DependsOn: composetypes.DependsOnConfig{
+				"db": composetypes.ServiceDependency{Condition: "service_healthy", Required: true},
+			},
+		},
+	}}
+
+	_, err := orch.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-x"})
+	if err == nil {
+		t.Fatal("want an error: the backend never reported health for a service that declares one")
+	}
+	if !strings.Contains(err.Error(), "never reported a health status") {
+		t.Errorf("error = %v, want it to name the unreported health status", err)
+	}
+}
+
+// TestUp_HealthGatePassesWithoutDeclaredHealthcheck locks the other
+// side of that boundary: with no healthcheck declared, HealthNone
+// keeps meaning "no healthcheck" and State=Running satisfies the
+// gate. This is compose v2's behavior for healthcheck-less services
+// and the reason HealthNone is permissive in the first place.
+func TestUp_HealthGatePassesWithoutDeclaredHealthcheck(t *testing.T) {
+	rt := newMockRuntime()
+	orch := NewOrchestrator(rt)
+	orch.HealthTimeout = 100 * time.Millisecond
+	orch.PollInterval = 20 * time.Millisecond
+
+	proj := &composetypes.Project{Services: composetypes.Services{
+		"db": composetypes.ServiceConfig{Name: "db", Image: "alpine"},
+		"app": composetypes.ServiceConfig{
+			Name: "app", Image: "alpine",
+			DependsOn: composetypes.DependsOnConfig{
+				"db": composetypes.ServiceDependency{Condition: "service_healthy", Required: true},
+			},
+		},
+	}}
+
+	if _, err := orch.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-x"}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+}
+
+// TestUp_HealthGateAcceptsDisabledHealthchecks covers the ways a
+// compose service can have a HealthCheckConfig that is nonetheless not
+// an active healthcheck. Each must keep the permissive HealthNone +
+// State=Running fallback, or a valid project would block on its own
+// gate until the health timeout:
+//
+//   - test: ["NONE"] — compose's inline disable. compose-go accepts it
+//     verbatim (loader/validate.go allows CMD, CMD-SHELL and NONE) and
+//     does not fold it into Disable, and runtime/docker forwards it to
+//     docker's NONE sentinel, so docker reports no health for it.
+//   - disable: true — the explicit form.
+//   - no test at all — the image's HEALTHCHECK applies, and the
+//     compose file cannot tell us whether the image declares one.
+func TestUp_HealthGateAcceptsDisabledHealthchecks(t *testing.T) {
+	cases := map[string]*composetypes.HealthCheckConfig{
+		"test_none":  {Test: []string{"NONE"}},
+		"disable":    {Test: []string{"CMD", "true"}, Disable: true},
+		"no_test":    {},
+		"nil_config": nil,
+	}
+	for name, hc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rt := newMockRuntime()
+			orch := NewOrchestrator(rt)
+			orch.HealthTimeout = 100 * time.Millisecond
+			orch.PollInterval = 20 * time.Millisecond
+
+			proj := &composetypes.Project{Services: composetypes.Services{
+				"db": composetypes.ServiceConfig{Name: "db", Image: "alpine", HealthCheck: hc},
+				"app": composetypes.ServiceConfig{
+					Name: "app", Image: "alpine",
+					DependsOn: composetypes.DependsOnConfig{
+						"db": composetypes.ServiceDependency{Condition: "service_healthy", Required: true},
+					},
+				},
+			}}
+
+			if _, err := orch.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-x"}); err != nil {
+				t.Fatalf("Up: %v", err)
+			}
+		})
+	}
+}
+
+// TestUp_PatchesHostsWithoutServiceNameDNS pins the service-name DNS
+// fallback: on a backend that does not resolve peers by service name,
+// Up patches /etc/hosts inside every started container. Nothing
+// observable at Up time distinguishes working DNS from broken DNS —
+// the failure shows up inside the container later — which is why this
+// stays a declared capability rather than a check at the gate.
+func TestUp_PatchesHostsWithoutServiceNameDNS(t *testing.T) {
+	rt := newMockRuntime()
+	rt.Caps = runtime.Capabilities{Healthchecks: true, ExitCodes: true, ServiceNameDNS: false}
+
+	// Report an IP for every container so the patch has a map to write.
+	rt.OnInspect = func(id string, base *runtime.ContainerDetails) *runtime.ContainerDetails {
+		base.Labels["dev.containers.network-ip"] = "192.168.66.2"
+		return base
+	}
+	var patched []string
+	rt.OnExec = func(id string, opts runtime.ExecOptions) (runtime.ExecResult, error) {
+		if len(opts.Cmd) > 0 && strings.Contains(strings.Join(opts.Cmd, " "), "/etc/hosts") {
+			patched = append(patched, id)
+		}
+		return runtime.ExecResult{}, nil
+	}
+
+	orch := NewOrchestrator(rt)
+	proj := &composetypes.Project{Services: composetypes.Services{
+		"db":  composetypes.ServiceConfig{Name: "db", Image: "alpine"},
+		"app": composetypes.ServiceConfig{Name: "app", Image: "alpine"},
+	}}
+
+	if _, err := orch.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-x"}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if len(patched) == 0 {
+		t.Error("want /etc/hosts patched on a backend without service-name DNS")
+	}
+
+	// And the inverse: the docker baseline never touches /etc/hosts.
+	rt2 := newMockRuntime()
+	var patched2 []string
+	rt2.OnExec = func(id string, opts runtime.ExecOptions) (runtime.ExecResult, error) {
+		if len(opts.Cmd) > 0 && strings.Contains(strings.Join(opts.Cmd, " "), "/etc/hosts") {
+			patched2 = append(patched2, id)
+		}
+		return runtime.ExecResult{}, nil
+	}
+	orch2 := NewOrchestrator(rt2)
+	if _, err := orch2.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-y"}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if len(patched2) != 0 {
+		t.Errorf("docker baseline must not patch /etc/hosts, got %v", patched2)
 	}
 }

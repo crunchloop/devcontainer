@@ -206,17 +206,8 @@ func (f *fakeRuntime) RemoveImage(ctx context.Context, ref string) error {
 }
 
 func (f *fakeRuntime) Capabilities() runtime.Capabilities {
-	// fakeRuntime advertises the docker baseline; non-compose tests
-	// never read this. Compose orchestrator tests live in compose/
-	// with their own purpose-built fake.
-	return runtime.Capabilities{
-		Healthchecks:     true,
-		ExitCodes:        true,
-		NamespaceSharing: true,
-		RestartPolicies:  true,
-		SharedVolumes:    true,
-		ServiceNameDNS:   true,
-	}
+	// The docker baseline; non-compose tests never read this.
+	return runtime.Capabilities{Healthchecks: true, ExitCodes: true, ServiceNameDNS: true}
 }
 
 func (f *fakeRuntime) FindContainerByLabel(ctx context.Context, key, value string) (*runtime.Container, error) {

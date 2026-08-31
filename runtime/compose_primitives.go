@@ -68,68 +68,37 @@ type LabelFilter struct {
 	Match map[string]string
 }
 
-// Capabilities advertises optional features a backend implements.
-// The compose orchestrator's plan validator (compose.Plan.Validate)
-// keys feature gates off this struct so per-backend conditionals
-// stay out of the validator. Backends self-describe; defaults are
-// the docker baseline.
+// Capabilities advertises the two compose behaviours a backend cannot
+// be assumed to provide and whose absence the orchestrator cannot
+// detect at the point of use. Everything else a backend can't do
+// surfaces as an error from the primitive itself.
 //
-// Each field documents the upstream issue (or status note) governing
-// it so future contributors can tell at a glance which capabilities
-// might flip true on the apple backend in the future. See
-// design/compose-native.md §11.5 for the full provenance.
+// Backends self-describe; the docker baseline is both true. The
+// returned value should be constant for the lifetime of the Runtime.
 type Capabilities struct {
-	// Healthchecks: backend honors HEALTHCHECK directives on
-	// RunSpec/BuildSpec, and InspectContainer surfaces
-	// State.Health.Status. Required for compose's
-	// depends_on.<svc>.condition: service_healthy gating.
-	//
-	// Apple 0.12.x: false (apple/container #1502).
+	// Healthchecks: InspectContainer surfaces State.Health.Status.
+	// Required for compose's depends_on condition: service_healthy.
+	// Refused at plan time rather than at the gate because a service
+	// may inherit its healthcheck from the image, which the compose
+	// file cannot see — Orchestrator.waitFor catches only the case
+	// where compose declares the test itself.
 	Healthchecks bool
 
-	// ExitCodes: InspectContainer returns the container's exit code
-	// after Stop (ContainerDetails.ExitCode is meaningful for
-	// state=exited). Required for compose's depends_on condition:
-	// service_completed_successfully.
-	//
-	// Apple 0.12.x: false (apple/container #1501).
+	// ExitCodes: InspectContainer returns a meaningful exit code for
+	// a stopped container (ContainerDetails.ExitCode is real for
+	// state=exited, not a zero placeholder). Required for compose's
+	// depends_on condition: service_completed_successfully — a
+	// backend that reports zero regardless would make a failed job
+	// look successful, and zero is indistinguishable from a clean
+	// exit, so this cannot be checked at the gate.
 	ExitCodes bool
 
-	// NamespaceSharing: backend supports network_mode / pid / ipc
-	// set to service:<other> (Linux namespace sharing within one
-	// kernel).
-	//
-	// Apple: architectural false — one VM per container means
-	// separate kernels; namespace sharing is not implementable.
-	NamespaceSharing bool
-
-	// RestartPolicies: backend enforces compose's `restart:` field
-	// via RunSpec or backend-equivalent. When false, the
-	// orchestrator emits a single WarnRestartPolicyIgnoredOnBackend
-	// event per Plan rather than refusing the project.
-	//
-	// Apple 0.12.x: false (apple/container #286).
-	RestartPolicies bool
-
-	// SharedVolumes: a single named volume can be concurrently
-	// mounted into 2+ running containers. Apple's
-	// ext4-on-disk-image volumes refuse multi-attach with
-	// VZErrorDomain Code=2; Plan.Validate refuses such projects on
-	// backends where this is false.
-	//
-	// Apple 0.12.x: false (apple/container #889).
-	SharedVolumes bool
-
-	// ServiceNameDNS: containers on the project network can resolve
-	// peers by service name out of the box (compose's default
-	// behavior). When false, the orchestrator falls back to a
-	// post-start /etc/hosts patch driven by InspectContainer +
-	// ExecContainer to seed the service→IP map.
-	//
-	// Apple 0.12.x: false (probe 3; apple/container #856 / 856
-	// resolution upstream is open). The hosts-patch workaround
-	// covers depends_on-declared edges; intra-level peers without a
-	// depends_on edge race and may miss the patch on first DNS
-	// lookup — documented limitation on this backend.
+	// ServiceNameDNS: containers on the project network resolve peers
+	// by service name out of the box, which is compose's default
+	// contract. When false the orchestrator patches /etc/hosts in
+	// every started container from the service→IP map. Nothing
+	// observable at Up time distinguishes working DNS from broken
+	// DNS — the failure appears inside the container later — so this
+	// cannot be checked at the gate either.
 	ServiceNameDNS bool
 }

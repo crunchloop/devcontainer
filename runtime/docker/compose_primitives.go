@@ -190,20 +190,6 @@ func (r *Runtime) RemoveImage(ctx context.Context, ref string) error {
 	return nil
 }
 
-// Capabilities advertises the docker backend's compose feature set.
-// All flags true: docker has been the compose reference target
-// since v2 shipped, so every gated feature is available.
-func (r *Runtime) Capabilities() runtime.Capabilities {
-	return runtime.Capabilities{
-		Healthchecks:     true,
-		ExitCodes:        true,
-		NamespaceSharing: true,
-		RestartPolicies:  true,
-		SharedVolumes:    true,
-		ServiceNameDNS:   true,
-	}
-}
-
 // labelsMatch returns true if `have` is a superset of `want`: every
 // (k,v) in `want` is present and equal in `have`. Used by
 // CreateNetwork / CreateVolume idempotency checks.
@@ -242,4 +228,15 @@ func mapContainerState(s string) runtime.State {
 		return runtime.StateDead
 	}
 	return runtime.State(s)
+}
+
+// Capabilities advertises the docker backend's compose behaviours.
+// Both true: docker surfaces real exit codes on stopped containers and
+// provides service-name DNS aliases on user-defined networks.
+func (r *Runtime) Capabilities() runtime.Capabilities {
+	return runtime.Capabilities{
+		Healthchecks:   true,
+		ExitCodes:      true,
+		ServiceNameDNS: true,
+	}
 }

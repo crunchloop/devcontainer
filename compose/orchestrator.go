@@ -15,9 +15,8 @@
 //   - Down: list by project label -> stop + remove containers ->
 //     remove network -> optionally remove volumes / images.
 //   - service_healthy / service_completed_successfully gating: the
-//     polling loop is in place but only reads InspectContainer
-//     fields the runtime already exposes; once Apple gains health
-//     and exit-code surfacing the orchestrator code does not change.
+//     polling loop reads InspectContainer fields the runtime
+//     already exposes.
 //
 // Out of scope here, picked up in later PRs:
 //   - Port bindings (RunSpec doesn't carry them yet).
@@ -71,10 +70,6 @@ const DefaultHealthTimeout = 60 * time.Second
 type Orchestrator struct {
 	rt runtime.Runtime
 
-	// BackendName identifies the backend in error messages. Empty
-	// is allowed but reduces error-message clarity.
-	BackendName string
-
 	// HealthTimeout overrides DefaultHealthTimeout. Applied per
 	// depends_on edge, not for the whole Up.
 	HealthTimeout time.Duration
@@ -85,10 +80,9 @@ type Orchestrator struct {
 }
 
 // NewOrchestrator constructs an Orchestrator with sane defaults.
-func NewOrchestrator(rt runtime.Runtime, backendName string) *Orchestrator {
+func NewOrchestrator(rt runtime.Runtime) *Orchestrator {
 	return &Orchestrator{
 		rt:            rt,
-		BackendName:   backendName,
 		HealthTimeout: DefaultHealthTimeout,
 		PollInterval:  500 * time.Millisecond,
 	}
@@ -112,7 +106,7 @@ type UpResult struct {
 // already started; the already-running services are NOT torn down
 // (debuggability matters more than tidiness — see design §5.3).
 func (o *Orchestrator) Up(ctx context.Context, plan *Plan) (UpResult, error) {
-	if err := plan.Validate(o.BackendName, o.rt.Capabilities()); err != nil {
+	if err := plan.Validate(o.rt.Capabilities()); err != nil {
 		return UpResult{}, err
 	}
 
@@ -217,11 +211,10 @@ func (o *Orchestrator) Up(ctx context.Context, plan *Plan) (UpResult, error) {
 			return res, err
 		}
 
-		// Backends without service-name DNS (apple) need a manual
-		// /etc/hosts patch in every running container with the
-		// service→IP map known so far. Docker has built-in DNS
-		// aliases on the project network — this is a no-op there
-		// because Capabilities().ServiceNameDNS is true.
+		// Backends without service-name DNS need a manual /etc/hosts
+		// patch in every running container with the service→IP map
+		// known so far. Docker has built-in DNS aliases on the project
+		// network, so this is a no-op there.
 		if !o.rt.Capabilities().ServiceNameDNS {
 			if err := o.patchHostsFiles(ctx, plan, res.ContainerIDs); err != nil {
 				return res, err
@@ -230,119 +223,6 @@ func (o *Orchestrator) Up(ctx context.Context, plan *Plan) (UpResult, error) {
 	}
 
 	return res, nil
-}
-
-// patchHostsFiles appends the project's service→IP map to /etc/hosts
-// of every running container in res.ContainerIDs. Used on backends
-// like apple/container 0.12.x where the project network has no
-// built-in service-name DNS resolution (probe 3 in
-// design/compose-native.md). Issues are best-effort: a service that
-// already has the entries (re-runs of Up on an unchanged project)
-// is fine because the patch is append-only with a sentinel marker
-// that we check for to avoid duplicate lines.
-func (o *Orchestrator) patchHostsFiles(
-	ctx context.Context, plan *Plan, containerIDs map[string]string,
-) error {
-	// Build the service → IP map by inspecting each running
-	// container. Apple's inspect surfaces the network IP under
-	// ContainerDetails.Labels via the dev.containers.network-ip
-	// key — we read it through generic Inspect output rather than
-	// adding a typed field, keeping the runtime.Runtime surface
-	// stable. If the backend doesn't expose the IP at all, we
-	// skip silently and rely on lazy-DNS in the container's
-	// userland (most app code resolves on first request).
-	ips := map[string]string{}
-	for svc, id := range containerIDs {
-		ip, err := o.containerIP(ctx, id)
-		if err != nil || ip == "" {
-			continue
-		}
-		ips[svc] = ip
-	}
-	if len(ips) == 0 {
-		return nil
-	}
-
-	hostsBlock := renderHostsBlock(ips)
-	for _, id := range containerIDs {
-		// Best-effort: hosts patching failure should not fail the
-		// whole Up (the user might still get working resolution
-		// via lazy DNS retries). Log via the orchestrator's
-		// future event channel; today we swallow.
-		_ = o.appendHostsBlock(ctx, id, hostsBlock)
-	}
-	return nil
-}
-
-// containerIP reads the network IP a backend assigned to the
-// given container. Apple's inspect emits ipv4Address strings in the
-// form "192.168.66.2/24" under networks[].ipv4Address; we don't
-// surface that as a typed field on runtime.ContainerDetails yet,
-// so this is a string-parse over a side channel.
-//
-// On backends with built-in DNS (docker, ServiceNameDNS=true) the
-// orchestrator never calls this — the hosts-patch path is gated.
-func (o *Orchestrator) containerIP(ctx context.Context, id string) (string, error) {
-	d, err := o.rt.InspectContainer(ctx, id)
-	if err != nil || d == nil {
-		return "", err
-	}
-	// Backends report the IP via the labels map under a documented
-	// key when they can't widen ContainerDetails. Empty = "no IP
-	// surfaced" — caller skips the entry.
-	if ip := d.Labels["dev.containers.network-ip"]; ip != "" {
-		return ip, nil
-	}
-	return "", nil
-}
-
-// renderHostsBlock formats a service→IP map into the block we
-// append to /etc/hosts. Includes a sentinel comment so re-runs of
-// Up can detect "already patched" by grepping for the marker.
-func renderHostsBlock(ips map[string]string) string {
-	names := make([]string, 0, len(ips))
-	for n := range ips {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	var b []byte
-	b = append(b, "# devcontainer-go compose hosts patch\n"...)
-	for _, n := range names {
-		b = append(b, ips[n]...)
-		b = append(b, '\t')
-		b = append(b, n...)
-		b = append(b, '\n')
-	}
-	return string(b)
-}
-
-// appendHostsBlock runs as root inside the container and appends
-// the given block to /etc/hosts. Idempotent via a sentinel-marker
-// grep: if the marker is already present, the existing block is
-// replaced with the new one (covers Up-on-changed-project), then
-// the block is appended. Uses busybox-friendly sh syntax so it
-// works on alpine + debian-slim equally.
-func (o *Orchestrator) appendHostsBlock(ctx context.Context, id, block string) error {
-	const marker = "# devcontainer-go compose hosts patch"
-	script := fmt.Sprintf(
-		// 1) Strip any prior block (lines from marker to next blank
-		//    or EOF). Uses sed with start-of-marker pattern.
-		// 2) Append the new block.
-		`set -e
-if grep -qF %q /etc/hosts 2>/dev/null; then
-  sed -i.bak '/^%s$/,/^$/d' /etc/hosts || true
-  rm -f /etc/hosts.bak
-fi
-cat >> /etc/hosts <<'EOF'
-%sEOF
-`,
-		marker, marker, block,
-	)
-	_, err := o.rt.ExecContainer(ctx, id, runtime.ExecOptions{
-		Cmd:  []string{"sh", "-c", script},
-		User: "0",
-	})
-	return err
 }
 
 // Down tears down a project. Idempotent: missing resources are
@@ -634,7 +514,14 @@ func (o *Orchestrator) gateLevel(
 		if cid == "" {
 			continue
 		}
-		if err := o.waitFor(ctx, svcName, cid, req.condition, deadline); err != nil {
+		// Whether the service itself declares an active healthcheck.
+		// Distinguishes "no healthcheck to report on" from "backend does
+		// not surface health" below.
+		declaresHealthcheck := false
+		if cfg, ok := plan.Project.Services[svcName]; ok {
+			declaresHealthcheck = declaresActiveHealthcheck(cfg.HealthCheck)
+		}
+		if err := o.waitFor(ctx, svcName, cid, req.condition, declaresHealthcheck, deadline); err != nil {
 			if req.optional {
 				// Per compose spec: a non-required dependency that
 				// fails to satisfy its condition does not block the
@@ -652,8 +539,10 @@ func (o *Orchestrator) gateLevel(
 // conditions read container state from the backend's inspect; no native
 // healthcheck is required either way.
 func (o *Orchestrator) waitFor(
-	ctx context.Context, svc, id, cond string, deadline time.Time,
+	ctx context.Context, svc, id, cond string,
+	declaresHealthcheck bool, deadline time.Time,
 ) error {
+	healthUnreported := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -672,6 +561,19 @@ func (o *Orchestrator) waitFor(
 				case runtime.HealthHealthy:
 					return nil
 				case runtime.HealthNone:
+					// HealthNone is ambiguous per
+					// runtime.HealthStatus: either the image
+					// declared no HEALTHCHECK, or the backend
+					// does not surface health at all. When the
+					// service declares one itself, "no status"
+					// cannot mean "no healthcheck" — passing the
+					// gate here would start dependents before the
+					// check ever succeeded. Keep waiting and
+					// report it at the deadline instead.
+					if declaresHealthcheck {
+						healthUnreported = details.State == runtime.StateRunning
+						break
+					}
 					if details.State == runtime.StateRunning {
 						return nil
 					}
@@ -694,6 +596,12 @@ func (o *Orchestrator) waitFor(
 			}
 		}
 		if time.Now().After(deadline) {
+			if healthUnreported {
+				return fmt.Errorf(
+					"compose: service %q declares a healthcheck but the backend never reported a health status; service_healthy cannot be honored on this backend",
+					svc,
+				)
+			}
 			return &HealthTimeoutError{
 				Service:   svc,
 				Condition: cond,
@@ -1032,4 +940,140 @@ func serviceLabelOf(c runtime.Container) string {
 		return v
 	}
 	return c.Name
+}
+
+// declaresActiveHealthcheck reports whether a compose service declares
+// a healthcheck that the backend is expected to produce a status for.
+// Only an explicit, non-disabled test command counts:
+//
+//   - nil / `disable: true` — no healthcheck.
+//   - `test: ["NONE"]` — compose's inline way to disable one.
+//     compose-go's validator accepts NONE verbatim rather than folding
+//     it into Disable, and runtime/docker forwards it to docker's NONE
+//     sentinel, so the container reports HealthNone by design.
+//   - an empty test — the image's own HEALTHCHECK (if any) applies. We
+//     cannot tell from the compose file whether one exists, so this
+//     stays permissive.
+//
+// Only when the service names a real test command does HealthNone
+// unambiguously mean "the backend did not report", which is what
+// waitFor's service_healthy gate keys off.
+func declaresActiveHealthcheck(hc *composetypes.HealthCheckConfig) bool {
+	if hc == nil || hc.Disable {
+		return false
+	}
+	if len(hc.Test) == 0 {
+		return false
+	}
+	return hc.Test[0] != "NONE"
+}
+
+// patchHostsFiles appends the project's service→IP map to /etc/hosts
+// of every running container in res.ContainerIDs. Used on backends
+// whose project network has no built-in service-name DNS resolution
+// (Capabilities.ServiceNameDNS false). Issues are best-effort: a
+// service that
+// already has the entries (re-runs of Up on an unchanged project)
+// is fine because the patch is append-only with a sentinel marker
+// that we check for to avoid duplicate lines.
+func (o *Orchestrator) patchHostsFiles(
+	ctx context.Context, plan *Plan, containerIDs map[string]string,
+) error {
+	// Build the service → IP map by inspecting each running
+	// container. The IP is read out of generic Inspect output rather
+	// than a typed field, keeping the runtime.Runtime surface stable.
+	// If the backend doesn't expose the IP at all we skip silently and
+	// rely on lazy-DNS in the container's userland (most app code
+	// resolves on first request).
+	ips := map[string]string{}
+	for svc, id := range containerIDs {
+		ip, err := o.containerIP(ctx, id)
+		if err != nil || ip == "" {
+			continue
+		}
+		ips[svc] = ip
+	}
+	if len(ips) == 0 {
+		return nil
+	}
+
+	hostsBlock := renderHostsBlock(ips)
+	for _, id := range containerIDs {
+		// Best-effort: hosts patching failure should not fail the
+		// whole Up (the user might still get working resolution
+		// via lazy DNS retries). Log via the orchestrator's
+		// future event channel; today we swallow.
+		_ = o.appendHostsBlock(ctx, id, hostsBlock)
+	}
+	return nil
+}
+
+// containerIP reads the network IP a backend assigned to the given
+// container. Backends may report it as a bare address or in CIDR form
+// ("192.168.66.2/24"); runtime.ContainerDetails has no typed field for
+// it, so this is a string-parse over a side channel.
+//
+// On backends with built-in DNS (docker, ServiceNameDNS=true) the
+// orchestrator never calls this — the hosts-patch path is gated.
+func (o *Orchestrator) containerIP(ctx context.Context, id string) (string, error) {
+	d, err := o.rt.InspectContainer(ctx, id)
+	if err != nil || d == nil {
+		return "", err
+	}
+	// Backends report the IP via the labels map under a documented
+	// key when they can't widen ContainerDetails. Empty = "no IP
+	// surfaced" — caller skips the entry.
+	if ip := d.Labels["dev.containers.network-ip"]; ip != "" {
+		return ip, nil
+	}
+	return "", nil
+}
+
+// renderHostsBlock formats a service→IP map into the block we
+// append to /etc/hosts. Includes a sentinel comment so re-runs of
+// Up can detect "already patched" by grepping for the marker.
+func renderHostsBlock(ips map[string]string) string {
+	names := make([]string, 0, len(ips))
+	for n := range ips {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var b []byte
+	b = append(b, "# devcontainer-go compose hosts patch\n"...)
+	for _, n := range names {
+		b = append(b, ips[n]...)
+		b = append(b, '\t')
+		b = append(b, n...)
+		b = append(b, '\n')
+	}
+	return string(b)
+}
+
+// appendHostsBlock runs as root inside the container and appends
+// the given block to /etc/hosts. Idempotent via a sentinel-marker
+// grep: if the marker is already present, the existing block is
+// replaced with the new one (covers Up-on-changed-project), then
+// the block is appended. Uses busybox-friendly sh syntax so it
+// works on alpine + debian-slim equally.
+func (o *Orchestrator) appendHostsBlock(ctx context.Context, id, block string) error {
+	const marker = "# devcontainer-go compose hosts patch"
+	script := fmt.Sprintf(
+		// 1) Strip any prior block (lines from marker to next blank
+		//    or EOF). Uses sed with start-of-marker pattern.
+		// 2) Append the new block.
+		`set -e
+if grep -qF %q /etc/hosts 2>/dev/null; then
+  sed -i.bak '/^%s$/,/^$/d' /etc/hosts || true
+  rm -f /etc/hosts.bak
+fi
+cat >> /etc/hosts <<'EOF'
+%sEOF
+`,
+		marker, marker, block,
+	)
+	_, err := o.rt.ExecContainer(ctx, id, runtime.ExecOptions{
+		Cmd:  []string{"sh", "-c", script},
+		User: "0",
+	})
+	return err
 }

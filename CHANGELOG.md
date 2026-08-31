@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **BREAKING — `runtime.Capabilities` is cut from six fields to three.** The struct
+  described where a backend diverged from Docker; every field's only `false` case was
+  the Apple backend and `runtime/docker` reported all of them `true`, so most of what
+  it gated was unreachable. What survives is the three behaviours whose absence the
+  orchestrator cannot fully detect at the point of use: `Healthchecks` (a service may
+  inherit its healthcheck from the image, which the compose file cannot see),
+  `ExitCodes` (a backend that reports no exit code reports zero, which is
+  indistinguishable from a clean exit) and `ServiceNameDNS` (broken name resolution
+  surfaces inside the container, never at `Up` time). Removed fields:
+  `NamespaceSharing` and `SharedVolumes`, where a backend that cannot
+  honour the request fails loudly from the primitive itself, so the plan-time refusal
+  was UX rather than correctness; and `RestartPolicies`, which gated a
+  `WarnRestartPolicyIgnoredOnBackend` event that was never implemented.
+- **BREAKING — `compose.Plan.Validate(caps runtime.Capabilities)`** drops its
+  `backendName` parameter, and `Orchestrator.BackendName` and the `NewOrchestrator`
+  parameter that set it are gone: the Engine passed `""` at all three call sites and
+  the field's only reader was an error message, so it never carried information.
+  `Validate` refuses the two backend-gated `depends_on` conditions —
+  `service_healthy` without `Healthchecks` and `service_completed_successfully`
+  without `ExitCodes`. `compose.UnsupportedFeatureOnBackendError` loses its `Backend` field
+  and `compose.VolumeSharedAcrossServicesError` is removed with the refusal that
+  produced it. The `/etc/hosts` post-start patch behind `ServiceNameDNS` is unchanged
+  and still runs on a backend that reports no service-name DNS.
+- **BREAKING — three `runtime` error types with no remaining producer are removed:**
+  `runtime.BuilderUnavailableError` and `runtime.UnsupportedOptionError` (constructed
+  only by the Apple backend) and `runtime.ExecFailedError`, which has had no producer
+  since well before the backend removals.
 - **BREAKING — the Apple Containers backend is removed.** `runtime/applecontainer`
   and the `applecontainer-bridge` Swift package (reached through a cgo shim) are
   deleted, along with the `--runtime applecontainer` CLI value: `--runtime` now
@@ -57,6 +84,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   described. The 0.4.0 entry below names
   `design/compose-native-health.md`; all three remain readable in git
   history at tag `v0.4.3`.
+
+### Changed
+
+- **compose (native)** — the `service_healthy` gate no longer passes when the backend
+  reports no health status for a service that declares an explicit healthcheck test.
+  `runtime.HealthStatus` documents `HealthNone` as ambiguous — the image declared no
+  `HEALTHCHECK`, or the backend does not surface health at all — and the gate reads it
+  as "no healthcheck" so healthcheck-less projects still come up. That reading is
+  wrong when the service names a real test command itself. `Orchestrator.waitFor`
+  keeps polling and fails with an explicit error rather than starting dependents
+  before the check ever succeeded. This is a second line of defence, not a
+  replacement for `Capabilities.Healthchecks`: the capability refuses a backend that
+  honestly reports it cannot do healthchecks, while the gate also catches one that
+  claims the capability and then reports nothing. Docker is unaffected — it reports
+  `starting` / `healthy` / `unhealthy` for any container with a healthcheck.
+  Only an explicit, non-`NONE` test command counts as declaring one: `disable: true`,
+  compose's inline `test: ["NONE"]`, and an empty test (where the image's own
+  `HEALTHCHECK` applies) all keep the permissive fallback, so no valid project blocks
+  on its own gate.
 
 ## [0.4.2] - 2026-08-23
 

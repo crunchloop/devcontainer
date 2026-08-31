@@ -725,7 +725,7 @@ func (e *Engine) upComposeNative(
 		return nil, err
 	}
 
-	orch := compose.NewOrchestrator(e.runtime, "")
+	orch := compose.NewOrchestrator(e.runtime)
 	res, err := orch.Up(ctx, &compose.Plan{
 		Project:       project,
 		ProjectName:   projectName,
@@ -969,7 +969,7 @@ func (e *Engine) composeDownExisting(ctx context.Context, existing *runtime.Cont
 	}
 
 	if e.opts.ComposeBackend == ComposeBackendNative {
-		orch := compose.NewOrchestrator(e.runtime, "")
+		orch := compose.NewOrchestrator(e.runtime)
 		if err := orch.Down(ctx, &compose.DownPlan{
 			ProjectName: projectName,
 		}); err != nil {

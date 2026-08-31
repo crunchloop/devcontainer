@@ -2,11 +2,10 @@ package compose
 
 import (
 	"fmt"
-	"sort"
-
-	composetypes "github.com/compose-spec/compose-go/v2/types"
 
 	"github.com/crunchloop/devcontainer/runtime"
+
+	composetypes "github.com/compose-spec/compose-go/v2/types"
 )
 
 // Plan describes a compose-project Up request in a runtime-neutral
@@ -65,37 +64,58 @@ type DownPlan struct {
 	Project *composetypes.Project
 }
 
-// Validate inspects the Plan against the active backend's
-// Capabilities and the refused-feature list, returning a typed
-// error on the first kind of refusal encountered. Calls are
-// side-effect-free; safe to invoke before any backend interaction.
+// Validate inspects the Plan against the refused-feature list and the
+// backend's Capabilities, returning a typed error on the first refusal
+// found. Calls are side-effect-free; safe to invoke before any backend
+// interaction.
 //
 // Validation order:
 //  1. Hard refusals (§2.2 fields we never implement): one
 //     UnsupportedFieldError listing every offending site.
-//  2. Backend-gated features (depends_on conditions, namespace
-//     sharing, restart policies, shared volumes): one
-//     UnsupportedFeatureOnBackendError per offending feature, or
-//     a typed VolumeSharedAcrossServicesError for the volume case.
-//
-// Each kind returns the FIRST error of that kind found; if no
-// refusals trigger, Validate returns nil.
-func (p *Plan) Validate(backendName string, caps runtime.Capabilities) error {
+//  2. depends_on conditions the backend cannot honour, per its
+//     Capabilities: one UnsupportedFeatureOnBackendError. Refused
+//     here rather than at the gate because neither absence is
+//     detectable there — a backend reporting no exit code reports
+//     zero, indistinguishable from a clean exit, and a service may
+//     inherit its healthcheck from the image, which the compose file
+//     cannot see.
+func (p *Plan) Validate(caps runtime.Capabilities) error {
 	if p == nil || p.Project == nil {
 		return fmt.Errorf("compose.Plan.Validate: nil plan or project")
 	}
-
-	// Pass 1: hard refusals. Collect every offending field across
-	// the project so the user can fix them in a single edit.
 	if err := refuseUnsupportedFields(p.Project); err != nil {
 		return err
 	}
+	return refuseUnsupportedConditions(caps, p.Project)
+}
 
-	// Pass 2: backend-gated features.
-	if err := refuseBackendGated(backendName, caps, p.Project); err != nil {
-		return err
+// refuseUnsupportedConditions refuses depends_on conditions the active
+// backend cannot honour. Only service_completed_successfully is gated:
+// service_healthy is enforced by Orchestrator.waitFor, which can tell
+// "no health reported" from "no healthcheck declared" at the gate.
+func refuseUnsupportedConditions(caps runtime.Capabilities, proj *composetypes.Project) error {
+	for name, svc := range proj.Services {
+		for _, dep := range svc.DependsOn {
+			switch dep.Condition {
+			case "service_healthy":
+				if !caps.Healthchecks {
+					return &UnsupportedFeatureOnBackendError{
+						Capability: "Healthchecks",
+						Service:    name,
+						Detail:     "depends_on.condition: service_healthy requires backend healthcheck support",
+					}
+				}
+			case "service_completed_successfully":
+				if !caps.ExitCodes {
+					return &UnsupportedFeatureOnBackendError{
+						Capability: "ExitCodes",
+						Service:    name,
+						Detail:     "depends_on.condition: service_completed_successfully requires backend exit-code surfacing",
+					}
+				}
+			}
+		}
 	}
-
 	return nil
 }
 
@@ -170,138 +190,6 @@ func refuseUnsupportedFields(proj *composetypes.Project) error {
 		return nil
 	}
 	return &UnsupportedFieldError{Fields: sortFields(found)}
-}
-
-// refuseBackendGated checks features whose support flips with
-// Capabilities. Returns the first error encountered.
-func refuseBackendGated(backendName string, caps runtime.Capabilities, proj *composetypes.Project) error {
-	for name, svc := range proj.Services {
-		// depends_on conditions
-		for _, dep := range svc.DependsOn {
-			switch dep.Condition {
-			case "service_healthy":
-				if !caps.Healthchecks {
-					return &UnsupportedFeatureOnBackendError{
-						Backend:    backendName,
-						Capability: "Healthchecks",
-						Service:    name,
-						Detail:     "depends_on.condition: service_healthy requires backend healthcheck support",
-					}
-				}
-			case "service_completed_successfully":
-				if !caps.ExitCodes {
-					return &UnsupportedFeatureOnBackendError{
-						Backend:    backendName,
-						Capability: "ExitCodes",
-						Service:    name,
-						Detail:     "depends_on.condition: service_completed_successfully requires backend exit-code surfacing",
-					}
-				}
-			}
-		}
-		// network_mode: service:<x> / host / none — all require
-		// kernel namespace sharing this backend doesn't model.
-		if needsNamespaceSharing(svc.NetworkMode) && !caps.NamespaceSharing {
-			return &UnsupportedFeatureOnBackendError{
-				Backend:    backendName,
-				Capability: "NamespaceSharing",
-				Service:    name,
-				Detail:     fmt.Sprintf("network_mode %q requires kernel namespace sharing this backend lacks", svc.NetworkMode),
-			}
-		}
-		// pid: service:<x> / host
-		if needsNamespaceSharing(svc.Pid) && !caps.NamespaceSharing {
-			return &UnsupportedFeatureOnBackendError{
-				Backend:    backendName,
-				Capability: "NamespaceSharing",
-				Service:    name,
-				Detail:     fmt.Sprintf("pid %q requires kernel namespace sharing this backend lacks", svc.Pid),
-			}
-		}
-		// ipc: service:<x> / host
-		if needsNamespaceSharing(svc.Ipc) && !caps.NamespaceSharing {
-			return &UnsupportedFeatureOnBackendError{
-				Backend:    backendName,
-				Capability: "NamespaceSharing",
-				Service:    name,
-				Detail:     fmt.Sprintf("ipc %q requires kernel namespace sharing this backend lacks", svc.Ipc),
-			}
-		}
-	}
-
-	// Shared volumes: any single named volume mounted into 2+
-	// services. Anonymous and bind mounts are not affected.
-	if !caps.SharedVolumes {
-		if err := refuseSharedVolumes(proj); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// needsNamespaceSharing returns true when a network/pid/ipc field
-// value refers to another container's namespace.
-func needsNamespaceSharing(v string) bool {
-	switch v {
-	case "host", "none":
-		return true
-	}
-	if isServiceNetworkMode(v) {
-		return true
-	}
-	const p = "container:"
-	return len(v) > len(p) && v[:len(p)] == p
-}
-
-// refuseSharedVolumes returns the first volume mounted by 2+
-// services as a VolumeSharedAcrossServicesError. Walks every
-// service's `volumes:` field looking for `type: volume` entries
-// against the project's top-level `volumes:`.
-func refuseSharedVolumes(proj *composetypes.Project) error {
-	users := make(map[string]map[string]struct{}) // volume -> set(service)
-	for svcName, svc := range proj.Services {
-		for _, vol := range svc.Volumes {
-			if vol.Type != composetypes.VolumeTypeVolume {
-				continue
-			}
-			// vol.Source is the top-level volume name. Sanity-check
-			// it actually maps to one — compose-go normalizes this
-			// during Load, so the lookup is just defensive.
-			if _, ok := proj.Volumes[vol.Source]; !ok {
-				continue
-			}
-			set, ok := users[vol.Source]
-			if !ok {
-				set = map[string]struct{}{}
-				users[vol.Source] = set
-			}
-			set[svcName] = struct{}{}
-		}
-	}
-	// Iterate volume names in sorted order so that when multiple
-	// volumes are shared, the error consistently reports the same
-	// one (test stability + better user experience on repeat runs).
-	volNames := make([]string, 0, len(users))
-	for volName := range users {
-		volNames = append(volNames, volName)
-	}
-	sort.Strings(volNames)
-	for _, volName := range volNames {
-		set := users[volName]
-		if len(set) < 2 {
-			continue
-		}
-		services := make([]string, 0, len(set))
-		for s := range set {
-			services = append(services, s)
-		}
-		sort.Strings(services)
-		return &VolumeSharedAcrossServicesError{
-			Volume:   volName,
-			Services: services,
-		}
-	}
-	return nil
 }
 
 // deployUnsupported collects refusals for sub-fields of deploy: that

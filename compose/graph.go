@@ -133,14 +133,6 @@ func findCycle(deps map[string]map[string]struct{}, remaining map[string]struct{
 	}
 }
 
-// isServiceNetworkMode reports whether the value of `network_mode:`
-// references another service's namespace (`service:<name>`). The
-// orchestrator surfaces the dep edge here so topo-sort respects the
-// ordering even though compose-go doesn't model it under DependsOn.
-func isServiceNetworkMode(nm string) bool {
-	return serviceRefTarget(nm) != ""
-}
-
 // serviceRefTarget returns the service name a `service:<name>`
 // namespace-mode value points at, or "" when the value is anything
 // else (empty, "host", "none", "container:<id>", ...).

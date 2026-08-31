@@ -85,7 +85,7 @@ services:
 `)
 
 	projectName := "dc-it-native-twosvc"
-	orch := compose.NewOrchestrator(rt, "docker")
+	orch := compose.NewOrchestrator(rt)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -185,7 +185,7 @@ services:
 `)
 
 	projectName := "dc-it-native-idem"
-	orch := compose.NewOrchestrator(rt, "docker")
+	orch := compose.NewOrchestrator(rt)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -247,7 +247,7 @@ services:
 `)
 
 	projectName := "dc-it-native-ports"
-	orch := compose.NewOrchestrator(rt, "docker")
+	orch := compose.NewOrchestrator(rt)
 	orch.HealthTimeout = 45 * time.Second
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -305,7 +305,7 @@ services:
     command: ["sh", "-c", "while sleep 1000; do :; done"]
 `)
 	projectName := "dc-it-native-depson"
-	orch := compose.NewOrchestrator(rt, "docker")
+	orch := compose.NewOrchestrator(rt)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()

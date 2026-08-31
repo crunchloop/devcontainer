@@ -124,7 +124,7 @@ func (e *Engine) downCompose(ctx context.Context, ws *Workspace, opts DownOption
 
 	switch e.opts.ComposeBackend {
 	case ComposeBackendNative:
-		orch := compose.NewOrchestrator(e.runtime, "")
+		orch := compose.NewOrchestrator(e.runtime)
 		if err := orch.Down(ctx, &compose.DownPlan{
 			ProjectName:   projectName,
 			RemoveVolumes: opts.RemoveVolumes,
