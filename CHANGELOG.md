@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING — the per-backend capability gating is removed.** `runtime.Capabilities`
   and `Runtime.Capabilities()` existed to describe where a backend diverged from
   Docker: every field's only `false` case was the Apple backend, and `runtime/docker`
-  reported all six `true`. With Docker the only backend the struct was
+  reported all six remaining fields `true` (`Checkpoint` went with the Podman backend
+  in the entry below). With Docker the only backend the struct was
   unconditionally all-true, so the code it gated was unreachable. Removed:
   `runtime.Capabilities`, `Runtime.Capabilities()`, `compose.Plan.Validate`'s
   `backendName` and `caps` parameters (now `Validate()`),
@@ -79,6 +80,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   described. The 0.4.0 entry below names
   `design/compose-native-health.md`; all three remain readable in git
   history at tag `v0.4.3`.
+
+### Changed
+
+- **compose (native)** — the `service_healthy` gate no longer passes when the backend
+  reports no health status for a service that declares a healthcheck.
+  `runtime.HealthStatus` documents `HealthNone` as ambiguous — the image declared no
+  `HEALTHCHECK`, or the backend does not surface health at all — and the gate reads it
+  as "no healthcheck" so healthcheck-less projects still come up. That reading is
+  wrong when the service declares a healthcheck itself, and previously
+  `Capabilities.Healthchecks` refused such plans up front. The guarantee now lives at
+  the gate: `Orchestrator.waitFor` keeps polling and fails with an explicit error
+  rather than starting dependents before the check ever succeeded. Docker is
+  unaffected — it reports `starting` / `healthy` / `unhealthy` for any container with
+  a healthcheck — but the check now covers every `runtime.Runtime` implementation,
+  including one that misreports its own capabilities.
 
 ## [0.4.2] - 2026-08-23
 

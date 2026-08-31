@@ -504,7 +504,14 @@ func (o *Orchestrator) gateLevel(
 		if cid == "" {
 			continue
 		}
-		if err := o.waitFor(ctx, svcName, cid, req.condition, deadline); err != nil {
+		// Whether the service itself declares an active healthcheck.
+		// Distinguishes "image has no HEALTHCHECK" from "backend does
+		// not surface health" below.
+		declaresHealthcheck := false
+		if cfg, ok := plan.Project.Services[svcName]; ok {
+			declaresHealthcheck = cfg.HealthCheck != nil && !cfg.HealthCheck.Disable
+		}
+		if err := o.waitFor(ctx, svcName, cid, req.condition, declaresHealthcheck, deadline); err != nil {
 			if req.optional {
 				// Per compose spec: a non-required dependency that
 				// fails to satisfy its condition does not block the
@@ -522,8 +529,10 @@ func (o *Orchestrator) gateLevel(
 // conditions read container state from the backend's inspect; no native
 // healthcheck is required either way.
 func (o *Orchestrator) waitFor(
-	ctx context.Context, svc, id, cond string, deadline time.Time,
+	ctx context.Context, svc, id, cond string,
+	declaresHealthcheck bool, deadline time.Time,
 ) error {
+	healthUnreported := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -542,6 +551,19 @@ func (o *Orchestrator) waitFor(
 				case runtime.HealthHealthy:
 					return nil
 				case runtime.HealthNone:
+					// HealthNone is ambiguous per
+					// runtime.HealthStatus: either the image
+					// declared no HEALTHCHECK, or the backend
+					// does not surface health at all. When the
+					// service declares one itself, "no status"
+					// cannot mean "no healthcheck" — passing the
+					// gate here would start dependents before the
+					// check ever succeeded. Keep waiting and
+					// report it at the deadline instead.
+					if declaresHealthcheck {
+						healthUnreported = details.State == runtime.StateRunning
+						break
+					}
 					if details.State == runtime.StateRunning {
 						return nil
 					}
@@ -564,6 +586,12 @@ func (o *Orchestrator) waitFor(
 			}
 		}
 		if time.Now().After(deadline) {
+			if healthUnreported {
+				return fmt.Errorf(
+					"compose: service %q declares a healthcheck but the backend never reported a health status; service_healthy cannot be honored on this backend",
+					svc,
+				)
+			}
 			return &HealthTimeoutError{
 				Service:   svc,
 				Condition: cond,

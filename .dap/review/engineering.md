@@ -51,6 +51,10 @@ Refines `D1`. This repository implements the same behaviour more than once by de
   interface. Shared orchestration (engine, compose) must reach it through that
   interface; a diff that leaks Docker-specific behaviour into shared code is a
   finding, because the interface is what keeps a second backend possible.
+- A backend that cannot satisfy a compose feature must be refused explicitly — at plan
+  time, or at the gate that needs it. A silent assumption that all backends behave like
+  Docker is not the legitimate way to encode divergence, and neither is silently
+  degrading to a weaker guarantee than the compose condition asks for.
 
 ## R3. Destructive recreate
 

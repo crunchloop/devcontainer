@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1125,5 +1126,72 @@ func TestUp_NoAdoptRecreatesOnHashDrift(t *testing.T) {
 	}
 	if rt.removeCalls == 0 {
 		t.Error("expected recreate (remove) on hash drift without AdoptExisting")
+	}
+}
+
+// TestUp_HealthGateRefusesUnreportedHealth pins the contract for a
+// backend that does not surface health status. runtime.HealthStatus
+// documents HealthNone as ambiguous — either the image declared no
+// HEALTHCHECK, or the backend reports no health at all — and the gate
+// treats it as satisfied so healthcheck-less projects come up. When
+// the service declares a healthcheck of its own, that reading is
+// unavailable: passing the gate would start dependents before the
+// check ever succeeded. Until #128 removed the capability gating,
+// Plan.Validate refused these plans up front via
+// Capabilities.Healthchecks; this asserts the guarantee survives at
+// the gate that needs it, for any Runtime implementation.
+func TestUp_HealthGateRefusesUnreportedHealth(t *testing.T) {
+	// mockRuntime's inspect reports State=Running with the zero
+	// HealthStatus, which IS runtime.HealthNone.
+	rt := newMockRuntime()
+	orch := NewOrchestrator(rt)
+	orch.HealthTimeout = 100 * time.Millisecond
+	orch.PollInterval = 20 * time.Millisecond
+
+	proj := &composetypes.Project{Services: composetypes.Services{
+		"db": composetypes.ServiceConfig{
+			Name: "db", Image: "alpine",
+			HealthCheck: &composetypes.HealthCheckConfig{Test: []string{"CMD", "true"}},
+		},
+		"app": composetypes.ServiceConfig{
+			Name: "app", Image: "alpine",
+			DependsOn: composetypes.DependsOnConfig{
+				"db": composetypes.ServiceDependency{Condition: "service_healthy", Required: true},
+			},
+		},
+	}}
+
+	_, err := orch.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-x"})
+	if err == nil {
+		t.Fatal("want an error: the backend never reported health for a service that declares one")
+	}
+	if !strings.Contains(err.Error(), "never reported a health status") {
+		t.Errorf("error = %v, want it to name the unreported health status", err)
+	}
+}
+
+// TestUp_HealthGatePassesWithoutDeclaredHealthcheck locks the other
+// side of that boundary: with no healthcheck declared, HealthNone
+// keeps meaning "no healthcheck" and State=Running satisfies the
+// gate. This is compose v2's behavior for healthcheck-less services
+// and the reason HealthNone is permissive in the first place.
+func TestUp_HealthGatePassesWithoutDeclaredHealthcheck(t *testing.T) {
+	rt := newMockRuntime()
+	orch := NewOrchestrator(rt)
+	orch.HealthTimeout = 100 * time.Millisecond
+	orch.PollInterval = 20 * time.Millisecond
+
+	proj := &composetypes.Project{Services: composetypes.Services{
+		"db": composetypes.ServiceConfig{Name: "db", Image: "alpine"},
+		"app": composetypes.ServiceConfig{
+			Name: "app", Image: "alpine",
+			DependsOn: composetypes.DependsOnConfig{
+				"db": composetypes.ServiceDependency{Condition: "service_healthy", Required: true},
+			},
+		},
+	}}
+
+	if _, err := orch.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-x"}); err != nil {
+		t.Fatalf("Up: %v", err)
 	}
 }
