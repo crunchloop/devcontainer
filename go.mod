@@ -5,8 +5,8 @@ go 1.25.0
 require (
 	github.com/compose-spec/compose-go/v2 v2.11.0
 	github.com/google/go-containerregistry v0.21.7
-	github.com/moby/moby/api v1.54.2
-	github.com/moby/moby/client v0.4.1
+	github.com/moby/moby/api v1.55.0
+	github.com/moby/moby/client v0.5.1
 	github.com/spf13/cobra v1.10.2
 	github.com/tidwall/jsonc v0.3.3
 	golang.org/x/term v0.43.0
