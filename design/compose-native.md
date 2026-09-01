@@ -137,6 +137,14 @@ which services tripped the refusal. Wired through to `EngineEvent`
 warnings so the user gets a clear "your compose file uses X which our
 engine does not implement" rather than a silent partial run.
 
+`Orchestrator.Up` runs the walk at the top of its own flow, and the
+engine runs the same side-effect-free check immediately after
+`compose.Load` (`Engine.refuseUnsupportedComposeProject`, native
+backend only) so the refusal lands before primary-image preparation,
+feature layering and sidecar builds — otherwise a project we were
+never going to start still costs a build and leaves the tagged images
+behind.
+
 ### 2.3 Out of scope — quietly ignored (documented)
 
 These are spec fields that compose-go parses but the orchestrator does not

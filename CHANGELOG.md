@@ -102,6 +102,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pre_start` only became reachable with the `compose-go` 2.14 bump in this release
   (2.11 rejected it at schema validation); `post_start` and `pre_stop` parsed cleanly
   before it and had the same defect.
+- **compose (native)** — §2.2 unsupported-field refusals now land immediately after
+  the project loads, via `Engine.refuseUnsupportedComposeProject`, instead of only
+  inside `Orchestrator.Up`. `Plan.Validate` was already documented as
+  side-effect-free and safe to call before any backend interaction, but the only
+  caller ran after primary-image preparation, feature layering and
+  `buildComposeSidecarImages`, so a project the engine was never going to start
+  still paid for those builds and left the tagged images behind. The orchestrator's
+  own validation stays as the authoritative call. Native backend only — the
+  shell-out path hands the project to `docker compose`, which implements fields the
+  native orchestrator refuses.
 - **compose (native)** — the `service_healthy` gate no longer passes when the backend
   reports no health status for a service that declares an explicit healthcheck test.
   `runtime.HealthStatus` documents `HealthNone` as ambiguous — the image declared no
