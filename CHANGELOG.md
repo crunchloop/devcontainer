@@ -87,6 +87,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **compose (native)** — the compose lifecycle hooks `pre_start`, `post_start` and
+  `pre_stop` are now refused with `*compose.UnsupportedFieldError` instead of being
+  parsed and dropped. The native orchestrator creates the service container directly
+  and has no ephemeral init-container step to run a hook in, so accepting one lost
+  the hook's work — and the hooks are part of the `ServiceConfig` that
+  `compose.ConfigHash` is computed over, so editing a hook that never ran read as a
+  config change and stopped and removed the running container, destroying its
+  writable layer. `Plan.Validate` refuses before any infrastructure side effect, and
+  `stripForHash` also drops the three fields so unexecuted hook metadata cannot drive
+  a recreation even if a caller reaches `ConfigHash` directly — the one place the hash
+  deliberately strips more than docker/compose does. The shell-out compose backend is
+  unaffected: it delegates to `docker compose`, which implements the hooks itself.
+  `pre_start` only became reachable with the `compose-go` 2.14 bump in this release
+  (2.11 rejected it at schema validation); `post_start` and `pre_stop` parsed cleanly
+  before it and had the same defect.
+- **compose (native)** — §2.2 unsupported-field refusals now land immediately after
+  the project loads, via `Engine.refuseUnsupportedComposeProject`, instead of only
+  inside `Orchestrator.Up`. `Plan.Validate` was already documented as
+  side-effect-free and safe to call before any backend interaction, but the only
+  caller ran after primary-image preparation, feature layering and
+  `buildComposeSidecarImages`, so a project the engine was never going to start
+  still paid for those builds and left the tagged images behind. The orchestrator's
+  own validation stays as the authoritative call. Native backend only — the
+  shell-out path hands the project to `docker compose`, which implements fields the
+  native orchestrator refuses.
 - **compose (native)** — the `service_healthy` gate no longer passes when the backend
   reports no health status for a service that declares an explicit healthcheck test.
   `runtime.HealthStatus` documents `HealthNone` as ambiguous — the image declared no
@@ -103,6 +128,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compose's inline `test: ["NONE"]`, and an empty test (where the image's own
   `HEALTHCHECK` applies) all keep the permissive fallback, so no valid project blocks
   on its own gate.
+- **deps** — bump `github.com/compose-spec/compose-go/v2` 2.11.0 → 2.14.0;
+  `github.com/google/go-containerregistry` 0.21.7 → 0.22.0;
+  `github.com/moby/moby/api` 1.54.2 → 1.55.0 and `github.com/moby/moby/client`
+  0.4.1 → 0.5.1; `golang.org/x/term` 0.43.0 → 0.45.0;
+  `google.golang.org/protobuf` 1.36.11 → 1.36.12. (#129)
+- **ci** — bump `actions/checkout` 4/6 → 7, `actions/setup-go` 6 → 7,
+  `docker/login-action` 3 → 4, `docker/setup-buildx-action` 3 → 4. (#129)
 
 ## [0.4.2] - 2026-08-23
 

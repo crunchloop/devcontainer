@@ -190,3 +190,56 @@ func TestValidate_RefusesHealthyWithoutHealthchecks(t *testing.T) {
 		t.Errorf("want accepted on a backend with Healthchecks: %v", err)
 	}
 }
+
+// TestValidate_RefusesLifecycleHooks pins the refusal of the three
+// compose lifecycle hooks. The native orchestrator has no ephemeral
+// init-container step, so it would drop them silently; because the
+// hooks are part of the ServiceConfig the recreation hash covers,
+// editing one would also stop and remove the running container for
+// work that never happened.
+func TestValidate_RefusesLifecycleHooks(t *testing.T) {
+	hook := []composetypes.ServiceHook{{Command: composetypes.ShellCommand{"migrate"}}}
+
+	for _, tc := range []struct {
+		field string
+		set   func(*composetypes.ServiceConfig)
+	}{
+		{"pre_start", func(s *composetypes.ServiceConfig) { s.PreStart = hook }},
+		{"post_start", func(s *composetypes.ServiceConfig) { s.PostStart = hook }},
+		{"pre_stop", func(s *composetypes.ServiceConfig) { s.PreStop = hook }},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			svc := composetypes.ServiceConfig{Name: "app", Image: "alpine"}
+			tc.set(&svc)
+			proj := &composetypes.Project{
+				Services: composetypes.Services{"app": svc},
+			}
+			p := &Plan{Project: proj, ProjectName: "dc-x"}
+			err := p.Validate(dockerCaps())
+			var unsup *UnsupportedFieldError
+			if !errors.As(err, &unsup) {
+				t.Fatalf("want *UnsupportedFieldError, got %T: %v", err, err)
+			}
+			if len(unsup.Fields) != 1 || unsup.Fields[0].Field != tc.field {
+				t.Errorf("want a single %q refusal, got %+v", tc.field, unsup.Fields)
+			}
+		})
+	}
+}
+
+func TestValidate_AcceptsAbsentLifecycleHooks(t *testing.T) {
+	proj := &composetypes.Project{
+		Services: composetypes.Services{
+			"app": composetypes.ServiceConfig{
+				Name:      "app",
+				Image:     "alpine",
+				PreStart:  []composetypes.ServiceHook{},
+				PostStart: nil,
+			},
+		},
+	}
+	p := &Plan{Project: proj, ProjectName: "dc-x"}
+	if err := p.Validate(dockerCaps()); err != nil {
+		t.Errorf("empty hook slices must not be refused: %v", err)
+	}
+}

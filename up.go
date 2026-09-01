@@ -538,6 +538,10 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 		return nil, err
 	}
 
+	if err := e.refuseUnsupportedComposeProject(project, projectName); err != nil {
+		return nil, err
+	}
+
 	primary, err := compose.PrimaryService(project, src.Service)
 	if err != nil {
 		return nil, err
@@ -700,6 +704,28 @@ func (e *Engine) upComposeShellout(
 	}
 
 	return e.buildWorkspace(ctx, containerID, cfg, opts.LocalEnv)
+}
+
+// refuseUnsupportedComposeProject rejects a project the native
+// orchestrator will not run, before anything is built or pulled.
+//
+// Orchestrator.Up validates again at the top of its own flow; that
+// call stays as the authoritative one, and this is the same
+// side-effect-free check hoisted ahead of the work. Without it the
+// refusal lands only after primary-image preparation, feature
+// layering and sidecar builds have already run, so a project we were
+// never going to start still costs the user a build and leaves the
+// tagged images behind.
+//
+// Native backend only. The shell-out backend hands the project to
+// `docker compose`, which implements fields we refuse — validating
+// there would reject projects that work today.
+func (e *Engine) refuseUnsupportedComposeProject(project *composetypes.Project, projectName string) error {
+	if e.opts.ComposeBackend != ComposeBackendNative {
+		return nil
+	}
+	plan := &compose.Plan{Project: project, ProjectName: projectName}
+	return plan.Validate(e.runtime.Capabilities())
 }
 
 // upComposeNative is the new path: mutate the project in-memory via

@@ -121,12 +121,29 @@ have to cross-reference:
 - `links:` (legacy, replaced by network DNS in compose v2)
 - `external: true` networks / volumes (user-managed shared resources)
 - `services.<name>.scale` > 1 (multiple replicas of the same service)
+- `services.<name>.pre_start` / `post_start` / `pre_stop` (lifecycle
+  hooks — the orchestrator creates the service container directly and
+  has no ephemeral init-container step to run them in). Refused rather
+  than quietly ignored (§2.3) because the hooks are part of the
+  `ServiceConfig` that `ConfigHash` covers: silently dropping them
+  would make editing a hook that never runs read as a config change
+  and recreate the container, destroying its writable layer. The
+  shell-out backend is unaffected — it delegates to `docker compose`,
+  which implements the hooks.
 
 Mechanism: `compose.Plan` walks the parsed `*types.Project`, returns a
 typed `*compose.UnsupportedFieldError` listing exactly which fields on
 which services tripped the refusal. Wired through to `EngineEvent`
 warnings so the user gets a clear "your compose file uses X which our
 engine does not implement" rather than a silent partial run.
+
+`Orchestrator.Up` runs the walk at the top of its own flow, and the
+engine runs the same side-effect-free check immediately after
+`compose.Load` (`Engine.refuseUnsupportedComposeProject`, native
+backend only) so the refusal lands before primary-image preparation,
+feature layering and sidecar builds — otherwise a project we were
+never going to start still costs a build and leaves the tagged images
+behind.
 
 ### 2.3 Out of scope — quietly ignored (documented)
 

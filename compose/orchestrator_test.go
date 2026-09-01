@@ -1302,3 +1302,38 @@ func TestUp_PatchesHostsWithoutServiceNameDNS(t *testing.T) {
 		t.Errorf("docker baseline must not patch /etc/hosts, got %v", patched2)
 	}
 }
+
+// TestUp_HookEditCannotRemoveExistingContainer is the regression for
+// the destructive path the compose-go bump opened up: pre_start
+// became a legal field, the native orchestrator does not execute it,
+// and it is covered by the recreation hash — so adding or editing a
+// hook on an already-running project would have stopped and removed
+// the container, destroying its writable layer, for a hook that
+// never ran. Up must refuse instead, and touch nothing.
+func TestUp_HookEditCannotRemoveExistingContainer(t *testing.T) {
+	rt := newMockRuntime()
+	orch := NewOrchestrator(rt)
+	proj := newProject(t, map[string][]string{"app": nil})
+
+	if _, err := orch.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-x"}); err != nil {
+		t.Fatalf("first Up: %v", err)
+	}
+	runsBefore, removesBefore := rt.runCalls, rt.removeCalls
+
+	svc := proj.Services["app"]
+	svc.PreStart = []composetypes.ServiceHook{{Command: composetypes.ShellCommand{"migrate"}}}
+	proj.Services["app"] = svc
+
+	_, err := orch.Up(context.Background(), &Plan{Project: proj, ProjectName: "dc-x"})
+	var unsup *UnsupportedFieldError
+	if !errors.As(err, &unsup) {
+		t.Fatalf("want *UnsupportedFieldError, got %T: %v", err, err)
+	}
+	if rt.removeCalls != removesBefore {
+		t.Errorf("removeCalls=%d, want %d: the existing container must survive a refused hook edit",
+			rt.removeCalls, removesBefore)
+	}
+	if rt.runCalls != runsBefore {
+		t.Errorf("runCalls=%d, want %d: nothing should be recreated", rt.runCalls, runsBefore)
+	}
+}

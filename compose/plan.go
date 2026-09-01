@@ -184,12 +184,47 @@ func refuseUnsupportedFields(proj *composetypes.Project) error {
 				Reason: "multi-replica services not supported",
 			})
 		}
+		found = append(found, unsupportedHooks(name, svc)...)
 	}
 
 	if len(found) == 0 {
 		return nil
 	}
 	return &UnsupportedFieldError{Fields: sortFields(found)}
+}
+
+// unsupportedHooks refuses the compose lifecycle hooks. compose-go
+// parses pre_start, post_start and pre_stop, but this orchestrator
+// creates the service container directly and has no ephemeral
+// init-container step to run them in, so it would drop them
+// silently. Accepting them loses the hook's work — and worse: the
+// hooks are part of the ServiceConfig that ConfigHash is computed
+// over, so editing a hook that never runs reads as a config change
+// and stops and removes the existing container, destroying its
+// writable layer for work the backend never performed. Refused in
+// Validate, before any infrastructure side effect.
+//
+// Only the native orchestrator reaches this. The shell-out backend
+// delegates to `docker compose`, which implements the hooks itself.
+func unsupportedHooks(service string, svc composetypes.ServiceConfig) []UnsupportedField {
+	var out []UnsupportedField
+	for _, h := range []struct {
+		field string
+		hooks []composetypes.ServiceHook
+	}{
+		{"pre_start", svc.PreStart},
+		{"post_start", svc.PostStart},
+		{"pre_stop", svc.PreStop},
+	} {
+		if len(h.hooks) == 0 {
+			continue
+		}
+		out = append(out, UnsupportedField{
+			Service: service, Field: h.field,
+			Reason: "lifecycle hooks are not executed by the native orchestrator",
+		})
+	}
+	return out
 }
 
 // deployUnsupported collects refusals for sub-fields of deploy: that

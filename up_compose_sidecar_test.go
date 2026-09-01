@@ -2,11 +2,13 @@ package devcontainer
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
 	composetypes "github.com/compose-spec/compose-go/v2/types"
 
+	"github.com/crunchloop/devcontainer/compose"
 	"github.com/crunchloop/devcontainer/config"
 	"github.com/crunchloop/devcontainer/events"
 	"github.com/crunchloop/devcontainer/runtime"
@@ -150,5 +152,50 @@ func TestBuildComposeSidecarImages_BuildsDependenciesOfSelection(t *testing.T) {
 	}
 	if len(rt.builds) != 1 || rt.builds[0].Tag != "dc-x-db" {
 		t.Fatalf("builds = %+v, want app's dependency db and nothing else", rt.builds)
+	}
+}
+
+// TestRefuseUnsupportedComposeProject_NativeRefusesBeforeAnyBuild pins
+// the ordering: the native path refuses a §2.2 field straight after
+// the project loads, before primary-image preparation, feature
+// layering or sidecar builds. Refusing only inside Orchestrator.Up
+// left those images built and tagged for a project that never starts.
+func TestRefuseUnsupportedComposeProject_NativeRefusesBeforeAnyBuild(t *testing.T) {
+	eng, rt := sidecarEngine(t)
+	project := sidecarProject(map[string]composetypes.ServiceConfig{
+		"app": {
+			Image:    "alpine",
+			PreStart: []composetypes.ServiceHook{{Command: composetypes.ShellCommand{"migrate"}}},
+		},
+	})
+
+	err := eng.refuseUnsupportedComposeProject(project, "dc-x")
+	var unsup *compose.UnsupportedFieldError
+	if !errors.As(err, &unsup) {
+		t.Fatalf("want *compose.UnsupportedFieldError, got %T: %v", err, err)
+	}
+	if len(rt.builds) != 0 {
+		t.Errorf("builds=%v, want none before the refusal", rt.builds)
+	}
+}
+
+// The shell-out backend delegates to `docker compose`, which
+// implements hooks and other fields the native orchestrator refuses.
+// Validating there would reject projects that work today.
+func TestRefuseUnsupportedComposeProject_ShelloutDoesNotRefuse(t *testing.T) {
+	rt := &buildRecorder{fakeRuntime: newFakeRuntime()}
+	eng, err := New(EngineOptions{Runtime: rt, ComposeBackend: ComposeBackendShellout})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	project := sidecarProject(map[string]composetypes.ServiceConfig{
+		"app": {
+			Image:    "alpine",
+			PreStart: []composetypes.ServiceHook{{Command: composetypes.ShellCommand{"migrate"}}},
+		},
+	})
+
+	if err := eng.refuseUnsupportedComposeProject(project, "dc-x"); err != nil {
+		t.Errorf("shellout must not refuse: %v", err)
 	}
 }
