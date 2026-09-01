@@ -28,6 +28,8 @@ import (
 //   - Scale / Deploy.Replicas (we only run a single replica)
 //   - DependsOn (graph ordering, not container identity)
 //   - Profiles (filter, not config)
+//   - PreStart / PostStart / PreStop (lifecycle hooks this
+//     orchestrator does not execute; refused by Plan.Validate)
 //
 // Inputs that DO NOT affect the hash (incidental differences):
 //   - map iteration order of Environment / Labels / Networks
@@ -73,5 +75,17 @@ func stripForHash(svc composetypes.ServiceConfig) composetypes.ServiceConfig {
 	out.Deploy = nil
 	out.DependsOn = nil
 	out.Profiles = nil
+	// Lifecycle hooks (pre_start / post_start / pre_stop) are
+	// refused outright by Plan.Validate, which runs before any hash
+	// is computed, so in practice these are already empty here.
+	// Stripped anyway: a recreation destroys the container's
+	// writable layer, and a field the orchestrator does not execute
+	// must not be able to trigger that if the refusal is ever moved
+	// or a future caller reaches ConfigHash directly. This is the
+	// one place we deliberately strip more than docker/compose does
+	// — it executes the hooks, we don't.
+	out.PreStart = nil
+	out.PostStart = nil
+	out.PreStop = nil
 	return out
 }

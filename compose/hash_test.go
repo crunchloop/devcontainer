@@ -173,3 +173,38 @@ func TestConfigHash_StripsNonRuntimeFields(t *testing.T) {
 		}
 	})
 }
+
+// TestConfigHash_StripsLifecycleHooks pins the second half of the
+// hook defence. Plan.Validate refuses these fields before any hash
+// is computed, so this is belt-and-braces: a recreation destroys the
+// container's writable layer, and a field the orchestrator never
+// executes must not be able to trigger that even if the refusal is
+// moved or a caller reaches ConfigHash directly. Deliberately
+// stricter than docker/compose, which executes the hooks.
+func TestConfigHash_StripsLifecycleHooks(t *testing.T) {
+	base := baseService()
+	wantHash := ConfigHash("img", base)
+	hook := []composetypes.ServiceHook{{Command: composetypes.ShellCommand{"migrate"}}}
+
+	t.Run("PreStart", func(t *testing.T) {
+		svc := baseService()
+		svc.PreStart = hook
+		if got := ConfigHash("img", svc); got != wantHash {
+			t.Errorf("PreStart edit changed hash: %q vs %q", got, wantHash)
+		}
+	})
+	t.Run("PostStart", func(t *testing.T) {
+		svc := baseService()
+		svc.PostStart = hook
+		if got := ConfigHash("img", svc); got != wantHash {
+			t.Errorf("PostStart edit changed hash: %q vs %q", got, wantHash)
+		}
+	})
+	t.Run("PreStop", func(t *testing.T) {
+		svc := baseService()
+		svc.PreStop = hook
+		if got := ConfigHash("img", svc); got != wantHash {
+			t.Errorf("PreStop edit changed hash: %q vs %q", got, wantHash)
+		}
+	})
+}
