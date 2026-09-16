@@ -2,6 +2,8 @@ package compose
 
 import (
 	"fmt"
+	"sort"
+	"strconv"
 
 	composetypes "github.com/compose-spec/compose-go/v2/types"
 )
@@ -134,4 +136,95 @@ func ApplyRunOverride(project *composetypes.Project, primaryService string, ov O
 
 	project.Services[primaryService] = svc
 	return nil
+}
+
+// DroppedHostPort records one `ports:` entry removed by
+// ApplyDropHostPorts, so the caller can report what it took away.
+type DroppedHostPort struct {
+	// Service is the compose service that declared the entry.
+	Service string
+
+	// HostIP is the address the entry asked to bind, empty for
+	// compose's all-interfaces default.
+	HostIP string
+
+	// Published is the host-side port, empty when the entry left it
+	// to the daemon (`ports: ["8080"]` — an ephemeral host port).
+	Published string
+
+	// Target is the container-side port the entry published.
+	Target int
+
+	// Protocol is "tcp" or "udp", empty for compose's tcp default.
+	Protocol string
+}
+
+// String renders the entry in compose's own short syntax
+// (`127.0.0.1:8080:8080/tcp`), so a diagnostic can quote the line the
+// user wrote rather than a shape only this package knows.
+func (d DroppedHostPort) String() string {
+	proto := d.Protocol
+	if proto == "" {
+		proto = "tcp"
+	}
+	out := strconv.Itoa(d.Target) + "/" + proto
+	if d.Published != "" {
+		out = d.Published + ":" + out
+	}
+	if d.HostIP != "" {
+		out = d.HostIP + ":" + out
+	}
+	return out
+}
+
+// ApplyDropHostPorts mutates project so no service publishes a host
+// port, and returns every entry it removed in service-name order.
+//
+// For an engine whose daemon's "host" is a namespace shared with
+// workloads it does not own — the engine running inside a Kubernetes
+// pod next to sidecars — a published port is not the project's to
+// take: it collides with whatever else already listens there, and
+// nothing consumes it, because service-to-service traffic goes over
+// the compose network by service name and an embedder forwarding a
+// port out of the namespace dials the container on that network.
+//
+// Dropping the entries here rather than inside the orchestrator is
+// deliberate: ConfigHash reads the project's ServiceConfig, so a
+// container created with the bindings drifts from one created
+// without them and is recreated, instead of being reused with its
+// publishes intact.
+//
+// Entries are removed whole, including ones that left `published`
+// unset — those bind an ephemeral host port, which is the same
+// namespace and the same problem.
+func ApplyDropHostPorts(project *composetypes.Project) []DroppedHostPort {
+	if project == nil {
+		return nil
+	}
+
+	names := make([]string, 0, len(project.Services))
+	for name := range project.Services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var dropped []DroppedHostPort
+	for _, name := range names {
+		svc := project.Services[name]
+		if len(svc.Ports) == 0 {
+			continue
+		}
+		for _, p := range svc.Ports {
+			dropped = append(dropped, DroppedHostPort{
+				Service:   name,
+				HostIP:    p.HostIP,
+				Published: p.Published,
+				Target:    int(p.Target),
+				Protocol:  p.Protocol,
+			})
+		}
+		svc.Ports = nil
+		project.Services[name] = svc
+	}
+	return dropped
 }
