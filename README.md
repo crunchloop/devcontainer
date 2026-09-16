@@ -100,6 +100,7 @@ field/behavior the library covers. Legend: ✅ acted on · ⚠️ parsed but not
 | `forwardPorts` | ⚠️ parsed | Not actuated; [#7](https://github.com/crunchloop/devcontainer/issues/7) |
 | `portsAttributes`, `otherPortsAttributes` | ⚠️ parsed | Surfaced on `ResolvedConfig`; not enforced |
 | `appPort` (deprecated) | ✅ translated | Folded into `forwardPorts` (skipping container ports already declared); deprecation warning still emitted |
+| compose `ports:` | ✅ published | Host publishes come from the compose file, not `devcontainer.json`. `EngineOptions.DisableHostPortPublishing` drops the host side of every entry — for an embedder whose daemon host is a namespace shared with other workloads (the engine inside a Kubernetes pod), where the binding collides with a sidecar and nothing consumes it. Each dropped entry raises an `engine.warn` event. Requires `ComposeBackendNative`. |
 
 **Other**
 

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`EngineOptions.DisableHostPortPublishing`** — drops the host side of compose
+  `ports:` entries. Services still start and nothing else about them changes; each
+  dropped entry raises an `engine.warn` event (`compose_host_port_publish_skipped`)
+  naming the service and where it is reachable instead. Set it when the daemon's "host"
+  is a namespace shared with other workloads — the engine running inside a Kubernetes
+  pod next to sidecars — where a service publishing a common port (`8080`) loses the
+  race against a sidecar already listening there and the boot fails on a raw
+  `bind: address already in use`. Nothing in that shape consumes the publish anyway:
+  service-to-service traffic goes over the compose network by service name, and an
+  embedder forwarding a port out of the namespace dials the container on that network,
+  which is why dropping it changes no connectivity. It is an `EngineOptions` field
+  rather than a `devcontainer.json` one because it describes where the engine is
+  deployed, not the project. Entries are dropped from the in-memory project, so
+  `ConfigHash` sees them go and a container created before the option was turned on is
+  recreated rather than reused with its publishes intact. `ComposeBackendNative` only —
+  under `ComposeBackendShellout`, `docker compose` owns the publish, so a compose-source
+  `Up` is refused rather than run with the option silently ignored. `network_mode: host`
+  has the same collision and is not covered here; it needs a refusal rather than a drop
+  ([#136](https://github.com/crunchloop/devcontainer/issues/136)).
+
 ### Removed
 
 - **BREAKING — `runtime.Capabilities` is cut from six fields to three.** The struct

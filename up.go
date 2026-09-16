@@ -647,6 +647,20 @@ func (e *Engine) upComposeShellout(
 	runOverride compose.Override,
 	existingContainer bool,
 ) (*Workspace, error) {
+	// DisableHostPortPublishing cannot be honored here: this path
+	// hands the user's compose files to `docker compose`, which
+	// publishes `ports:` into the namespace we were told not to bind,
+	// and stripping them would mean re-implementing merge, extends and
+	// override resolution against the YAML. Refuse loudly instead of
+	// running with the option quietly ignored — the failure it exists
+	// to prevent is a boot-time bind collision, which is worse to
+	// debug than this.
+	if e.opts.DisableHostPortPublishing {
+		return nil, fmt.Errorf(
+			"compose source: EngineOptions.DisableHostPortPublishing requires ComposeBackendNative; " +
+				"the shellout backend passes ports: to `docker compose`, which publishes them on the daemon's host")
+	}
+
 	cr, ok := e.runtime.(runtime.ComposeRuntime)
 	if !ok {
 		return nil, fmt.Errorf("compose source: runtime does not support compose: %w", runtime.ErrNotImplemented)
@@ -750,6 +764,7 @@ func (e *Engine) upComposeNative(
 	if err := compose.ApplyRunOverride(project, src.Service, runOverride); err != nil {
 		return nil, err
 	}
+	e.dropHostPortPublishes(project, opts)
 
 	orch := compose.NewOrchestrator(e.runtime)
 	res, err := orch.Up(ctx, &compose.Plan{
@@ -769,6 +784,33 @@ func (e *Engine) upComposeNative(
 		return nil, fmt.Errorf("compose primary service %q was not started by orchestrator", src.Service)
 	}
 	return e.buildWorkspace(ctx, containerID, cfg, opts.LocalEnv)
+}
+
+// dropHostPortPublishes strips the host side of every compose
+// `ports:` entry under EngineOptions.DisableHostPortPublishing, and
+// warns once per removed entry.
+//
+// The removal is semantically safe — service-to-service traffic goes
+// over the compose network by service name, and an embedder
+// forwarding a port out of the namespace dials the container there —
+// which is what makes a silent default acceptable. It still warns,
+// because trading a confusing "address already in use" for a silent
+// no-op is not a fix: the message says where the service is reachable
+// instead, so the user can delete the entry rather than wonder why it
+// did nothing.
+func (e *Engine) dropHostPortPublishes(project *composetypes.Project, opts UpOptions) {
+	if !e.opts.DisableHostPortPublishing {
+		return
+	}
+	for _, d := range compose.ApplyDropHostPorts(project) {
+		opts.bus.Emit(events.WarnEvent{
+			Code: "compose_host_port_publish_skipped",
+			Message: fmt.Sprintf(
+				"compose service %q: not publishing %s on the host — host port publishing is disabled for this engine, whose host is shared with workloads the project does not own. "+
+					"Reach the service as %s:%d from inside the project, or at the address your platform forwards; the ports: entry is unnecessary here and can be removed.",
+				d.Service, d, d.Service, d.Target),
+		})
+	}
 }
 
 // composeBindMounts assembles the workspace + cfg + extra mounts in

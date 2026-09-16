@@ -84,6 +84,38 @@ type EngineOptions struct {
 	// Native; then the default flips and the shellout path is
 	// deleted.
 	ComposeBackend ComposeBackend
+
+	// DisableHostPortPublishing drops the host side of compose
+	// `ports:` entries. Services still start and nothing else about
+	// them changes; they are simply not published. Each dropped entry
+	// is reported as an events.WarnEvent with code
+	// "compose_host_port_publish_skipped".
+	//
+	// Set it when the daemon's "host" is a namespace shared with other
+	// workloads — the engine running inside a Kubernetes pod next to
+	// sidecars — where binding a host port is neither useful nor safe:
+	// a service publishing a common port (8080) loses the race against
+	// a sidecar already listening there and the boot fails on a raw
+	// "bind: address already in use". Nothing consumes the publish in
+	// that shape anyway, so the binding only takes a scarce shared
+	// port.
+	//
+	// Dropping it leaves connectivity intact — service-to-service
+	// traffic goes over the compose network by service name, and an
+	// embedder forwarding a port out of the namespace dials the
+	// container on that network, never the host publish.
+	//
+	// It lives here rather than in devcontainer.json because it is a
+	// property of where the engine is deployed, not of the project: a
+	// user cannot know what their compose stack is scheduled next to,
+	// and a config field would let them opt back into a binding that
+	// cannot work.
+	//
+	// ComposeBackendNative only. The shellout backend hands `ports:`
+	// to `docker compose`, which publishes them regardless, so a
+	// compose-source Up under ComposeBackendShellout is refused rather
+	// than run with the option silently ignored.
+	DisableHostPortPublishing bool
 }
 
 // ComposeBackend selects between the legacy shellout and the new
