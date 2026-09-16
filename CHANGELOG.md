@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-16
+
 ### Added
 
 - **`EngineOptions.DisableHostPortPublishing`** — drops the host side of compose
@@ -157,6 +159,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `google.golang.org/protobuf` 1.36.11 → 1.36.12. (#129)
 - **ci** — bump `actions/checkout` 4/6 → 7, `actions/setup-go` 6 → 7,
   `docker/login-action` 3 → 4, `docker/setup-buildx-action` 3 → 4. (#129)
+
+## [0.4.3] - 2026-08-24
+
+### Added
+
+- **`UpOptions.AdoptExisting`** — on resume, reattach a compose project's existing
+  containers exactly as they were left: start them if stopped, attach if running,
+  never recreate. The primary service's feature-layered image is rebuilt on every
+  boot with a fresh digest, so the config-hash always drifted and `ensureService`
+  recreated the container — abandoning its writable upperdir and binding a new empty
+  anonymous volume, which is where the in-container `$HOME` and a database service's
+  data live. The flag is threaded to `compose.Plan` and gated to non-recreating Ups;
+  the default path (hash-based reuse or recreate) is unchanged. (#120)
 
 ## [0.4.2] - 2026-08-23
 
@@ -570,7 +585,9 @@ shelling out to `@devcontainers/cli`.
 - `events` is doc-tagged **experimental** until v1.0.0 — type shapes may evolve
   without a SemVer-major bump.
 
-[Unreleased]: https://github.com/crunchloop/devcontainer/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/crunchloop/devcontainer/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/crunchloop/devcontainer/compare/v0.4.3...v0.5.0
+[0.4.3]: https://github.com/crunchloop/devcontainer/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/crunchloop/devcontainer/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/crunchloop/devcontainer/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/crunchloop/devcontainer/compare/v0.3.0...v0.4.0
