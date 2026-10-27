@@ -610,6 +610,7 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 	runOverride := compose.Override{
 		Service:            src.Service,
 		ExtraBindMounts:    bindMounts,
+		ExtraMounts:        composeMounts(cfg, opts),
 		ExtraEnvironment:   overrideEnv,
 		Labels:             overrideLabels,
 		Privileged:         cfg.Privileged,
@@ -813,11 +814,10 @@ func (e *Engine) dropHostPortPublishes(project *composetypes.Project, opts UpOpt
 	}
 }
 
-// composeBindMounts assembles the workspace + cfg + extra mounts in
-// the order the engine has always used them, kept as a helper so
-// both compose backends share the exact same set. Only bind mounts
-// are expressible in compose overrides; other types are silently
-// dropped — same as the legacy path.
+// composeBindMounts assembles the workspace + cfg + extra bind mounts
+// in the order the engine has always used them, kept as a helper so
+// both compose backends share the exact same set. Volume and tmpfs
+// mounts from the same sources are collected by composeMounts.
 func composeBindMounts(cfg *config.ResolvedConfig, opts UpOptions) []compose.BindMount {
 	out := []compose.BindMount{
 		{Source: cfg.LocalWorkspaceFolder, Target: cfg.ContainerWorkspaceFolder},
@@ -839,6 +839,58 @@ func composeBindMounts(cfg *config.ResolvedConfig, opts UpOptions) []compose.Bin
 				ReadOnly: m.ReadOnly,
 			})
 		}
+	}
+	return out
+}
+
+// composeMounts collects the volume and tmpfs mounts from cfg.Mounts
+// (devcontainer.json plus feature and image metadata, with
+// ${devcontainerId} and friends already substituted by
+// applyMetadataMerge) and opts.ExtraMounts, in that order — the same
+// mounts the image path's buildRunSpec passes to the container.
+// Without them a feature like docker-in-docker, whose
+// /var/lib/docker volume keeps the inner dockerd off the overlay
+// root, fails on every compose-source devcontainer.
+func composeMounts(cfg *config.ResolvedConfig, opts UpOptions) []compose.Mount {
+	var out []compose.Mount
+	for _, m := range cfg.Mounts {
+		if m.Target == "" {
+			continue
+		}
+		cm := compose.Mount{Source: m.Source, Target: m.Target, ReadOnly: m.ReadOnly}
+		switch m.Type {
+		case config.MountVolume:
+			cm.Type = composetypes.VolumeTypeVolume
+			if m.VolumeOptions != nil {
+				cm.NoCopy = m.VolumeOptions.NoCopy
+			}
+		case config.MountTmpfs:
+			cm.Type = composetypes.VolumeTypeTmpfs
+			cm.Source = ""
+			if m.TmpfsOptions != nil {
+				cm.TmpfsSize = m.TmpfsOptions.SizeBytes
+				cm.TmpfsMode = m.TmpfsOptions.Mode
+			}
+		default:
+			continue
+		}
+		out = append(out, cm)
+	}
+	for _, m := range opts.ExtraMounts {
+		if m.Target == "" {
+			continue
+		}
+		cm := compose.Mount{Source: m.Source, Target: m.Target, ReadOnly: m.ReadOnly}
+		switch m.Type {
+		case runtime.MountVolume:
+			cm.Type = composetypes.VolumeTypeVolume
+		case runtime.MountTmpfs:
+			cm.Type = composetypes.VolumeTypeTmpfs
+			cm.Source = ""
+		default:
+			continue
+		}
+		out = append(out, cm)
 	}
 	return out
 }

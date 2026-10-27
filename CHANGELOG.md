@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-27
+
+### Fixed
+
+- **compose** — volume and tmpfs mounts from `devcontainer.json` and from Dev
+  Container Feature / image metadata (`ResolvedConfig.Mounts`) now reach the
+  primary compose service on both backends. Only bind mounts did before:
+  `composeBindMounts` dropped every other type, so **docker-in-docker failed on
+  compose-source devcontainers** — its
+  `dind-var-lib-docker-${devcontainerId}` → `/var/lib/docker` volume never
+  mounted, the inner dockerd's data root stayed on the container's overlay root,
+  and `docker run` failed with `EINVAL` (overlay on overlay). The image path
+  already passed every type through. Named volumes are also declared as
+  top-level project volumes, so they are created as `<project>_<name>` with the
+  project labels — `ensureNamedVolumes` on the native backend, the generated
+  override's `volumes:` on the shell-out backend — the same project-scoped name
+  the reference `devcontainers/cli` gives them. Where the user's compose service
+  already mounts something at the same target, the user's entry is kept and the
+  metadata mount is skipped (the reference CLI's override would replace it);
+  this matches how the workspace bind was already deduplicated. A top-level
+  volume the user already declares under the same name is left as declared.
+  Adds `compose.Mount` and `compose.Override.ExtraMounts`; `ExtraBindMounts` is
+  unchanged. Recreate note: on the first `Up` after upgrading, a compose
+  workspace whose features declare such a mount has a new entry in its
+  service volumes, so its config hash drifts and the primary container is
+  recreated unless `UpOptions.AdoptExisting` is set — the same drift the
+  per-boot feature image rebuild already causes.
+
 ## [0.5.0] - 2026-09-16
 
 ### Added
@@ -585,7 +613,8 @@ shelling out to `@devcontainers/cli`.
 - `events` is doc-tagged **experimental** until v1.0.0 — type shapes may evolve
   without a SemVer-major bump.
 
-[Unreleased]: https://github.com/crunchloop/devcontainer/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/crunchloop/devcontainer/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/crunchloop/devcontainer/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/crunchloop/devcontainer/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/crunchloop/devcontainer/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/crunchloop/devcontainer/compare/v0.4.1...v0.4.2
