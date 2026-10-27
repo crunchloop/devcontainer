@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -26,8 +27,9 @@ type Override struct {
 	Image string
 
 	// ExtraBindMounts are added to the primary service's volumes.
-	// Engine adds the workspace folder bind here, plus any mounts
-	// declared in devcontainer.json (cfg.Mounts).
+	// Engine adds the workspace folder bind here, plus the bind
+	// mounts declared in devcontainer.json and feature metadata
+	// (cfg.Mounts). Other mount types go in ExtraMounts.
 	//
 	// IMPORTANT: compose v2's default merge strategy for sequence
 	// fields is REPLACEMENT, not concatenation. WriteRunOverride
@@ -35,6 +37,22 @@ type Override struct {
 	// and emits the full merged list so we don't drop the user's
 	// declarations.
 	ExtraBindMounts []BindMount
+
+	// ExtraMounts are the non-bind mounts — named or anonymous volumes
+	// and tmpfs — added to the primary service's volumes after
+	// ExtraBindMounts. Engine fills it from devcontainer.json and
+	// feature metadata (cfg.Mounts): docker-in-docker's
+	// `dind-var-lib-docker-${devcontainerId}` → /var/lib/docker volume
+	// is the case that motivated it, because without it the inner
+	// dockerd's data root lands on the container's overlay root and
+	// overlay-on-overlay fails every `docker run`.
+	//
+	// A named volume (Type volume, non-empty Source) is also declared
+	// as a top-level project volume, so it is created as
+	// `<project>_<source>` the same way a user-declared one is. A
+	// mount whose target the user's compose service already declares
+	// is skipped: the user's entry wins.
+	ExtraMounts []Mount
 
 	// ExtraEnvironment is merged into the primary service's
 	// environment map. Compose merges maps natively, so we only
@@ -112,6 +130,85 @@ type BindMount struct {
 	ReadOnly bool
 }
 
+// Mount describes one non-bind mount in the override: a named or
+// anonymous volume, or a tmpfs. Bind mounts keep using BindMount.
+type Mount struct {
+	// Type is composetypes.VolumeTypeVolume or
+	// composetypes.VolumeTypeTmpfs. Any other value is rejected by
+	// ApplyRunOverride and WriteRunOverride.
+	Type string
+
+	// Source is the volume name, unscoped (the project prefix is added
+	// the way compose adds it for a top-level volume). Empty means an
+	// anonymous volume. Must be empty for tmpfs.
+	Source string
+
+	Target   string
+	ReadOnly bool
+
+	// NoCopy disables copying image content into a fresh volume
+	// (volume only).
+	NoCopy bool
+
+	// TmpfsSize (bytes) and TmpfsMode (permission bits) size and mode
+	// a tmpfs mount; zero leaves the daemon default (tmpfs only).
+	TmpfsSize int64
+	TmpfsMode uint32
+}
+
+// validateMounts rejects mounts the override cannot express, so a
+// caller's mistake fails loudly instead of producing a bind or a
+// mount with the wrong semantics.
+func validateMounts(mounts []Mount) error {
+	for _, m := range mounts {
+		if m.Target == "" {
+			return fmt.Errorf("compose override: %s mount with source %q has no target", m.Type, m.Source)
+		}
+		switch m.Type {
+		case composetypes.VolumeTypeVolume:
+		case composetypes.VolumeTypeTmpfs:
+			if m.Source != "" {
+				return fmt.Errorf("compose override: tmpfs mount at %q must not have a source (got %q)", m.Target, m.Source)
+			}
+		default:
+			return fmt.Errorf("compose override: mount at %q has unsupported type %q (want %q or %q)",
+				m.Target, m.Type, composetypes.VolumeTypeVolume, composetypes.VolumeTypeTmpfs)
+		}
+	}
+	return nil
+}
+
+// serviceVolume converts m to the compose-go service volume it
+// declares.
+func (m Mount) serviceVolume() composetypes.ServiceVolumeConfig {
+	v := composetypes.ServiceVolumeConfig{
+		Type:     m.Type,
+		Source:   m.Source,
+		Target:   m.Target,
+		ReadOnly: m.ReadOnly,
+	}
+	switch m.Type {
+	case composetypes.VolumeTypeVolume:
+		if m.NoCopy {
+			v.Volume = &composetypes.ServiceVolumeVolume{NoCopy: true}
+		}
+	case composetypes.VolumeTypeTmpfs:
+		if m.TmpfsSize != 0 || m.TmpfsMode != 0 {
+			v.Tmpfs = &composetypes.ServiceVolumeTmpfs{
+				Size: composetypes.UnitBytes(m.TmpfsSize),
+				Mode: m.TmpfsMode,
+			}
+		}
+	}
+	return v
+}
+
+// namedVolume reports whether m is a named volume, which needs a
+// top-level project volume declaration.
+func (m Mount) namedVolume() bool {
+	return m.Type == composetypes.VolumeTypeVolume && m.Source != ""
+}
+
 // WriteBuildOverride writes dst with the build override. Pins the
 // primary service's image to ov.Image and clears any inherited
 // build: directive via the YAML !reset tag (compose v2 idiom).
@@ -153,7 +250,10 @@ func WriteRunOverride(dst string, project *composetypes.Project, ov Override) er
 		return fmt.Errorf("WriteRunOverride: ov.Service required")
 	}
 
-	merged, err := mergedVolumes(project, ov)
+	if err := validateMounts(ov.ExtraMounts); err != nil {
+		return err
+	}
+	merged, named, err := mergedVolumes(project, ov)
 	if err != nil {
 		return err
 	}
@@ -174,6 +274,24 @@ func WriteRunOverride(dst string, project *composetypes.Project, ov Override) er
 			ov.Service: buildServiceOverride(merged, emit),
 		},
 	}
+	// Top-level declarations for the named volumes we added, so
+	// `docker compose` creates them as `<project>_<name>`. A volume the
+	// user's project already declares is left to their declaration;
+	// compose merges top-level maps, so omitting it keeps theirs intact.
+	if len(named) > 0 {
+		vols := make(map[string]any, len(named))
+		for _, name := range named {
+			if project != nil {
+				if _, declared := project.Volumes[name]; declared {
+					continue
+				}
+			}
+			vols[name] = map[string]any{}
+		}
+		if len(vols) > 0 {
+			doc["volumes"] = vols
+		}
+	}
 	body, err := yaml.Marshal(doc)
 	if err != nil {
 		return fmt.Errorf("marshal run override: %w", err)
@@ -182,10 +300,13 @@ func WriteRunOverride(dst string, project *composetypes.Project, ov Override) er
 }
 
 // mergedVolumes combines existing volumes from the user's primary
-// service with ov.ExtraBindMounts. Existing entries are preserved as-
-// is (string CSV form or full object form, whichever the user used).
-// New mounts are appended in the order supplied.
-func mergedVolumes(project *composetypes.Project, ov Override) ([]any, error) {
+// service with ov.ExtraBindMounts and ov.ExtraMounts. Existing entries
+// are preserved as-is (string CSV form or full object form, whichever
+// the user used). New mounts are appended in the order supplied; an
+// ExtraMounts entry whose target is already declared is skipped (the
+// user's entry wins, matching ApplyRunOverride). Returns the merged
+// list and the names of the named volumes it added.
+func mergedVolumes(project *composetypes.Project, ov Override) ([]any, []string, error) {
 	var existing []composetypes.ServiceVolumeConfig
 	if project != nil {
 		svc, err := PrimaryService(project, ov.Service)
@@ -194,9 +315,11 @@ func mergedVolumes(project *composetypes.Project, ov Override) ([]any, error) {
 		}
 	}
 
-	out := make([]any, 0, len(existing)+len(ov.ExtraBindMounts))
+	out := make([]any, 0, len(existing)+len(ov.ExtraBindMounts)+len(ov.ExtraMounts))
+	targets := make(map[string]struct{}, cap(out))
 	for _, v := range existing {
 		out = append(out, serializeServiceVolume(v))
+		targets[v.Target] = struct{}{}
 	}
 	for _, b := range ov.ExtraBindMounts {
 		out = append(out, map[string]any{
@@ -205,8 +328,20 @@ func mergedVolumes(project *composetypes.Project, ov Override) ([]any, error) {
 			"target":    b.Target,
 			"read_only": b.ReadOnly,
 		})
+		targets[b.Target] = struct{}{}
 	}
-	return out, nil
+	var named []string
+	for _, m := range ov.ExtraMounts {
+		if _, exists := targets[m.Target]; exists {
+			continue
+		}
+		targets[m.Target] = struct{}{}
+		out = append(out, serializeServiceVolume(m.serviceVolume()))
+		if m.namedVolume() && !slices.Contains(named, m.Source) {
+			named = append(named, m.Source)
+		}
+	}
+	return out, named, nil
 }
 
 // serializeServiceVolume converts a compose-go ServiceVolumeConfig
@@ -219,8 +354,28 @@ func serializeServiceVolume(v composetypes.ServiceVolumeConfig) map[string]any {
 		"source": v.Source,
 		"target": v.Target,
 	}
+	if v.Source == "" {
+		// Anonymous volume / tmpfs: an empty source is not a valid
+		// long-syntax value.
+		delete(out, "source")
+	}
 	if v.ReadOnly {
 		out["read_only"] = true
+	}
+	if v.Volume != nil && v.Volume.NoCopy {
+		out["volume"] = map[string]any{"nocopy": true}
+	}
+	if v.Tmpfs != nil {
+		tmpfs := map[string]any{}
+		if v.Tmpfs.Size != 0 {
+			tmpfs["size"] = int64(v.Tmpfs.Size)
+		}
+		if v.Tmpfs.Mode != 0 {
+			tmpfs["mode"] = v.Tmpfs.Mode
+		}
+		if len(tmpfs) > 0 {
+			out["tmpfs"] = tmpfs
+		}
 	}
 	return out
 }

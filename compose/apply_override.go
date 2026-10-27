@@ -49,13 +49,17 @@ func ApplyBuildOverride(project *composetypes.Project, service, imageRef string)
 }
 
 // ApplyRunOverride mutates project so the primary service has the
-// workspace bind mount, container env, and labels merged in. Existing
+// workspace bind mount, the other devcontainer mounts (binds, volumes,
+// tmpfs), container env, and labels merged in. Named volumes from
+// ov.ExtraMounts are also declared on project.Volumes so the
+// orchestrator's ensureNamedVolumes creates them. Existing
 // user-declared volumes / environment / labels are preserved (we
 // append, we don't replace) — unlike the YAML write path, which
 // re-emits everything to dodge compose's sequence-replace merge,
 // mutating in memory is naturally additive.
 //
-// Returns an error if the primary service is missing.
+// Returns an error if the primary service is missing or an ExtraMounts
+// entry has an unsupported type.
 func ApplyRunOverride(project *composetypes.Project, primaryService string, ov Override) error {
 	if project == nil {
 		return fmt.Errorf("ApplyRunOverride: nil project")
@@ -66,6 +70,9 @@ func ApplyRunOverride(project *composetypes.Project, primaryService string, ov O
 	svc, ok := project.Services[primaryService]
 	if !ok {
 		return fmt.Errorf("ApplyRunOverride: primary service %q not found in project", primaryService)
+	}
+	if err := validateMounts(ov.ExtraMounts); err != nil {
+		return fmt.Errorf("ApplyRunOverride: %w", err)
 	}
 
 	// Dedupe by target. The user's compose file may already declare
@@ -89,6 +96,34 @@ func ApplyRunOverride(project *composetypes.Project, primaryService string, ov O
 			ReadOnly: b.ReadOnly,
 		})
 		existingTargets[b.Target] = struct{}{}
+	}
+	// Volumes and tmpfs follow the same target dedupe. A named volume
+	// also needs a top-level declaration: ensureNamedVolumes creates
+	// only declared volumes, and an undeclared one would be left for
+	// the daemon to create implicitly, without the project labels
+	// `Down --volumes` finds it by. A declaration the user's project
+	// already has is kept as-is.
+	for _, m := range ov.ExtraMounts {
+		if _, exists := existingTargets[m.Target]; exists {
+			continue
+		}
+		svc.Volumes = append(svc.Volumes, m.serviceVolume())
+		existingTargets[m.Target] = struct{}{}
+		if !m.namedVolume() {
+			continue
+		}
+		if _, declared := project.Volumes[m.Source]; declared {
+			continue
+		}
+		if project.Volumes == nil {
+			project.Volumes = composetypes.Volumes{}
+		}
+		vol := composetypes.VolumeConfig{}
+		if project.Name != "" {
+			// Same name the loader normalizes a declared volume to.
+			vol.Name = project.Name + "_" + m.Source
+		}
+		project.Volumes[m.Source] = vol
 	}
 
 	if len(ov.ExtraEnvironment) > 0 {
