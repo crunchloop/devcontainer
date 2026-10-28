@@ -62,6 +62,7 @@ func (r *Runtime) InspectContainer(ctx context.Context, id string) (*runtime.Con
 		out.User = c.Config.User
 		out.Env = append([]string(nil), c.Config.Env...)
 		out.Labels = copyLabels(c.Config.Labels)
+		out.ImageRef = c.Config.Image
 	}
 	if c.HostConfig != nil {
 		out.Privileged = c.HostConfig.Privileged

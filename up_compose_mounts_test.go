@@ -125,7 +125,7 @@ func TestUpComposeNative_CarriesFeatureVolumeMount(t *testing.T) {
 	project.Name = "dc-test"
 	if _, err := eng.upComposeNative(context.Background(), cfg, opts, project,
 		&config.ComposeSource{Service: "app"}, "dc-test", t.TempDir(), "app:dev",
-		mountsRunOverride(cfg, opts)); err != nil {
+		mountsRunOverride(cfg, opts), false); err != nil {
 		t.Fatalf("upComposeNative: %v", err)
 	}
 

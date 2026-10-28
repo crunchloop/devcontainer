@@ -2,6 +2,7 @@ package devcontainer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -159,6 +160,12 @@ const (
 //   - existing + UpOptions.Recreate=true → stop + remove, fresh create
 //   - no existing container → fresh create
 //
+// For compose sources, "attach" means the project's containers are
+// started from their existing images when the primary container's
+// LabelComposeInputsHash matches the current inputs; features are not
+// fetched and no image is built. Otherwise the full path runs (fetch,
+// build, compose up). See reattachCompose.
+//
 // Image source only in this milestone. Build / compose return
 // runtime.ErrNotImplemented.
 func (e *Engine) Up(ctx context.Context, opts UpOptions) (*Workspace, error) {
@@ -227,10 +234,13 @@ func (e *Engine) Up(ctx context.Context, opts UpOptions) (*Workspace, error) {
 	var ws *Workspace
 	switch {
 	case isCompose:
-		// `docker compose up -d` is idempotent: already-running services
-		// stay, stopped ones restart, missing ones get created. So we
-		// always go through createFreshCompose, regardless of whether
-		// `existing` was found — compose handles the dispatch internally.
+		// createFreshCompose handles both cases: with an existing
+		// container it first tries reattachCompose (restart the project
+		// from its existing images, metadata from the image label, no
+		// feature fetch or build) and otherwise runs the full path, where
+		// `docker compose up -d` / the native orchestrator keep
+		// already-running services, restart stopped ones and create
+		// missing ones.
 		//
 		// Reattach caveat for host-side hooks: when compose finds an
 		// existing container, its env is already baked. secretsCommand
@@ -547,9 +557,30 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 		return nil, err
 	}
 
+	// Reattach when the project's containers already exist from inputs
+	// identical to these: the image path's attachExisting, for compose.
+	// No feature fetch, no image build, so a restart needs neither the
+	// feature registry nor the time to rebuild the final image.
+	if existingContainer {
+		ws, err := e.reattachCompose(ctx, cfg, opts, project, src, primary, projectName, workingDir)
+		if !errors.Is(err, errComposeReattachMiss) {
+			return ws, err
+		}
+	}
+
 	baseImage, err := e.prepareComposeServiceImage(ctx, cfg, primary, workingDir, opts)
 	if err != nil {
 		return nil, err
+	}
+
+	// Hash the inputs before layerFeatures and applyMetadataMerge
+	// mutate cfg. A hash that cannot be computed only means the
+	// container gets no label and a later Up cannot reattach to it.
+	inputsHash := ""
+	if base, ierr := e.runtime.InspectImage(ctx, baseImage); ierr == nil && base != nil {
+		if h, herr := e.composeInputsHash(cfg, opts, project, base.ID); herr == nil {
+			inputsHash = h
+		}
 	}
 
 	finalImage, baseLayers, err := e.layerFeatures(ctx, cfg, baseImage, opts)
@@ -568,12 +599,35 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 		return nil, err
 	}
 
+	runOverride := e.composeRunOverride(ctx, cfg, opts, project, src, finalImage, extraEnv, inputsHash)
+	return e.upComposeBackend(ctx, cfg, opts, project, src, projectName, workingDir,
+		finalImage, runOverride, existingContainer, false)
+}
+
+// composeRunOverride builds the run-time override layered onto the
+// primary service from the merged cfg. Shared by the full path and
+// reattachCompose so both produce the same service config (and so the
+// same orchestrator config hash) for the same merged metadata.
+// inputsHash, when non-empty, is stamped as LabelComposeInputsHash.
+func (e *Engine) composeRunOverride(
+	ctx context.Context,
+	cfg *config.ResolvedConfig,
+	opts UpOptions,
+	project *composetypes.Project,
+	src *config.ComposeSource,
+	finalImage string,
+	extraEnv map[string]string,
+	inputsHash string,
+) compose.Override {
 	bindMounts := composeBindMounts(cfg, opts)
 
 	overrideLabels := map[string]string{
 		LabelDevcontainerID:       cfg.DevcontainerID,
 		LabelLocalWorkspaceFolder: cfg.LocalWorkspaceFolder,
 		LabelEngine:               engineIdent,
+	}
+	if inputsHash != "" {
+		overrideLabels[LabelComposeInputsHash] = inputsHash
 	}
 	overrideEnv := mergeEnv(cfg.ContainerEnv, extraEnv)
 
@@ -607,7 +661,7 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 	// feature-entrypoint chain — without these, features like
 	// docker-in-docker that declare privileged/init/entrypoint silently
 	// fail on compose-source devcontainers.
-	runOverride := compose.Override{
+	return compose.Override{
 		Service:            src.Service,
 		ExtraBindMounts:    bindMounts,
 		ExtraMounts:        composeMounts(cfg, opts),
@@ -620,11 +674,25 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 		Entrypoints:        cfg.Entrypoints,
 		OriginalEntrypoint: origEntrypoint,
 	}
+}
 
+// upComposeBackend dispatches to the selected compose backend.
+// reattach marks a reattachCompose call: the native backend then skips
+// sidecar builds whose image is already present.
+func (e *Engine) upComposeBackend(
+	ctx context.Context,
+	cfg *config.ResolvedConfig,
+	opts UpOptions,
+	project *composetypes.Project,
+	src *config.ComposeSource,
+	projectName, workingDir, finalImage string,
+	runOverride compose.Override,
+	existingContainer, reattach bool,
+) (*Workspace, error) {
 	switch e.opts.ComposeBackend {
 	case ComposeBackendNative:
 		return e.upComposeNative(ctx, cfg, opts, project, src, projectName,
-			workingDir, finalImage, runOverride)
+			workingDir, finalImage, runOverride, reattach)
 	case ComposeBackendShellout:
 		return e.upComposeShellout(ctx, cfg, opts, project, src, projectName,
 			workingDir, finalImage, runOverride, existingContainer)
@@ -755,11 +823,12 @@ func (e *Engine) upComposeNative(
 	src *config.ComposeSource,
 	projectName, workingDir, finalImage string,
 	runOverride compose.Override,
+	reattach bool,
 ) (*Workspace, error) {
 	if err := compose.ApplyBuildOverride(project, src.Service, finalImage); err != nil {
 		return nil, err
 	}
-	if err := e.buildComposeSidecarImages(ctx, project, src, projectName, workingDir, opts); err != nil {
+	if err := e.buildComposeSidecarImages(ctx, project, src, projectName, workingDir, opts, reattach); err != nil {
 		return nil, err
 	}
 	if err := compose.ApplyRunOverride(project, src.Service, runOverride); err != nil {
@@ -911,6 +980,7 @@ func (e *Engine) buildComposeSidecarImages(
 	src *config.ComposeSource,
 	projectName, workingDir string,
 	opts UpOptions,
+	skipPresent bool,
 ) error {
 	// Selection mirrors `docker compose up <primary> <runServices...>`:
 	// the named services plus their transitive dependencies (the same
@@ -949,6 +1019,17 @@ func (e *Engine) buildComposeSidecarImages(
 		}
 		if !filepath.IsAbs(ctxPath) {
 			ctxPath = filepath.Join(workingDir, ctxPath)
+		}
+		if skipPresent {
+			// Reattach: the existing containers were created from this
+			// tag; rebuilding would only re-run the build (and maybe
+			// pull its base) to land on the same image.
+			if _, err := e.runtime.InspectImage(ctx, tag); err == nil {
+				if err := compose.ApplyBuildOverride(project, name, tag); err != nil {
+					return err
+				}
+				continue
+			}
 		}
 		opts.bus.Emit(events.BuildStartEvent{Source: events.BuildSourceDockerfile, Ref: tag})
 		if _, err := e.runtime.BuildImage(ctx, runtime.BuildSpec{

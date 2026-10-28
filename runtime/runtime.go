@@ -230,6 +230,14 @@ type ContainerDetails struct {
 	Mounts    []MountInspect
 	Labels    map[string]string
 
+	// ImageRef is the image reference the container was created from
+	// (docker's Config.Image), e.g. "dc-go-final-<id>:latest", as
+	// opposed to Container.Image, which inspect reports as the resolved
+	// image ID. Empty when the backend does not surface it. The compose
+	// reattach path uses it to rebuild the service's image: field
+	// exactly as it was when the container was created.
+	ImageRef string
+
 	// Security options as actually applied to the container, read back
 	// from the backend's inspect (docker HostConfig). Lets callers
 	// verify that RunSpec.Privileged/CapAdd/SecurityOpt — including the

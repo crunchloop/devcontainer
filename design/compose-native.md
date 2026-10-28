@@ -399,6 +399,59 @@ Input: DownPlan { ProjectName string, RemoveImages bool, RemoveVolumes bool }
   service that didn't become healthy. The dependent services are not
   started.
 
+### 5.4 Engine-level reattach (both backends)
+
+The orchestrator's config-hash reuse (§5.1) decides per container, but
+it runs after the engine has already prepared the primary image: before
+v0.5.2 every compose `Up` fetched every feature from its registry and
+rebuilt `dc-go-final-<id>`, even when the project's containers already
+existed. A restart therefore needed the feature registry, and failed
+without it. The image path never had this cost: `attachExisting` reads
+the merged metadata from the existing container's image label.
+
+`Engine.Up` now does the same for compose sources (`reattachCompose`):
+
+1. The full path stamps `dev.containers.compose-inputs-hash` on the
+   primary container. The hash covers the inputs fixed before any
+   feature is fetched: the container-shaping part of the resolved
+   `devcontainer.json` (workspace and mounts, users,
+   `updateRemoteUserUID`, `containerEnv`, `runArgs`, init, privileged,
+   capAdd, securityOpt, overrideCommand, and the features as requested
+   with their options, plus a content digest of each local feature),
+   the loaded compose project (services, networks, volumes, secrets,
+   configs), the local image ID of the primary service's base image,
+   the engine options that reshape the project
+   (`ComposeBackend`, `DisableHostPortPublishing`,
+   `StrictFeatureVersionMatch`) and the workspace folder's owner.
+   Lifecycle commands, `remoteEnv`, ports attributes and
+   customizations are left out: `Up` re-reads them every call, and they
+   never reach the container or its image.
+2. On a later `Up` with an existing container (and neither `Recreate`,
+   `PullAlways` nor an `Engine.Build` override), the engine finds the
+   primary container by project, service and devcontainer id, and
+   reattaches when its label equals the freshly computed hash and the
+   image tag it was created from still names the image it runs.
+3. Reattach parses the image's `devcontainer.metadata` label, merges it
+   into the resolved config exactly as `attachExisting` does, rebuilds
+   the run override (entrypoint wrapper, every mount type, env,
+   privileged, capAdd, …) and brings the project up through the
+   selected backend against the existing images: native under the
+   caller's `AdoptExisting`, skipping sidecar builds whose image is
+   present; shell-out with `up -d --no-recreate`. Because the image is
+   the same, the orchestrator's per-service config hash matches too, so
+   a native `Up` without `AdoptExisting` reuses the containers instead
+   of recreating them.
+4. Any other case — no container, no label (containers created before
+   v0.5.2), a different hash, a moved tag — takes the full path,
+   unchanged. `AdoptExisting` keeps its meaning: it governs whether the
+   orchestrator may reuse a container whose config drifted; reattach
+   only removes the fetch and rebuild in front of it.
+
+Like the reference CLI starting an existing container, reattach does
+not re-resolve floating feature tags or look at the build context of a
+`build:` primary (only its definition and the base image ID); a caller
+that wants either picked up passes `Recreate`.
+
 ## 6. Mapping to `runtime.Runtime` methods
 
 Same shape as `runtime-applecontainer.md` §8.
@@ -1125,6 +1178,15 @@ Resolved during this design draft (2026-05-14):
     warning per Plan, not per service. Once Apple ships `--restart`
     (upstream `#286`), the capability flag flips to true and the
     warning self-suppresses.
+
+14. **Compose `Up` reattaches without fetching features
+    (2026-10-28).** §5.4. An existing project whose stored inputs hash
+    matches is restarted from its existing images with the metadata
+    read from the primary image's label, as the image path's
+    `attachExisting` does. Motivation: a restart of a compose workspace
+    with features needed the feature registry (and paid a final-image
+    rebuild) on every start; a workspace without registry egress could
+    not restart at all.
 
 ---
 

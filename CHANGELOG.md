@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-10-28
+
+### Fixed
+
+- **compose** — `Up` on a compose-source devcontainer whose containers
+  already exist no longer fetches every feature from its registry and
+  rebuilds the final image. The primary container now carries a
+  `dev.containers.compose-inputs-hash` label (`LabelComposeInputsHash`):
+  a digest of the container-shaping part of the resolved
+  `devcontainer.json` (features as requested, with options; local feature
+  content), the loaded compose project, the primary service's base image
+  ID and the engine options that reshape the project. When it matches,
+  `Up` reattaches as the image path's `attachExisting` does: it reads the
+  merged metadata from the existing image's `devcontainer.metadata` label
+  (entrypoint wrapper, mounts including the v0.5.1 volume/tmpfs fix, env,
+  privileged, capAdd, lifecycle commands) and starts the existing services
+  from their existing images — native under the caller's `AdoptExisting`,
+  shell-out with `up --no-recreate`. A restart therefore needs no
+  registry: before, a docker-in-docker compose workspace whose host had no
+  route to ghcr.io failed every start after a stop. Any mismatch (changed
+  config or compose file, new base image, a moved image tag, `Recreate`,
+  `PullAlways`) takes the full path as before. Upgrade note: containers
+  created by an earlier version have no label, so they take the full path.
+  The label is part of the primary service's config, so the native backend
+  without `AdoptExisting` recreates such a container on its first `Up`
+  after upgrading (and labels it); with `AdoptExisting`, or on the
+  shell-out backend, the container is kept unlabelled and keeps taking the
+  full path until it is recreated.
+- **features** — the `devcontainer.metadata` label written into feature
+  images kept `$` unescaped, so the Dockerfile parser expanded
+  `${devcontainerId}` to nothing: docker-in-docker's
+  `dind-var-lib-docker-${devcontainerId}` mount was recorded as
+  `dind-var-lib-docker-`. Any later read of the label (reattach, or the
+  image used as a base) lost the per-workspace volume name. The label is
+  now written literally, so a feature image whose metadata contains `$` gets
+  a new digest when it is next built.
+- **features** — OCI feature lookups are local-first where the answer
+  cannot change: a digest reference, or an exact `X.Y.Z` version tag
+  resolved before, is served from the disk cache without contacting the
+  registry. Floating tags (`2`, `2.17`, `latest`) are still resolved
+  online; when the registry is unreachable (no HTTP response), the last
+  recorded resolution is used if cached. A registry that answers with an
+  error is authoritative. Extraction is now atomic (temporary directory,
+  then rename). Policy: `design/features.md` §8.1.
+
+### Added
+
+- `LabelComposeInputsHash` (`dev.containers.compose-inputs-hash`), stamped
+  on the primary container of a compose-source devcontainer.
+- `runtime.ContainerDetails.ImageRef`: the image reference a container was
+  created from (docker's `Config.Image`).
+- `feature.DiskStoreOptions.OCITransport`: the HTTP transport for OCI
+  registry calls.
+
 ## [0.5.1] - 2026-10-27
 
 ### Fixed
@@ -613,7 +667,8 @@ shelling out to `@devcontainers/cli`.
 - `events` is doc-tagged **experimental** until v1.0.0 — type shapes may evolve
   without a SemVer-major bump.
 
-[Unreleased]: https://github.com/crunchloop/devcontainer/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/crunchloop/devcontainer/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/crunchloop/devcontainer/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/crunchloop/devcontainer/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/crunchloop/devcontainer/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/crunchloop/devcontainer/compare/v0.4.2...v0.4.3

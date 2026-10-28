@@ -314,14 +314,35 @@ features/
     sha256-<contenthash>/
       blob.tgz
       extracted/...
-  index.json                # ref → digest map with TTL hints
+    tags/
+      <sha256(ref)>.json    # {"ref": "<registry/repo:tag>", "digest": "sha256:…"}
 ```
 
 Cache key is **content-addressed**: OCI digest or HTTPS body sha256. A
-mutable tag (`:1`) resolves through `index.json` to the digest, then
-hits the disk cache. This is intentionally different from devpod's
-"hash-the-ref-string" scheme — content-addressed dedupes across mirror
-URLs and prevents stale-ref bugs.
+tag resolves to a digest, then hits the disk cache. This is
+intentionally different from devpod's "hash-the-ref-string" scheme —
+content-addressed dedupes across mirror URLs and prevents stale-ref
+bugs. Extraction goes to a temporary directory in the entry and is
+renamed into place, so a partial extraction is never taken for a hit.
+
+### 8.1 OCI resolution policy (v0.5.2)
+
+The cache is only useful offline if the registry is not asked first.
+`DiskStore` decides per reference form:
+
+| Reference | Policy |
+| --- | --- |
+| `name@sha256:…` | Local first: a cached extraction of the digest is used with no registry call. |
+| `name:X.Y.Z` (exact version) | Local first: the digest recorded under `tags/` the last time this tag was resolved is used with no registry call, if its extraction is cached. Published versions are immutable by the publishing convention (the reference CLI publishes `X.Y.Z` once and moves only `X`, `X.Y` and `latest`). |
+| `name:X`, `name:X.Y`, `name:latest`, any other tag | Online first, so a moved tag is picked up. If the registry is **unreachable** (no HTTP response: DNS, connect, TLS, timeout), the recorded resolution is used if its extraction is cached. |
+
+A registry that answers with an error (404, 401, 403, …) is
+authoritative: its error is returned even when a resolution is
+recorded. With nothing recorded or the content evicted, an unreachable
+registry fails the fetch as before. Every successful online fetch of a
+tag rewrites its record (write to a temporary file, then rename). HTTPS
+features are unchanged: their content hash is only known after the
+download.
 
 Concurrency: a small lockfile (`extracted/.lock`) per cache entry so
 parallel `Resolve` calls for the same ref don't race.

@@ -73,7 +73,7 @@ func TestBuildComposeSidecarImages_BuildsNonPrimaryServices(t *testing.T) {
 	})
 	src := &config.ComposeSource{Service: "app"}
 
-	if err := eng.buildComposeSidecarImages(context.Background(), project, src, "dc-x", workingDir, sidecarUpOptions()); err != nil {
+	if err := eng.buildComposeSidecarImages(context.Background(), project, src, "dc-x", workingDir, sidecarUpOptions(), false); err != nil {
 		t.Fatalf("buildComposeSidecarImages: %v", err)
 	}
 
@@ -120,7 +120,7 @@ func TestBuildComposeSidecarImages_HonorsRunServices(t *testing.T) {
 	})
 	src := &config.ComposeSource{Service: "app", RunServices: []string{"db"}}
 
-	if err := eng.buildComposeSidecarImages(context.Background(), project, src, "dc-x", t.TempDir(), sidecarUpOptions()); err != nil {
+	if err := eng.buildComposeSidecarImages(context.Background(), project, src, "dc-x", t.TempDir(), sidecarUpOptions(), false); err != nil {
 		t.Fatalf("buildComposeSidecarImages: %v", err)
 	}
 
@@ -147,7 +147,7 @@ func TestBuildComposeSidecarImages_BuildsDependenciesOfSelection(t *testing.T) {
 	})
 	src := &config.ComposeSource{Service: "app", RunServices: []string{"app"}}
 
-	if err := eng.buildComposeSidecarImages(context.Background(), project, src, "dc-x", t.TempDir(), sidecarUpOptions()); err != nil {
+	if err := eng.buildComposeSidecarImages(context.Background(), project, src, "dc-x", t.TempDir(), sidecarUpOptions(), false); err != nil {
 		t.Fatalf("buildComposeSidecarImages: %v", err)
 	}
 	if len(rt.builds) != 1 || rt.builds[0].Tag != "dc-x-db" {

@@ -301,3 +301,52 @@ func TestParseMetadataLabel_Empty(t *testing.T) {
 		t.Errorf("got %v, want nil", got)
 	}
 }
+
+// The metadata LABEL must carry ${...} literally: the Dockerfile parser
+// expands variables inside double quotes, so an unescaped
+// "dind-var-lib-docker-${devcontainerId}" mount source was stored as
+// "dind-var-lib-docker-" and every later read of the label lost the
+// per-workspace volume name.
+func TestGenerateBuildContext_LabelKeepsDollarLiteral(t *testing.T) {
+	f := fixtureFeature(t, "dind", "2.0")
+	f.Metadata.Mounts = []config.Mount{{
+		Type:   config.MountVolume,
+		Source: "dind-var-lib-docker-${devcontainerId}",
+		Target: "/var/lib/docker",
+	}}
+	dst := t.TempDir()
+	if err := GenerateBuildContext(BuildPlan{BaseImage: "alpine:3.20", Features: []config.ResolvedFeature{f}}, dst); err != nil {
+		t.Fatalf("GenerateBuildContext: %v", err)
+	}
+	df, err := os.ReadFile(filepath.Join(dst, "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var label string
+	for _, line := range strings.Split(string(df), "\n") {
+		if strings.HasPrefix(line, "LABEL "+MetadataLabel+"=") {
+			label = line
+		}
+	}
+	if label == "" {
+		t.Fatalf("no metadata LABEL line in:\n%s", df)
+	}
+	if strings.Count(label, "$") != strings.Count(label, `\$`) {
+		t.Errorf("LABEL has an unescaped $: %s", label)
+	}
+	if !strings.Contains(label, `dind-var-lib-docker-\${devcontainerId}`) {
+		t.Errorf("LABEL lost the mount source variable: %s", label)
+	}
+}
+
+func TestDockerfileLiteral(t *testing.T) {
+	for in, want := range map[string]string{
+		`plain`:            `"plain"`,
+		`a${b}c`:           `"a\${b}c"`,
+		`$HOME and "q" \x`: `"\$HOME and \"q\" \\x"`,
+	} {
+		if got := dockerfileLiteral(in); got != want {
+			t.Errorf("dockerfileLiteral(%q) = %s, want %s", in, got, want)
+		}
+	}
+}

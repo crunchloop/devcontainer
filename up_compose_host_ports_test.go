@@ -55,7 +55,7 @@ func hostPortUp(t *testing.T, eng *Engine, out chan events.Event) {
 		},
 	}
 	if _, err := eng.upComposeNative(context.Background(), cfg, opts, project, src,
-		"dc-test", t.TempDir(), "app:dev", runOverride); err != nil {
+		"dc-test", t.TempDir(), "app:dev", runOverride, false); err != nil {
 		t.Fatalf("upComposeNative: %v", err)
 	}
 }
