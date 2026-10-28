@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-10-28
+
+### Fixed
+
+- **compose** — the compose inputs hash (`LabelComposeInputsHash`) skipped
+  symlinks in a local feature's directory, while the feature build context
+  copies each symlink as the content it names. Editing the target of a
+  symlinked file (say `install.sh` linked to a shared script outside the
+  feature) left the hash unchanged, so `Up` reattached to the image built
+  from the old content. Symlinks are now hashed as their resolved content;
+  a symlink to a directory fails the hash, so that workspace gets no label
+  and always takes the full path. Found by the DAP review bot on the
+  v0.5.2 bump.
+
 ## [0.5.2] - 2026-10-28
 
 ### Fixed
@@ -667,7 +681,8 @@ shelling out to `@devcontainers/cli`.
 - `events` is doc-tagged **experimental** until v1.0.0 — type shapes may evolve
   without a SemVer-major bump.
 
-[Unreleased]: https://github.com/crunchloop/devcontainer/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/crunchloop/devcontainer/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/crunchloop/devcontainer/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/crunchloop/devcontainer/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/crunchloop/devcontainer/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/crunchloop/devcontainer/compare/v0.4.3...v0.5.0
