@@ -160,8 +160,7 @@ func generateDockerfile(plan BuildPlan) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("build metadata label: %w", err)
 	}
-	// Wrap the JSON in strconv-quoted form so embedded "/'/$ are unambiguous.
-	fmt.Fprintf(&b, "LABEL %s=%s\n\n", MetadataLabel, strconv.Quote(string(label)))
+	fmt.Fprintf(&b, "LABEL %s=%s\n\n", MetadataLabel, dockerfileLiteral(string(label)))
 
 	user := "root"
 	if plan.RemoteUser != "" {
@@ -238,4 +237,17 @@ func copyFileContents(src, dst string, mode os.FileMode) error {
 		return err
 	}
 	return out.Close()
+}
+
+// dockerfileLiteral quotes s as a double-quoted Dockerfile word that
+// evaluates to s exactly. strconv.Quote handles quotes and
+// backslashes, but the Dockerfile parser still expands $VAR and
+// ${VAR} inside double quotes, so every $ is escaped as well. Without
+// it a metadata label carrying a feature's
+// "dind-var-lib-docker-${devcontainerId}" mount was stored as
+// "dind-var-lib-docker-" (the build has no such variable), and any
+// later read of the label — a reattach, or this image as the base of
+// another build — lost the per-workspace volume name.
+func dockerfileLiteral(s string) string {
+	return strings.ReplaceAll(strconv.Quote(s), "$", `\$`)
 }

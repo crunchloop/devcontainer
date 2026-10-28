@@ -50,7 +50,7 @@ field/behavior the library covers. Legend: ✅ acted on · ⚠️ parsed but not
 | --- | --- | --- |
 | `image` | ✅ | Pull, run, exec |
 | `build` (`dockerfile`, `context`, `args`, `target`, `cacheFrom`) | ✅ | User Dockerfile + features layered atop |
-| `dockerComposeFile`, `service`, `runServices` | ✅ | compose-go parse + either shell-out to `docker compose` (default) or an in-process orchestrator (`EngineOptions.ComposeBackend = ComposeBackendNative`). The native orchestrator drives any `Runtime` implementing the compose primitives. |
+| `dockerComposeFile`, `service`, `runServices` | ✅ | compose-go parse + either shell-out to `docker compose` (default) or an in-process orchestrator (`EngineOptions.ComposeBackend = ComposeBackendNative`). The native orchestrator drives any `Runtime` implementing the compose primitives. An `Up` whose containers exist from unchanged inputs restarts them from their existing images, with the feature metadata read from the image label: no feature fetch, no rebuild. |
 
 **Container config**
 
@@ -69,7 +69,7 @@ field/behavior the library covers. Legend: ✅ acted on · ⚠️ parsed but not
 
 | Field | Status | Notes |
 | --- | --- | --- |
-| `features` (OCI / HTTPS / local) | ✅ | DAG ordering, options validation, content-addressed cache |
+| `features` (OCI / HTTPS / local) | ✅ | DAG ordering, options validation, content-addressed cache (local-first for digests and exact `X.Y.Z` versions; floating tags fall back to the last resolution when the registry is unreachable) |
 | `dependsOn` / `installsAfter` / `overrideFeatureInstallOrder` | ✅ | |
 | Pre-baked-image short-circuit | ✅ | `devcontainer.metadata` label read on Up |
 | `devcontainer-lock.json` | ❌ | [#26](https://github.com/crunchloop/devcontainer/issues/26) |

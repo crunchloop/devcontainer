@@ -29,6 +29,12 @@ type DiskStoreOptions struct {
 	// fetches. Useful for Authorization on private servers.
 	HTTPSHeaders map[string]string
 
+	// OCITransport overrides the HTTP transport for OCI registry
+	// calls. Nil uses go-containerregistry's default (which honors the
+	// standard proxy environment variables). Tests use it to make the
+	// registry unreachable; callers may use it for a custom proxy.
+	OCITransport http.RoundTripper
+
 	// HTTPSClient overrides the default *http.Client used for HTTPS
 	// fetches. If nil, the package's default client (5-minute timeout)
 	// is used. Tests substitute this to drive httptest servers.
@@ -41,6 +47,7 @@ type DiskStoreOptions struct {
 type DiskStore struct {
 	cacheDir     string
 	ociKeychain  authn.Keychain
+	ociTransport http.RoundTripper
 	httpsHeaders map[string]string
 	httpsClient  *http.Client
 }
@@ -66,6 +73,7 @@ func NewDiskStore(opts DiskStoreOptions) (*DiskStore, error) {
 	return &DiskStore{
 		cacheDir:     dir,
 		ociKeychain:  kc,
+		ociTransport: opts.OCITransport,
 		httpsHeaders: opts.HTTPSHeaders,
 		httpsClient:  opts.HTTPSClient,
 	}, nil
