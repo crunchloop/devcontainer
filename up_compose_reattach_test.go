@@ -177,6 +177,44 @@ func TestComposeInputsHash_LocalFeatureContent(t *testing.T) {
 	}
 }
 
+// A local feature file that is a symlink is copied into the build
+// context as the content it names, so that content is what the hash
+// covers: editing the link's target outside the feature directory must
+// not let a reattach keep the image built from the old content.
+func TestComposeInputsHash_LocalFeatureSymlinkTarget(t *testing.T) {
+	dir := t.TempDir()
+	json := replaceOnce(t, hashBaseJSON, `"ghcr.io/devcontainers/features/docker-in-docker:2": { "moby": false }`, `"./local-feature": {}`)
+	featDir := filepath.Join(dir, ".devcontainer", "local-feature")
+	if err := os.MkdirAll(featDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	shared := filepath.Join(dir, "shared-install.sh")
+	if err := os.WriteFile(shared, []byte("#!/bin/sh\necho one\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../../shared-install.sh", filepath.Join(featDir, "install.sh")); err != nil {
+		t.Fatal(err)
+	}
+	f := newHashFixture(t, dir, json, hashBaseCompose)
+	h1 := f.hash(t, "sha256:base")
+	if err := os.WriteFile(shared, []byte("#!/bin/sh\necho two\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if h2 := f.hash(t, "sha256:base"); h1 == h2 {
+		t.Fatal("hash unchanged after editing the target of a symlinked install.sh")
+	}
+
+	// A symlink to a directory cannot be copied into the build context
+	// either; the hash fails (no label, so no reattach) instead of
+	// silently skipping it.
+	if err := os.Symlink(dir, filepath.Join(featDir, "loop")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.eng.composeInputsHash(f.cfg, f.opts, f.project, "sha256:base"); err == nil {
+		t.Fatal("hash computed over a symlink to a directory")
+	}
+}
+
 func TestComposeInputsHash_RequiresBaseImageID(t *testing.T) {
 	f := newHashFixture(t, t.TempDir(), hashBaseJSON, hashBaseCompose)
 	if _, err := f.eng.composeInputsHash(f.cfg, f.opts, f.project, ""); err == nil {

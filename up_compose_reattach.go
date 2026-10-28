@@ -176,15 +176,20 @@ func (e *Engine) composeInputsHash(cfg *config.ResolvedConfig, opts UpOptions, p
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// hashDirContent digests every regular file under root (relative path,
-// mode and bytes, in lexical order), reading at most limit bytes.
+// hashDirContent digests every regular file and symlink under root
+// (relative path, mode and bytes, in lexical order), reading at most
+// limit bytes. A symlink is hashed as the content it resolves to, the
+// same way feature.GenerateBuildContext copies it into the build
+// context, so editing a linked file outside the feature directory
+// changes the digest. A symlink to a directory, which the build
+// context copy cannot handle either, fails the hash.
 func hashDirContent(root string, limit int64) (string, error) {
 	var paths []string
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.Type().IsRegular() {
+		if d.Type().IsRegular() || d.Type()&fs.ModeSymlink != 0 {
 			paths = append(paths, p)
 		}
 		return nil
@@ -200,9 +205,12 @@ func hashDirContent(root string, limit int64) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		fi, err := os.Stat(p)
+		fi, err := os.Stat(p) // follows a symlink to the content it names
 		if err != nil {
 			return "", err
+		}
+		if !fi.Mode().IsRegular() {
+			return "", fmt.Errorf("%s: not a regular file", rel)
 		}
 		total += fi.Size()
 		if total > limit {
