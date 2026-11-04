@@ -221,6 +221,16 @@ Decisions:
    the baked feature's metadata is fetched at the artifact the label
    records, a digest reference the feature cache serves locally once
    seen, to find them. The baked feature itself is never reinstalled.
+
+   **Known limitation, accepted here:** the baked match does not
+   compare options. A dependency requested with options other than the
+   ones the image installed it with is still taken from the image, so
+   those options are not applied. This is the pre-baked match's
+   behaviour for declared features since it was introduced (id and
+   version only). Fixing it means recording applied options in the
+   label and comparing them after applying defaults, which the label
+   cannot do today. That is a change to the pre-baked match itself,
+   tracked in #154, not to dependency resolution.
 6. **A dependency dropped as a duplicate is still locked.** When a
    `dependsOn` key resolves to the same content and options as a
    feature already in the set, it is not installed twice, but its key
