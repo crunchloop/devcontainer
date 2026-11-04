@@ -1,23 +1,31 @@
+# Dependabot: security updates only.
+#
+# `open-pull-requests-limit: 0` turns off version updates for each
+# ecosystem. Security updates are not counted against that limit, so
+# Dependabot still opens a pull request whenever an advisory has a fixed
+# version; the schedule only paces version updates and is otherwise unused.
+#
+# Security updates themselves are switched on in the repository settings
+# (Settings > Code security > Dependabot security updates), not here.
 version: 2
 updates:
   - package-ecosystem: gomod
     directory: /
     schedule:
       interval: weekly
-      day: monday
-      time: "06:00"
-      timezone: Etc/UTC
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     commit-message:
       prefix: deps
     groups:
       # Bundle Docker SDK packages so the moby/moby/api ↔ moby/moby/client
       # versions move together.
       moby:
+        applies-to: security-updates
         patterns:
           - github.com/moby/moby/*
       # OpenTelemetry packages release in lockstep; one PR per bump.
       opentelemetry:
+        applies-to: security-updates
         patterns:
           - go.opentelemetry.io/*
 
@@ -25,9 +33,6 @@ updates:
     directory: /
     schedule:
       interval: weekly
-      day: monday
-      time: "06:00"
-      timezone: Etc/UTC
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     commit-message:
       prefix: ci
