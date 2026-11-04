@@ -2,6 +2,7 @@ package docker
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,8 +10,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/moby/moby/api/types/build"
 	"github.com/moby/moby/client"
@@ -258,20 +261,32 @@ func tarDirectory(dir string, w io.Writer) error {
 }
 
 // prePullBaseImages reads the Dockerfile at contextPath/dockerfile,
-// extracts FROM image references (resolving simple $ARG substitutions
-// against ARG defaults in the file and the spec's BuildArgs
-// overrides), and pulls each that isn't already in the local image
-// store. Best-effort: any pull error is silently ignored — the
-// subsequent ImageBuild surfaces a clearer "failed to resolve" error
-// if the image really can't be obtained, and images that exist only
-// locally (e.g. dc-go-base-*) correctly skip the pull attempt because
-// ImageInspect finds them.
+// extracts its frontend image (a `# syntax=` directive or the
+// BUILDKIT_SYNTAX build arg) and FROM image references (resolving
+// simple $ARG substitutions against ARG defaults in the file and the
+// spec's BuildArgs overrides), and pulls each that isn't already in
+// the local image store. The frontend needs it as much as FROM
+// images: BuildKit resolves it from the registry before parsing the
+// Dockerfile, under the same session requirement. Best-effort: any
+// pull error is silently ignored — the subsequent ImageBuild surfaces
+// a clearer "failed to resolve" error if the image really can't be
+// obtained, and images that exist only locally (e.g. dc-go-base-*)
+// correctly skip the pull attempt because ImageInspect finds them.
+//
+// BuildKit releases since v0.31 (Docker Engine 29.6) fall back to
+// anonymous registry access when no session is attached, so this only
+// changes the outcome on older engines; there it is what makes public
+// images resolvable at all.
 func prePullBaseImages(ctx context.Context, r *Runtime, contextPath, dockerfile string, buildArgs map[string]string, events chan<- runtime.BuildEvent) {
 	df, err := os.ReadFile(filepath.Join(contextPath, dockerfile))
 	if err != nil {
 		return
 	}
-	for _, ref := range extractBaseImages(string(df), buildArgs) {
+	refs := extractBaseImages(string(df), buildArgs)
+	if frontend := syntaxFrontend(df, buildArgs); frontend != "" {
+		refs = append([]string{frontend}, refs...)
+	}
+	for _, ref := range refs {
 		if _, err := r.api.ImageInspect(ctx, ref); err == nil {
 			continue
 		}
@@ -356,6 +371,68 @@ func extractBaseImages(content string, buildArgs map[string]string) []string {
 		}
 	}
 	return out
+}
+
+// syntaxFrontend returns the frontend image BuildKit will run for a
+// Dockerfile, or "" for the built-in one. The BUILDKIT_SYNTAX build
+// arg wins over the file; otherwise the `syntax` parser directive is
+// read the way BuildKit's parser.DetectSyntax reads it:
+//
+//   - after an optional UTF-8 BOM and a leading `#!` line;
+//   - only from the leading run of directive lines, each `#` (or `//`)
+//     at column 0 followed by `key = value` with key one of syntax,
+//     escape, check (case-insensitive) — the first other line ends the
+//     run;
+//   - the image is the value's first word (the rest is frontend
+//     arguments).
+//
+// DetectSyntax also accepts a JSON document with a "syntax" key;
+// that is not a Dockerfile and is left out.
+func syntaxFrontend(content []byte, buildArgs map[string]string) string {
+	if v, ok := buildArgs["BUILDKIT_SYNTAX"]; ok {
+		return firstWord(v)
+	}
+	content = bytes.TrimPrefix(content, []byte{0xEF, 0xBB, 0xBF})
+	if first, rest, _ := bytes.Cut(content, []byte("\n")); bytes.HasPrefix(first, []byte("#!")) {
+		content = rest
+	}
+	for _, comment := range []string{"#", "//"} {
+		if v, ok := directive(content, comment, "syntax"); ok {
+			return firstWord(v)
+		}
+	}
+	return ""
+}
+
+// directiveLine matches the body of a parser directive line.
+var directiveLine = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9]*)\s*=\s*(.+?)\s*$`)
+
+// directive returns the value of the parser directive key in content's
+// leading directive lines written with the given comment prefix.
+func directive(content []byte, comment, key string) (string, bool) {
+	for _, line := range strings.Split(string(content), "\n") {
+		body, ok := strings.CutPrefix(strings.TrimSuffix(line, "\r"), comment)
+		if !ok {
+			return "", false
+		}
+		m := directiveLine.FindStringSubmatch(strings.TrimLeftFunc(body, unicode.IsSpace))
+		if m == nil {
+			return "", false
+		}
+		switch name := strings.ToLower(m[1]); name {
+		case key:
+			return m[2], true
+		case "syntax", "escape", "check":
+		default:
+			return "", false
+		}
+	}
+	return "", false
+}
+
+func firstWord(s string) string {
+	w, _, _ := strings.Cut(strings.TrimSpace(s), " ")
+	return w
 }
 
 // indexFoldWord returns the byte index of the first occurrence of
