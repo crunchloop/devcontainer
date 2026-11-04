@@ -369,7 +369,9 @@ sha256. So the lockfile needs no store change:
 - **HTTPS pin:** the URL is fetched as before and its digest is compared
   with `integrity` (`*feature.FeatureIntegrityError` on mismatch).
 - **Write:** after the fetch loop and before the build, as the CLI does.
-  The lockfile is regenerated from scratch, so stale entries drop. It is
+  The lockfile is regenerated from scratch, so stale entries drop,
+  including when the last feature is removed (frozen mode reports them;
+  a config without features and without a lockfile gets none). It is
   compared by content, not bytes, and written only when entries changed.
 
 Decisions:
@@ -382,10 +384,21 @@ Decisions:
    fixtures). The one divergence is key order for keys where bytewise
    order and `localeCompare` disagree. Comparing by content keeps either
    tool from rewriting the other's file over it.
-2. **Features baked into the base image keep their existing entry.**
-   They are not fetched, so they produce no new entry. Dropping theirs
-   would churn the file on every pre-baked run and always fail frozen
-   mode.
+2. **A baked feature stands in for a fetch only when the lockfile
+   accepts its artifact.** The base image's label records each
+   feature's `resolvedRef` (this library has written it since v0.1.0),
+   and the label match additionally requires that artifact to be the
+   pinned one, or, with no pin, a known one that is then locked. A
+   baked feature of a different or unrecorded artifact is fetched at
+   its pin and installed over the base image, so frozen mode never
+   accepts a base image the lockfile does not describe. An accepted
+   feature keeps its pin rather than being re-locked from the label,
+   which does not record `dependsOn`. With the lockfile disabled the
+   label match alone decides, as before.
+
+   Labels written by other tools record no artifact. The reference
+   CLI's never matched here anyway: their `id` is the full reference,
+   not the bare id the match compares.
 3. **Compose reattach neither reads nor writes the lockfile, and the
    lockfile is not part of the compose inputs hash.** Reattach resolves
    nothing, matching the CLI, which does not re-resolve features when it

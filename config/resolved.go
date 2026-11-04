@@ -257,6 +257,12 @@ type FeatureMetadata struct {
 	DocumentationURL string
 	LicenseURL       string
 
+	// ResolvedRef is the pinned artifact a label entry records for the
+	// feature it installed (ResolvedFeature.ResolvedRef at build time).
+	// Label-only, and empty when the image was built by a tool that does
+	// not record it.
+	ResolvedRef string
+
 	Options map[string]FeatureOption
 
 	// Mergeable surface (devpod parity). Empty / nil means "unset".

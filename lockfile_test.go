@@ -244,26 +244,106 @@ func TestLockfile_HTTPSIntegrityMismatchFails(t *testing.T) {
 	}
 }
 
-// TestLockfile_KeepsEntryForFeatureBakedIntoBaseImage: a feature the
-// base image's metadata label satisfies is not fetched, so its entry
-// carries over rather than being dropped (which frozen mode would
-// then reject on every run).
-func TestLockfile_KeepsEntryForFeatureBakedIntoBaseImage(t *testing.T) {
-	f := newLockFixture(t, `{"ghcr.io/x/a:1":{},"ghcr.io/x/b:1":{}}`)
-	f.rt.imagesByRef["alpine:3.20"] = &runtime.ImageDetails{Labels: map[string]string{
-		feature.MetadataLabel: `[{"id":"a","version":"1.0.0"}]`,
-	}}
-	locked := &feature.Lockfile{Features: map[string]feature.LockedFeature{
+// TestLockfile_BakedFeature: a feature the base image's metadata label
+// carries stands in for a fetch only when the lockfile accepts the
+// artifact the label records: the pinned one, or with no pin a known
+// one, which is then locked. Anything else is fetched (at the pin).
+func TestLockfile_BakedFeature(t *testing.T) {
+	baked := func(resolvedRef string) string {
+		return `[{"id":"a","version":"1.0.0","resolvedRef":"` + resolvedRef + `"}]`
+	}
+	pinned := &feature.Lockfile{Features: map[string]feature.LockedFeature{
 		"ghcr.io/x/a:1": ociEntry("ghcr.io/x/a", lockDigestOld),
-		"ghcr.io/x/b:1": ociEntry("ghcr.io/x/b", lockDigestOld),
 	}}
-	f.writeLock(locked)
+	cases := []struct {
+		name        string
+		label       string
+		lock        *feature.Lockfile
+		mode        LockfileMode
+		wantFetched []string
+		wantErr     bool
+		wantLock    *feature.Lockfile // nil: not checked
+	}{
+		{
+			name: "pinned artifact", label: baked("ghcr.io/x/a@" + lockDigestOld), lock: pinned,
+			mode: LockfileFrozen, wantLock: pinned,
+		},
+		{
+			name: "other artifact", label: baked("ghcr.io/x/a@" + lockDigestNew), lock: pinned,
+			mode: LockfileFrozen, wantFetched: []string{"ghcr.io/x/a@" + lockDigestOld}, wantLock: pinned,
+		},
+		{
+			name: "unrecorded artifact", label: `[{"id":"a","version":"1.0.0"}]`, lock: pinned,
+			mode: LockfileFrozen, wantFetched: []string{"ghcr.io/x/a@" + lockDigestOld}, wantLock: pinned,
+		},
+		{
+			name: "no pin locks the baked artifact", label: baked("ghcr.io/x/a@" + lockDigestOld),
+			mode: LockfileDefault, wantLock: pinned,
+		},
+		{
+			name: "no pin in frozen mode", label: baked("ghcr.io/x/a@" + lockDigestOld),
+			lock: &feature.Lockfile{Features: map[string]feature.LockedFeature{}}, mode: LockfileFrozen, wantErr: true,
+		},
+		{
+			name: "disabled trusts the label", label: `[{"id":"a","version":"1.0.0"}]`, mode: LockfileDisabled,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLockFixture(t, `{"ghcr.io/x/a:1":{}}`)
+			f.rt.imagesByRef["alpine:3.20"] = &runtime.ImageDetails{Labels: map[string]string{feature.MetadataLabel: tc.label}}
+			if tc.lock != nil {
+				f.writeLock(tc.lock)
+			}
+			err := f.build(tc.mode)
+			var me *feature.LockfileMismatchError
+			if tc.wantErr != errors.As(err, &me) || (!tc.wantErr && err != nil) {
+				t.Fatalf("build: %v, want mismatch error %v", err, tc.wantErr)
+			}
+			if !reflect.DeepEqual(f.store.fetched, tc.wantFetched) {
+				t.Errorf("fetched %v, want %v", f.store.fetched, tc.wantFetched)
+			}
+			if tc.wantLock != nil {
+				if got := f.readLock(); !got.Equal(tc.wantLock) {
+					t.Errorf("lockfile differs in %v", got.Changed(tc.wantLock))
+				}
+			}
+		})
+	}
+}
 
-	if err := f.build(LockfileFrozen); err != nil {
+// TestLockfile_NoFeatures: removing the last feature leaves entries
+// that are stale. Default mode empties the lockfile and frozen mode
+// reports them; without a lockfile none is created.
+func TestLockfile_NoFeatures(t *testing.T) {
+	stale := &feature.Lockfile{Features: map[string]feature.LockedFeature{
+		"ghcr.io/x/a:1": ociEntry("ghcr.io/x/a", lockDigestOld),
+	}}
+
+	f := newLockFixture(t, `{}`)
+	f.writeLock(stale)
+	var me *feature.LockfileMismatchError
+	if err := f.build(LockfileFrozen); !errors.As(err, &me) || !reflect.DeepEqual(me.Changed, []string{"ghcr.io/x/a:1"}) {
+		t.Fatalf("frozen: got %v, want a mismatch naming ghcr.io/x/a:1", err)
+	}
+	if err := f.build(LockfileDefault); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"ghcr.io/x/b@" + lockDigestOld}; !reflect.DeepEqual(f.store.fetched, want) {
-		t.Errorf("fetched %v, want only b", f.store.fetched)
+	if got := f.readLock(); got == nil || len(got.Features) != 0 {
+		t.Errorf("default: lockfile = %+v, want no entries", got)
+	}
+	if err := f.build(LockfileFrozen); err != nil {
+		t.Errorf("frozen after default emptied the lockfile: %v", err)
+	}
+
+	f = newLockFixture(t, `{}`)
+	for _, mode := range []LockfileMode{LockfileDefault, LockfileFrozen} {
+		if err := f.build(mode); err != nil {
+			t.Errorf("%q without a lockfile: %v", mode, err)
+		}
+	}
+	if _, err := os.Stat(f.lockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a lockfile was created for a config without features: %v", err)
 	}
 }
 

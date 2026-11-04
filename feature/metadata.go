@@ -100,6 +100,7 @@ func metadataFromFeatureMetadata(m config.FeatureMetadata) metadataEntry {
 	out := metadataEntry{
 		ID:                  m.ID,
 		Version:             m.Version,
+		ResolvedRef:         m.ResolvedRef,
 		RemoteUser:          m.RemoteUser,
 		ContainerUser:       m.ContainerUser,
 		UserEnvProbe:        string(m.UserEnvProbe),
@@ -205,7 +206,7 @@ func ParseMetadataLabel(label string) ([]config.FeatureMetadata, error) {
 		if err := json.Unmarshal([]byte(label), &single); err != nil {
 			return nil, err
 		}
-		return []config.FeatureMetadata{{ID: single.ID, Version: single.Version}}, nil
+		return []config.FeatureMetadata{{ID: single.ID, Version: single.Version, ResolvedRef: single.ResolvedRef}}, nil
 	}
 	var entries []metadataEntry
 	if err := json.Unmarshal([]byte(label), &entries); err != nil {
@@ -226,6 +227,7 @@ func (e metadataEntry) toFeatureMetadata() (config.FeatureMetadata, error) {
 	out := config.FeatureMetadata{
 		ID:                  e.ID,
 		Version:             e.Version,
+		ResolvedRef:         e.ResolvedRef,
 		RemoteUser:          e.RemoteUser,
 		ContainerUser:       e.ContainerUser,
 		UserEnvProbe:        config.UserEnvProbe(e.UserEnvProbe),

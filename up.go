@@ -397,7 +397,10 @@ func (e *Engine) createFresh(ctx context.Context, cfg *config.ResolvedConfig, op
 // markAlreadyInstalled flips AlreadyInstalled on each cfg.Features
 // entry whose request is satisfied by an entry in the base image's
 // devcontainer.metadata label. The match strategy (permissive vs
-// strict) follows EngineOptions.StrictFeatureVersionMatch.
+// strict) follows EngineOptions.StrictFeatureVersionMatch, and the
+// feature lockfile must accept the baked artifact (see
+// featureLock.acceptsBaked); a feature it rejects is fetched and
+// installed like any other.
 //
 // Pre-baked-image matching only applies to OCI features: the bare id
 // comparison requires extracting a basename from the request ref,
@@ -405,7 +408,7 @@ func (e *Engine) createFresh(ctx context.Context, cfg *config.ResolvedConfig, op
 // HTTPS URLs or local paths whose disk-side id may differ from the
 // ref's last path component. Local / HTTPS features always go through
 // fetch (cheap for local; HTTPS fetch is what gives us the id anyway).
-func (e *Engine) markAlreadyInstalled(cfg *config.ResolvedConfig, baked []config.FeatureMetadata) {
+func (e *Engine) markAlreadyInstalled(cfg *config.ResolvedConfig, baked []config.FeatureMetadata, lock *featureLock) {
 	mode := feature.MatchPermissive
 	if e.opts.StrictFeatureVersionMatch {
 		mode = feature.MatchStrict
@@ -426,11 +429,12 @@ func (e *Engine) markAlreadyInstalled(cfg *config.ResolvedConfig, baked []config
 			continue
 		}
 		for _, b := range baked {
-			if feature.Matches(b, req, mode) {
+			if feature.Matches(b, req, mode) && lock.acceptsBaked(*f, b) {
 				f.AlreadyInstalled = true
 				// Preserve baked metadata so the regenerated label can
 				// include it without re-fetching.
 				f.Metadata = b
+				f.ResolvedRef = b.ResolvedRef
 				break
 			}
 		}
@@ -1273,26 +1277,27 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 	var baseMeta []config.FeatureMetadata
 	if details, err := e.runtime.InspectImage(ctx, baseImage); err == nil && details != nil {
 		if label := details.Labels[feature.MetadataLabel]; label != "" {
-			parsed, err := feature.ParseMetadataLabel(label)
-			if err == nil {
+			if parsed, err := feature.ParseMetadataLabel(label); err == nil {
 				baseMeta = parsed
-				e.markAlreadyInstalled(cfg, parsed)
 			}
 		}
 	}
 
 	if len(cfg.Features) == 0 {
-		return baseImage, baseMeta, nil
+		return baseImage, baseMeta, commitNoFeatures(opts.Lockfile, opts.ConfigPath)
 	}
 
 	// Local features are relative to devcontainer.json; Up and Build
 	// always set ConfigPath.
 	configDir := filepath.Dir(opts.ConfigPath)
 
+	// The lockfile decides which baked features stand in for a fetch,
+	// so it is read before the label is matched.
 	lock, err := loadFeatureLock(opts.Lockfile, opts.ConfigPath)
 	if err != nil {
 		return "", nil, err
 	}
+	e.markAlreadyInstalled(cfg, baseMeta, lock)
 
 	// Emit a Skipped event for features the base-image label satisfied
 	// (markAlreadyInstalled has already flipped their AlreadyInstalled
