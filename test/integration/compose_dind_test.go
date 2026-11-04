@@ -17,8 +17,15 @@ import (
 // dindFeatureRef is the upstream docker-in-docker feature. Its metadata
 // declares the mount this test is about —
 // {"source":"dind-var-lib-docker-${devcontainerId}","target":"/var/lib/docker","type":"volume"}
-// — alongside privileged and the docker-init.sh entrypoint.
-const dindFeatureRef = "ghcr.io/devcontainers/features/docker-in-docker:2"
+// — alongside privileged and the docker-init.sh entrypoint (and, since
+// v4, a second volume at /var/lib/containerd).
+//
+// Major version 4 or later: v2 switches a Debian image to
+// iptables-legacy unconditionally at install time, and the inner
+// dockerd then cannot create its NAT chain on hosts whose kernel no
+// longer supports legacy iptables (Ubuntu 26.04, the ubuntu-latest
+// runner since 2026-11). v4 chooses nft there.
+const dindFeatureRef = "ghcr.io/devcontainers/features/docker-in-docker:4"
 
 // dindBaseImage is a Debian base the feature's install script supports.
 const dindBaseImage = "debian:bookworm-slim"
@@ -82,17 +89,7 @@ services:
 			out, lsErr := exec.Command("docker", "volume", "ls", "-q",
 				"--filter", "label=com.docker.compose.volume="+volKey).Output()
 			vols := strings.Fields(string(out))
-			t.Cleanup(func() {
-				_ = eng.Down(context.Background(), wsObj, devcontainer.DownOptions{
-					Remove:        true,
-					RemoveVolumes: true,
-				})
-				// Down does not remove every named volume on every
-				// backend; remove the feature's volume explicitly.
-				for _, v := range vols {
-					_ = exec.Command("docker", "volume", "rm", "-f", v).Run()
-				}
-			})
+			cleanupComposeWorkspace(t, eng, wsObj)
 			if lsErr != nil || len(vols) != 1 || !strings.HasSuffix(vols[0], "_"+volKey) {
 				t.Fatalf("project volume for %s = %v (err %v), want exactly one <project>_%s", volKey, vols, lsErr, volKey)
 			}
