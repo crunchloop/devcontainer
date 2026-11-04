@@ -384,10 +384,10 @@ func extractBaseImages(content string, buildArgs map[string]string) []string {
 //     escape, check (case-insensitive) — the first other line ends the
 //     run;
 //   - the image is the value's first word (the rest is frontend
-//     arguments).
-//
-// DetectSyntax also accepts a JSON document with a "syntax" key;
-// that is not a Dockerfile and is left out.
+//     arguments);
+//   - failing both comment forms, a file that is a JSON object with a
+//     string "syntax" member names the image with the whole value (the
+//     input format of custom frontends that take JSON).
 func syntaxFrontend(content []byte, buildArgs map[string]string) string {
 	if v, ok := buildArgs["BUILDKIT_SYNTAX"]; ok {
 		return firstWord(v)
@@ -399,6 +399,12 @@ func syntaxFrontend(content []byte, buildArgs map[string]string) string {
 	for _, comment := range []string{"#", "//"} {
 		if v, ok := directive(content, comment, "syntax"); ok {
 			return firstWord(v)
+		}
+	}
+	var doc map[string]any
+	if json.Unmarshal(content, &doc) == nil {
+		if v, ok := doc["syntax"].(string); ok {
+			return v
 		}
 	}
 	return ""

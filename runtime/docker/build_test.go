@@ -226,6 +226,11 @@ func TestSyntaxFrontend(t *testing.T) {
 		{"after an instruction", "FROM alpine\n# syntax=docker/dockerfile:1\n", nil, ""},
 		{"build arg wins", "# syntax=docker/dockerfile:1\nFROM alpine\n", map[string]string{"BUILDKIT_SYNTAX": " docker/dockerfile:1.9 --x"}, "docker/dockerfile:1.9"},
 		{"build arg without directive", "FROM alpine\n", map[string]string{"BUILDKIT_SYNTAX": "docker/dockerfile:1"}, "docker/dockerfile:1"},
+		{"json", "{\"syntax\": \"registry.example.com/fe:2\", \"stages\": []}\n", nil, "registry.example.com/fe:2"},
+		{"json after shebang", "#!/usr/bin/env x\n{\"syntax\": \"registry.example.com/fe:2\"}", nil, "registry.example.com/fe:2"},
+		{"json without syntax", "{\"stages\": []}", nil, ""},
+		{"json non-string syntax", "{\"syntax\": 1}", nil, ""},
+		{"comment directive wins over json", "# syntax=docker/dockerfile:1\n{\"syntax\": \"x\"}", nil, "docker/dockerfile:1"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
