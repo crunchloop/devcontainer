@@ -24,6 +24,11 @@ type metadataEntry struct {
 	ID          string `json:"id,omitempty"`
 	Version     string `json:"version,omitempty"`
 	ResolvedRef string `json:"resolvedRef,omitempty"`
+	// DependsOn records the dependsOn of the feature the entry installed,
+	// as {} when it has none, so a build on top knows the image already
+	// carries those dependencies. Absent from labels written before it
+	// was recorded.
+	DependsOn *map[string]map[string]any `json:"dependsOn,omitempty"`
 
 	// Mergeable surface.
 	RemoteUser           string            `json:"remoteUser,omitempty"`
@@ -82,6 +87,11 @@ func buildMetadataLabel(plan BuildPlan) ([]byte, error) {
 		}
 		e := metadataFromFeatureMetadata(f.Metadata)
 		e.ResolvedRef = f.ResolvedRef
+		deps := f.Metadata.DependsOn
+		if deps == nil {
+			deps = map[string]map[string]any{}
+		}
+		e.DependsOn = &deps
 		entries = append(entries, e)
 	}
 
@@ -116,6 +126,10 @@ func metadataFromFeatureMetadata(m config.FeatureMetadata) metadataEntry {
 		SecurityOpt:         m.SecurityOpt,
 		Entrypoint:          m.Entrypoint,
 		Customizations:      m.Customizations,
+	}
+	if m.DependsOn != nil {
+		deps := m.DependsOn
+		out.DependsOn = &deps
 	}
 	if m.HostRequirements != nil {
 		out.HostRequirements = &rawHostReq{
@@ -243,6 +257,12 @@ func (e metadataEntry) toFeatureMetadata() (config.FeatureMetadata, error) {
 		SecurityOpt:         e.SecurityOpt,
 		Entrypoint:          e.Entrypoint,
 		Customizations:      e.Customizations,
+	}
+	if e.DependsOn != nil {
+		out.DependsOn = *e.DependsOn
+		if out.DependsOn == nil {
+			out.DependsOn = map[string]map[string]any{}
+		}
 	}
 	if e.HostRequirements != nil {
 		out.HostRequirements = &config.HostRequirements{

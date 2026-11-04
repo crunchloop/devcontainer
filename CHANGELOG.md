@@ -60,6 +60,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   access without one. The frontend image is now pre-pulled through the
   classic pull API, as `FROM` images already were. The directive is read
   the way BuildKit's parser reads it. (#148)
+- **features** — features that another feature's `dependsOn` requires
+  are now installed even when `devcontainer.json` does not declare them,
+  as the spec requires. (#147)
+  - Previously `dependsOn` only ordered features that were declared
+    anyway. A feature that relied on an undeclared one installed without
+    it.
+  - Dependencies are fetched recursively, get their options validated
+    and defaults applied, and are locked and pinned in
+    `devcontainer-lock.json` under their `dependsOn` key, as the
+    reference CLI does.
+  - Duplicates are collapsed by spec equality: same content and same
+    options once defaults apply. One feature requested with different
+    options is installed once per set of options.
+  - Declared features that resolve to the same content with the same
+    options are now installed once rather than twice.
+  - A dependency the base image already carries (at the artifact the
+    lockfile accepts) is not installed again, but its own dependencies
+    are still followed. Image labels now record each feature's
+    `dependsOn`; for a label written before that, the baked feature's
+    metadata is fetched at its recorded artifact to find them.
+  - A dependency dropped as a duplicate of another reference is still
+    locked under its own key.
+  - A local dependency's content is part of the compose inputs hash.
+  - See design/features.md §5.1.
+- **features** — OCI feature references are lowercased before they are
+  parsed, as the reference CLI does. References with uppercase
+  characters, such as `ghcr.io/codspace/dependson/A:2`, failed to parse.
 
 ## [0.5.3] - 2026-10-28
 

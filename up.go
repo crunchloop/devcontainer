@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"time"
@@ -409,36 +410,120 @@ func (e *Engine) createFresh(ctx context.Context, cfg *config.ResolvedConfig, op
 // ref's last path component. Local / HTTPS features always go through
 // fetch (cheap for local; HTTPS fetch is what gives us the id anyway).
 func (e *Engine) markAlreadyInstalled(cfg *config.ResolvedConfig, baked []config.FeatureMetadata, lock *featureLock) {
-	mode := feature.MatchPermissive
-	if e.opts.StrictFeatureVersionMatch {
-		mode = feature.MatchStrict
-	}
 	for i := range cfg.Features {
 		f := &cfg.Features[i]
 		if f.AlreadyInstalled {
 			continue
 		}
-		if f.SourceKind != config.FeatureSourceOCI {
-			continue
-		}
-		req := config.FeatureMetadata{
-			ID:      ociRefBareID(f.Ref),
-			Version: optionVersionString(f.Options),
-		}
-		if req.ID == "" {
-			continue
-		}
-		for _, b := range baked {
-			if feature.Matches(b, req, mode) && lock.acceptsBaked(*f, b) {
-				f.AlreadyInstalled = true
-				// Preserve baked metadata so the regenerated label can
-				// include it without re-fetching.
-				f.Metadata = b
-				f.ResolvedRef = b.ResolvedRef
-				break
-			}
+		if meta, ok := e.bakedFeature(*f, baked, lock); ok {
+			f.AlreadyInstalled = true
+			// Preserve baked metadata so the regenerated label can
+			// include it without re-fetching.
+			f.Metadata = meta
+			f.ResolvedRef = meta.ResolvedRef
 		}
 	}
+}
+
+// bakedFeature returns the base-image label entry that satisfies f, if
+// any. See markAlreadyInstalled.
+func (e *Engine) bakedFeature(f config.ResolvedFeature, baked []config.FeatureMetadata, lock *featureLock) (config.FeatureMetadata, bool) {
+	if f.SourceKind != config.FeatureSourceOCI {
+		return config.FeatureMetadata{}, false
+	}
+	req := config.FeatureMetadata{
+		ID:      ociRefBareID(f.Ref),
+		Version: optionVersionString(f.Options),
+	}
+	if req.ID == "" {
+		return config.FeatureMetadata{}, false
+	}
+	mode := feature.MatchPermissive
+	if e.opts.StrictFeatureVersionMatch {
+		mode = feature.MatchStrict
+	}
+	for _, b := range baked {
+		if feature.Matches(b, req, mode) && lock.acceptsBaked(f, b) {
+			return b, true
+		}
+	}
+	return config.FeatureMetadata{}, false
+}
+
+// dependencies returns the features f's dependsOn requires that
+// features does not already hold, in key order, unfetched. One the
+// base image's label satisfies is returned AlreadyInstalled, as
+// markAlreadyInstalled marks a declared feature, and so is not
+// fetched; layerFeatures still follows its own dependencies.
+func (e *Engine) dependencies(features []config.ResolvedFeature, f config.ResolvedFeature, baked []config.FeatureMetadata, lock *featureLock, bus *eventBus) []config.ResolvedFeature {
+	keys := make([]string, 0, len(f.Metadata.DependsOn))
+	for key := range f.Metadata.DependsOn {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var out []config.ResolvedFeature
+	for _, key := range keys {
+		opts := f.Metadata.DependsOn[key]
+		if requested(features, key, opts) || requested(out, key, opts) {
+			continue
+		}
+		dep := config.ResolvedFeature{Ref: key, Options: opts, SourceKind: config.ClassifyFeatureRef(key)}
+		if meta, ok := e.bakedFeature(dep, baked, lock); ok {
+			dep.AlreadyInstalled = true
+			dep.Metadata = meta
+			dep.ResolvedRef = meta.ResolvedRef
+			bus.Emit(events.FeatureSkippedEvent{Ref: key, Reason: "base_image_label"})
+		}
+		out = append(out, dep)
+	}
+	return out
+}
+
+// bakedDependsOn returns the dependsOn of a feature the base image
+// installs whose label entry does not record it, read from the
+// feature's metadata at the artifact the image carries (a digest
+// reference, which the feature cache serves without a registry call
+// once fetched). Never nil, so the label of an image built on top
+// records it.
+func (e *Engine) bakedDependsOn(ctx context.Context, f config.ResolvedFeature) (map[string]map[string]any, error) {
+	ref := f.Ref
+	if f.ResolvedRef != "" && f.SourceKind == config.FeatureSourceOCI {
+		ref = f.ResolvedRef
+	}
+	fetched, err := e.featureStore.Fetch(ctx, ref, f.SourceKind)
+	if err != nil {
+		return nil, fmt.Errorf("read dependsOn of baked feature %s: %w", f.Ref, err)
+	}
+	if fetched.Metadata.DependsOn == nil {
+		return map[string]map[string]any{}, nil
+	}
+	return fetched.Metadata.DependsOn, nil
+}
+
+// requested reports whether features already holds the dependency
+// key with opts: the same reference installed with the same options.
+// It tells a cycle or a repeated dependency apart before fetching;
+// duplicateFeature catches the same content under another reference
+// after.
+func requested(features []config.ResolvedFeature, key string, opts map[string]any) bool {
+	for _, g := range features {
+		if g.Ref == key && feature.SameOptions(g, opts) {
+			return true
+		}
+	}
+	return false
+}
+
+// duplicateFeature reports whether earlier holds a fetched feature with
+// f's content and options.
+func duplicateFeature(earlier []config.ResolvedFeature, f config.ResolvedFeature) bool {
+	for _, g := range earlier {
+		if g.ResolvedRef != "" && g.ResolvedRef == f.ResolvedRef && reflect.DeepEqual(g.Options, f.Options) {
+			return true
+		}
+	}
+	return false
 }
 
 // emitFeatureSkippedFromLabel fires FeatureSkipped events for each request
@@ -1305,10 +1390,32 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 	// skip(s) → resolve_start → resolved → ...
 	emitFeatureSkippedFromLabel(opts.bus, cfg.Features)
 
-	// Fetch each not-yet-installed feature. Resolve refs in place.
-	for i := range cfg.Features {
+	// Fetch each not-yet-installed feature. Resolve refs in place. Each
+	// fetched feature appends the features its dependsOn requires, which
+	// the spec installs whether or not devcontainer.json declares them,
+	// so the loop fetches those in turn.
+	//
+	// A feature dropped as the duplicate of another under a different
+	// reference is still a requested key; aliases keeps it to be locked.
+	var aliases []config.ResolvedFeature
+	for i := 0; i < len(cfg.Features); i++ {
 		f := &cfg.Features[i]
-		if f.AlreadyInstalled || f.Dir != "" {
+		if f.AlreadyInstalled {
+			// The base image installs f, but its dependencies only if the
+			// image was built with them: from a label that records them,
+			// or, for a label written before they were recorded, as f's
+			// own metadata names them. f itself is not installed again.
+			if f.Metadata.DependsOn == nil {
+				deps, err := e.bakedDependsOn(ctx, *f)
+				if err != nil {
+					return "", nil, err
+				}
+				f.Metadata.DependsOn = deps
+			}
+			cfg.Features = append(cfg.Features, e.dependencies(cfg.Features, cfg.Features[i], baseMeta, lock, opts.bus)...)
+			continue
+		}
+		if f.Dir != "" {
 			continue
 		}
 		ref := f.Ref
@@ -1345,9 +1452,19 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 		}
 		f.Options = merged
 		cfg.Warnings = append(cfg.Warnings, mwarns...)
+
+		// Spec equality: the same content installed with the same
+		// options is one feature, however its reference was spelled.
+		if duplicateFeature(cfg.Features[:i], *f) {
+			aliases = append(aliases, *f)
+			cfg.Features = append(cfg.Features[:i], cfg.Features[i+1:]...)
+			i--
+			continue
+		}
+		cfg.Features = append(cfg.Features, e.dependencies(cfg.Features, cfg.Features[i], baseMeta, lock, opts.bus)...)
 	}
 
-	if err := lock.commit(cfg.Features); err != nil {
+	if err := lock.commit(slices.Concat(cfg.Features, aliases)); err != nil {
 		return "", nil, err
 	}
 

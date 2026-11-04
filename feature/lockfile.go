@@ -173,7 +173,7 @@ func PinnedRef(f config.ResolvedFeature, entry LockedFeature) (string, error) {
 	if f.SourceKind != config.FeatureSourceOCI {
 		return f.Ref, nil
 	}
-	ref, err := name.ParseReference(f.Ref)
+	ref, err := name.ParseReference(strings.ToLower(f.Ref))
 	if err != nil {
 		return "", fmt.Errorf("parse OCI ref %q: %w", f.Ref, err)
 	}

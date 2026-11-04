@@ -557,7 +557,7 @@ func TestUp_PrebakedImageSkipsFeatureFetch(t *testing.T) {
 		ID:   "sha256:base",
 		Tags: []string{"alpine:3.20"},
 		Labels: map[string]string{
-			"devcontainer.metadata": `[{"id":"pre-baked-feature","version":"1.5.0","resolvedRef":"ghcr.io/x/pre-baked-feature@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]`,
+			"devcontainer.metadata": `[{"id":"pre-baked-feature","version":"1.5.0","resolvedRef":"ghcr.io/x/pre-baked-feature@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","dependsOn":{}}]`,
 		},
 	}
 	eng, _ := New(EngineOptions{Runtime: rt})

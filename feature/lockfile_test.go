@@ -193,6 +193,7 @@ func TestPinnedRef(t *testing.T) {
 	for ref, want := range map[string]string{
 		"ghcr.io/x/f:1":          "ghcr.io/x/f@" + digestA,
 		"ghcr.io/x/f":            "ghcr.io/x/f@" + digestA,
+		"ghcr.io/X/F:1":          "ghcr.io/x/f@" + digestA,
 		"ghcr.io/x/f@" + digestB: "ghcr.io/x/f@" + digestA,
 	} {
 		got, err := PinnedRef(config.ResolvedFeature{Ref: ref, SourceKind: config.FeatureSourceOCI}, entry)

@@ -123,6 +123,7 @@ func (e *Engine) composeInputsHash(cfg *config.ResolvedConfig, opts UpOptions, p
 	}
 	configDir := composeWorkingDir(opts)
 	features := make([]composeHashedFeature, 0, len(cfg.Features))
+	var local []string
 	for _, f := range cfg.Features {
 		hf := composeHashedFeature{Ref: f.Ref, SourceKind: f.SourceKind, Options: f.Options}
 		if f.SourceKind == config.FeatureSourceLocal {
@@ -131,8 +132,43 @@ func (e *Engine) composeInputsHash(cfg *config.ResolvedConfig, opts UpOptions, p
 				return "", fmt.Errorf("compose inputs hash: local feature %s: %w", f.Ref, err)
 			}
 			hf.LocalContent = digest
+			local = append(local, f.Ref)
 		}
 		features = append(features, hf)
+	}
+	// Features a feature's dependsOn pulls in are implied by the
+	// declaring feature's content, which holds the dependsOn keys and
+	// options, except for the content of a local dependency: hash that
+	// too, transitively. A project with none hashes as before.
+	hashed := map[string]bool{}
+	for _, ref := range local {
+		hashed[ref] = true
+	}
+	for len(local) > 0 {
+		ref := local[0]
+		local = local[1:]
+		meta, err := feature.ParseMetadata(feature.ResolveLocalRef(configDir, ref))
+		if err != nil {
+			// Its content is hashed; the build reports the bad metadata.
+			continue
+		}
+		deps := make([]string, 0, len(meta.DependsOn))
+		for dep := range meta.DependsOn {
+			deps = append(deps, dep)
+		}
+		sort.Strings(deps)
+		for _, dep := range deps {
+			if hashed[dep] || config.ClassifyFeatureRef(dep) != config.FeatureSourceLocal {
+				continue
+			}
+			hashed[dep] = true
+			digest, err := hashDirContent(feature.ResolveLocalRef(configDir, dep), maxLocalFeatureHashBytes)
+			if err != nil {
+				return "", fmt.Errorf("compose inputs hash: local feature %s: %w", dep, err)
+			}
+			features = append(features, composeHashedFeature{Ref: dep, SourceKind: config.FeatureSourceLocal, LocalContent: digest})
+			local = append(local, dep)
+		}
 	}
 	in := composeHashInput{
 		Version: composeInputsHashVersion,

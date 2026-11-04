@@ -70,9 +70,9 @@ field/behavior the library covers. Legend: ✅ acted on · ⚠️ parsed but not
 | Field | Status | Notes |
 | --- | --- | --- |
 | `features` (OCI / HTTPS / local) | ✅ | DAG ordering, options validation, content-addressed cache (local-first for digests and exact `X.Y.Z` versions; floating tags fall back to the last resolution when the registry is unreachable) |
-| `dependsOn` / `installsAfter` / `overrideFeatureInstallOrder` | ✅ | |
+| `dependsOn` / `installsAfter` / `overrideFeatureInstallOrder` | ✅ | `dependsOn` features are installed whether declared or not, deduplicated by content and options per the spec |
 | Pre-baked-image short-circuit | ✅ | `devcontainer.metadata` label read on Up |
-| `devcontainer-lock.json` | ✅ | Written and pinned by default (`UpOptions.Lockfile` / `BuildOptions.Lockfile`: frozen, upgrade, disabled), CLI-compatible format. Records declared features only: features reachable only through `dependsOn` are not installed |
+| `devcontainer-lock.json` | ✅ | Written and pinned by default (`UpOptions.Lockfile` / `BuildOptions.Lockfile`: frozen, upgrade, disabled), CLI-compatible format, including features pulled in through `dependsOn` |
 
 **Lifecycle**
 

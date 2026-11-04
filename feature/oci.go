@@ -46,7 +46,10 @@ const devContainerFeatureMediaType = "application/vnd.devcontainers"
 // successful online fetch. The recorded digest is only used when its
 // extracted content is still in the cache.
 func (s *DiskStore) fetchOCI(ctx context.Context, ref string) (Fetched, error) {
-	parsed, err := name.ParseReference(ref)
+	// OCI repository names are lowercase; the reference CLI lowercases
+	// the whole reference, so feature ids such as ghcr.io/owner/A:1
+	// resolve.
+	parsed, err := name.ParseReference(strings.ToLower(ref))
 	if err != nil {
 		return Fetched{}, fmt.Errorf("parse OCI ref %q: %w", ref, err)
 	}
@@ -143,7 +146,7 @@ func (s *DiskStore) cachedOCI(repo, digest string) (Fetched, bool) {
 	if _, err := os.Stat(filepath.Join(extractedDir, installScript)); err != nil {
 		return Fetched{}, false
 	}
-	meta, err := parseMetadata(extractedDir)
+	meta, err := ParseMetadata(extractedDir)
 	if err != nil {
 		return Fetched{}, false
 	}
@@ -254,7 +257,7 @@ func (s *DiskStore) extractOCI(ref, repo string, digest v1.Hash, img v1.Image) (
 	if _, err := os.Stat(filepath.Join(tmpDir, installScript)); err != nil {
 		return Fetched{}, fmt.Errorf("OCI feature %s: missing %s after extract: %w", ref, installScript, err)
 	}
-	if _, err := parseMetadata(tmpDir); err != nil {
+	if _, err := ParseMetadata(tmpDir); err != nil {
 		return Fetched{}, err
 	}
 	if err := os.RemoveAll(extractedDir); err != nil {
@@ -263,7 +266,7 @@ func (s *DiskStore) extractOCI(ref, repo string, digest v1.Hash, img v1.Image) (
 	if err := os.Rename(tmpDir, extractedDir); err != nil {
 		return Fetched{}, fmt.Errorf("install extracted feature %s: %w", ref, err)
 	}
-	meta, err := parseMetadata(extractedDir)
+	meta, err := ParseMetadata(extractedDir)
 	if err != nil {
 		return Fetched{}, err
 	}
