@@ -149,6 +149,41 @@ func TestEngineBuild_BuildSource_NoFeatures(t *testing.T) {
 	t.Cleanup(func() { _ = rt.RemoveImage(context.Background(), tag) })
 }
 
+// TestEngineBuild_BuildSource_SyntaxDirective: a user Dockerfile that
+// names a frontend image with `# syntax=` and uses syntax only that
+// frontend parses (COPY --chmod, RUN --mount). On Docker Engine
+// before 29.6, BuildKit cannot resolve the frontend from the registry
+// without a session (#148); the engine pre-pulls it.
+func TestEngineBuild_BuildSource_SyntaxDirective(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+
+	eng, rt := newEngine(t)
+	defer rt.Close()
+
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "Dockerfile"), "# syntax=docker/dockerfile:1\n"+
+		"FROM "+testImage+"\n"+
+		"COPY --chmod=0755 hello.sh /usr/local/bin/hello\n"+
+		"RUN --mount=type=tmpfs,target=/scratch hello > /etc/marker\n")
+	mustWrite(t, filepath.Join(dir, "hello.sh"), "#!/bin/sh\necho syntax-directive\n")
+	mustWrite(t, filepath.Join(dir, ".devcontainer", "devcontainer.json"),
+		`{"build": {"dockerfile": "Dockerfile", "context": ".."}}`)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	const tag = "dc-go-build-test-syntax:v1"
+	if _, err := eng.Build(ctx, devcontainer.BuildOptions{
+		LocalWorkspaceFolder: dir,
+		ImageName:            tag,
+	}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.RemoveImage(context.Background(), tag) })
+}
+
 // TestEngineBuild_ComposeRefused: compose sources are refused with a
 // clear error rather than silently doing nothing.
 func TestEngineBuild_ComposeRefused(t *testing.T) {

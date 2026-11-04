@@ -203,3 +203,40 @@ func TestSubstituteArgs(t *testing.T) {
 		}
 	}
 }
+
+func TestSyntaxFrontend(t *testing.T) {
+	cases := []struct {
+		name       string
+		dockerfile string
+		buildArgs  map[string]string
+		want       string
+	}{
+		{"none", "FROM alpine:3.20\n", nil, ""},
+		{"directive", "# syntax=docker/dockerfile:1\nFROM alpine:3.20\n", nil, "docker/dockerfile:1"},
+		{"spaced and uppercase key", "#  SYNTAX = docker/dockerfile:1.7-labs  \nFROM alpine\n", nil, "docker/dockerfile:1.7-labs"},
+		{"frontend arguments", "# syntax=registry.example.com/fe:1 --opt=x\nFROM alpine\n", nil, "registry.example.com/fe:1"},
+		{"after other directives", "# escape=`\n# check=skip=all\n# syntax=docker/dockerfile:1\nFROM alpine\n", nil, "docker/dockerfile:1"},
+		{"after shebang", "#!/usr/bin/env buildctl\n# syntax=docker/dockerfile:1\nFROM alpine\n", nil, "docker/dockerfile:1"},
+		{"after BOM", "\xef\xbb\xbf# syntax=docker/dockerfile:1\nFROM alpine\n", nil, "docker/dockerfile:1"},
+		{"CRLF", "# syntax=docker/dockerfile:1\r\nFROM alpine\r\n", nil, "docker/dockerfile:1"},
+		{"c-style comment", "// syntax=docker/dockerfile:1\nFROM alpine\n", nil, "docker/dockerfile:1"},
+		{"after a plain comment", "# build the app\n# syntax=docker/dockerfile:1\nFROM alpine\n", nil, ""},
+		{"after a blank line", "\n# syntax=docker/dockerfile:1\nFROM alpine\n", nil, ""},
+		{"indented", "  # syntax=docker/dockerfile:1\nFROM alpine\n", nil, ""},
+		{"after an instruction", "FROM alpine\n# syntax=docker/dockerfile:1\n", nil, ""},
+		{"build arg wins", "# syntax=docker/dockerfile:1\nFROM alpine\n", map[string]string{"BUILDKIT_SYNTAX": " docker/dockerfile:1.9 --x"}, "docker/dockerfile:1.9"},
+		{"build arg without directive", "FROM alpine\n", map[string]string{"BUILDKIT_SYNTAX": "docker/dockerfile:1"}, "docker/dockerfile:1"},
+		{"json", "{\"syntax\": \"registry.example.com/fe:2\", \"stages\": []}\n", nil, "registry.example.com/fe:2"},
+		{"json after shebang", "#!/usr/bin/env x\n{\"syntax\": \"registry.example.com/fe:2\"}", nil, "registry.example.com/fe:2"},
+		{"json without syntax", "{\"stages\": []}", nil, ""},
+		{"json non-string syntax", "{\"syntax\": 1}", nil, ""},
+		{"comment directive wins over json", "# syntax=docker/dockerfile:1\n{\"syntax\": \"x\"}", nil, "docker/dockerfile:1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := syntaxFrontend([]byte(tc.dockerfile), tc.buildArgs); got != tc.want {
+				t.Errorf("syntaxFrontend = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

@@ -45,6 +45,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   discovered `devcontainer.json`'s directory for local features and the
   compose working directory. Previously they always assumed
   `.devcontainer/`, which was wrong for a root `.devcontainer.json`.
+- **runtime/docker** — a user Dockerfile that names a frontend with
+  `# syntax=` (or the `BUILDKIT_SYNTAX` build arg) no longer fails with
+  `failed to resolve source metadata for docker.io/docker/dockerfile:1:
+  no active sessions` on Docker Engine before 29.6. `BuildImage` builds
+  without a BuildKit session, and BuildKit before v0.31 refuses registry
+  access without one. The frontend image is now pre-pulled through the
+  classic pull API, as `FROM` images already were. The directive is read
+  the way BuildKit's parser reads it. (#148)
 
 ## [0.5.3] - 2026-10-28
 
