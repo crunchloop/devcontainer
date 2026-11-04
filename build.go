@@ -51,6 +51,9 @@ type BuildOptions struct {
 	// IfNotPresent — same as Up.
 	PullPolicy PullPolicy
 
+	// Lockfile controls the feature lockfile, as UpOptions.Lockfile.
+	Lockfile LockfileMode
+
 	// Platform pins the target platform (e.g. "linux/amd64",
 	// "linux/arm64") on every BuildImage call. Empty leaves it
 	// unspecified.
@@ -106,6 +109,14 @@ func (e *Engine) Build(ctx context.Context, opts BuildOptions) (*BuildResult, er
 		return nil, fmt.Errorf("BuildOptions.LocalWorkspaceFolder is required")
 	}
 
+	// Fix the config path Resolve would discover: the lockfile and
+	// local features are located beside it.
+	configPath, err := configPathFor(opts.LocalWorkspaceFolder, opts.ConfigPath)
+	if err != nil {
+		return nil, err
+	}
+	opts.ConfigPath = configPath
+
 	bus := newEventBus(e.emitter, opts.Events)
 	defer bus.Close()
 
@@ -134,6 +145,7 @@ func (e *Engine) Build(ctx context.Context, opts BuildOptions) (*BuildResult, er
 		ConfigPath:           opts.ConfigPath,
 		LocalEnv:             opts.LocalEnv,
 		PullPolicy:           opts.PullPolicy,
+		Lockfile:             opts.Lockfile,
 		bus:                  bus,
 		override: &buildOverride{
 			FinalTag:       opts.ImageName,

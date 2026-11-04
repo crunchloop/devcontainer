@@ -121,7 +121,7 @@ func (e *Engine) composeInputsHash(cfg *config.ResolvedConfig, opts UpOptions, p
 	if baseImageID == "" {
 		return "", fmt.Errorf("compose inputs hash: base image ID unknown")
 	}
-	configDir := composeWorkingDir(cfg, opts)
+	configDir := composeWorkingDir(opts)
 	features := make([]composeHashedFeature, 0, len(cfg.Features))
 	for _, f := range cfg.Features {
 		hf := composeHashedFeature{Ref: f.Ref, SourceKind: f.SourceKind, Options: f.Options}

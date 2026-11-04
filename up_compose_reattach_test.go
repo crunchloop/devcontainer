@@ -48,7 +48,7 @@ func newHashFixture(t *testing.T, dir, devcontainerJSON, composeYAML string) *ha
 	src := cfg.Source.(*config.ComposeSource)
 	project, err := compose.Load(context.Background(), compose.LoadOptions{
 		Files:       src.Files,
-		WorkingDir:  composeWorkingDir(cfg, opts),
+		WorkingDir:  composeWorkingDir(opts),
 		ProjectName: composeProjectName(cfg),
 		Env:         mapToEnvList(opts.LocalEnv),
 	})
@@ -289,7 +289,7 @@ func (f *hashFixture) reattach(t *testing.T) error {
 		t.Fatal(err)
 	}
 	_, err = f.eng.reattachCompose(context.Background(), f.cfg, f.opts, f.project, src, primary,
-		composeProjectName(f.cfg), composeWorkingDir(f.cfg, f.opts))
+		composeProjectName(f.cfg), composeWorkingDir(f.opts))
 	return err
 }
 

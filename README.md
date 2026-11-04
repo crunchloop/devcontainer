@@ -72,7 +72,7 @@ field/behavior the library covers. Legend: ✅ acted on · ⚠️ parsed but not
 | `features` (OCI / HTTPS / local) | ✅ | DAG ordering, options validation, content-addressed cache (local-first for digests and exact `X.Y.Z` versions; floating tags fall back to the last resolution when the registry is unreachable) |
 | `dependsOn` / `installsAfter` / `overrideFeatureInstallOrder` | ✅ | |
 | Pre-baked-image short-circuit | ✅ | `devcontainer.metadata` label read on Up |
-| `devcontainer-lock.json` | ❌ | [#26](https://github.com/crunchloop/devcontainer/issues/26) |
+| `devcontainer-lock.json` | ✅ | Written and pinned by default (`UpOptions.Lockfile` / `BuildOptions.Lockfile`: frozen, upgrade, disabled), CLI-compatible format. Records declared features only: features reachable only through `dependsOn` are not installed |
 
 **Lifecycle**
 

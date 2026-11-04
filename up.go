@@ -53,6 +53,13 @@ type UpOptions struct {
 	// PullPolicy controls image pulling. Default IfNotPresent.
 	PullPolicy PullPolicy
 
+	// Lockfile controls the feature lockfile (devcontainer-lock.json
+	// beside devcontainer.json). Default LockfileDefault: pin features
+	// to it and write it when what resolved differs, as the reference
+	// CLI does. Not consulted when Up starts or reattaches an existing
+	// container, since nothing is resolved then.
+	Lockfile LockfileMode
+
 	// Events optionally receives structured engine events for the duration
 	// of this Up call (config resolved, feature resolve, build/pull
 	// progress, container lifecycle, spec lifecycle phases). Drop-on-full;
@@ -175,6 +182,14 @@ func (e *Engine) Up(ctx context.Context, opts UpOptions) (*Workspace, error) {
 	if opts.LocalWorkspaceFolder == "" {
 		return nil, fmt.Errorf("UpOptions.LocalWorkspaceFolder is required")
 	}
+
+	// Fix the config path Resolve would discover: the lockfile, local
+	// features and compose files are all located beside it.
+	configPath, err := configPathFor(opts.LocalWorkspaceFolder, opts.ConfigPath)
+	if err != nil {
+		return nil, err
+	}
+	opts.ConfigPath = configPath
 
 	opts.bus = newEventBus(e.emitter, opts.Events)
 	defer opts.bus.Close()
@@ -493,14 +508,10 @@ func composeProjectName(cfg *config.ResolvedConfig) string {
 // composeWorkingDir picks the directory `docker compose` should run
 // in. Compose interprets relative paths in the user's compose file
 // (build contexts, env_file paths, volumes) relative to this. Default:
-// the directory containing the source devcontainer.json. Falls back
-// to LocalWorkspaceFolder when ConfigPath isn't supplied (Resolve's
-// auto-discovery path).
-func composeWorkingDir(cfg *config.ResolvedConfig, opts UpOptions) string {
-	if opts.ConfigPath != "" {
-		return filepath.Dir(opts.ConfigPath)
-	}
-	return filepath.Join(cfg.LocalWorkspaceFolder, ".devcontainer")
+// the directory containing the source devcontainer.json, which Up
+// always sets.
+func composeWorkingDir(opts UpOptions) string {
+	return filepath.Dir(opts.ConfigPath)
 }
 
 // createFreshCompose handles the *ComposeSource path of Up. It loads
@@ -534,7 +545,7 @@ func (e *Engine) createFreshCompose(ctx context.Context, cfg *config.ResolvedCon
 		return nil, fmt.Errorf("compose source: devcontainer.json must specify \"service\"")
 	}
 
-	workingDir := composeWorkingDir(cfg, opts)
+	workingDir := composeWorkingDir(opts)
 	projectName := composeProjectName(cfg)
 
 	envList := mapToEnvList(opts.LocalEnv)
@@ -1274,16 +1285,13 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 		return baseImage, baseMeta, nil
 	}
 
-	configDir := ""
-	// LocalWorkspaceFolder is always populated by Resolve; ConfigPath
-	// (where local features are relative to) lives only on the
-	// ResolveOptions. We re-derive configDir from what the user
-	// supplied via UpOptions; if neither is supplied use
-	// LocalWorkspaceFolder/.devcontainer as a sensible fallback.
-	if opts.ConfigPath != "" {
-		configDir = filepath.Dir(opts.ConfigPath)
-	} else {
-		configDir = filepath.Join(cfg.LocalWorkspaceFolder, ".devcontainer")
+	// Local features are relative to devcontainer.json; Up and Build
+	// always set ConfigPath.
+	configDir := filepath.Dir(opts.ConfigPath)
+
+	lock, err := loadFeatureLock(opts.Lockfile, opts.ConfigPath)
+	if err != nil {
+		return "", nil, err
 	}
 
 	// Emit a Skipped event for features the base-image label satisfied
@@ -1302,10 +1310,21 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 		if f.SourceKind == config.FeatureSourceLocal {
 			ref = feature.ResolveLocalRef(configDir, f.Ref)
 		}
+		pin, pinned := lock.pin(*f)
+		if pinned {
+			if ref, err = feature.PinnedRef(*f, pin); err != nil {
+				return "", nil, err
+			}
+		}
 		opts.bus.Emit(events.FeatureResolveStartEvent{Ref: f.Ref})
 		fetched, err := e.featureStore.Fetch(ctx, ref, f.SourceKind)
 		if err != nil {
 			return "", nil, fmt.Errorf("fetch feature %s: %w", f.Ref, err)
+		}
+		if pinned {
+			if err := feature.CheckIntegrity(*f, fetched, pin); err != nil {
+				return "", nil, err
+			}
 		}
 		f.Dir = fetched.Dir
 		f.ResolvedRef = fetched.ResolvedRef
@@ -1321,6 +1340,10 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 		}
 		f.Options = merged
 		cfg.Warnings = append(cfg.Warnings, mwarns...)
+	}
+
+	if err := lock.commit(cfg.Features); err != nil {
+		return "", nil, err
 	}
 
 	// Re-order with fully-populated metadata so installsAfter / dependsOn apply.
