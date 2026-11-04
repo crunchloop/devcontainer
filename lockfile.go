@@ -65,22 +65,45 @@ func (l *featureLock) pin(f config.ResolvedFeature) (feature.LockedFeature, bool
 	return l.existing.Entry(f.Ref)
 }
 
+// acceptsBaked reports whether the base image's installation of f,
+// recorded by the label entry baked, may stand in for fetching f. With
+// the lockfile disabled the label match alone decides. Otherwise the
+// baked artifact must be the one the lockfile pins, or, with no pin,
+// one the label records, so that it can be locked. Upgrade mode accepts
+// none: it resolves every reference afresh, and locking the baked
+// artifact could replace a newer pin with an older one. A baked feature
+// that is not accepted is fetched and installed like any other; the
+// label records no artifact when another tool built the image.
+func (l *featureLock) acceptsBaked(f config.ResolvedFeature, baked config.FeatureMetadata) bool {
+	switch l.mode {
+	case LockfileDisabled:
+		return true
+	case LockfileUpgrade:
+		return false
+	}
+	if baked.ResolvedRef == "" {
+		return false
+	}
+	pin, pinned := l.pin(f)
+	return !pinned || feature.CheckIntegrity(f, feature.Fetched{ResolvedRef: baked.ResolvedRef}, pin) == nil
+}
+
 // commit records what features resolved to: written in default and
 // upgrade modes when it differs from the existing lockfile, compared
 // in frozen mode.
 //
-// Features the base image already carries were not fetched, so there
-// is nothing new to record for them: their existing entry is kept.
+// A feature the base image carries keeps its pin, which acceptsBaked
+// checked it against; the label does not record dependsOn, so an entry
+// rebuilt from it could differ. Without a pin it is locked from the
+// artifact the label records.
 func (l *featureLock) commit(features []config.ResolvedFeature) error {
 	if l.mode == LockfileDisabled {
 		return nil
 	}
 	next := &feature.Lockfile{Features: map[string]feature.LockedFeature{}}
 	for _, f := range features {
-		if f.AlreadyInstalled {
-			if entry, ok := l.existing.Entry(f.Ref); ok {
-				next.Features[f.Ref] = entry
-			}
+		if pin, pinned := l.pin(f); f.AlreadyInstalled && pinned {
+			next.Features[f.Ref] = pin
 			continue
 		}
 		if entry, ok := feature.Lock(f); ok {
@@ -94,4 +117,22 @@ func (l *featureLock) commit(features []config.ResolvedFeature) error {
 		return &feature.LockfileMismatchError{Path: l.path, Changed: next.Changed(l.existing)}
 	}
 	return feature.WriteLockfile(l.path, next)
+}
+
+// commitNoFeatures reconciles the lockfile of a configuration that
+// declares no features. Nothing is pinned, but entries left by removed
+// features are stale: default and upgrade modes empty the lockfile and
+// frozen mode reports them. Without a lockfile there is nothing to do
+// in any mode, as with the reference CLI.
+func commitNoFeatures(mode LockfileMode, configPath string) error {
+	if mode == LockfileDisabled {
+		return nil
+	}
+	l := &featureLock{mode: mode, path: feature.LockfilePath(configPath)}
+	existing, err := feature.ReadLockfile(l.path)
+	if err != nil || existing == nil {
+		return err
+	}
+	l.existing = existing
+	return l.commit(nil)
 }

@@ -226,6 +226,33 @@ func TestParseMetadataLabel_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestParseMetadataLabel_ResolvedRefSurvivesRebuild: the artifact a
+// label entry records is what the lockfile checks a baked feature
+// against, so it must survive parsing and being carried into the label
+// of an image built on top.
+func TestParseMetadataLabel_ResolvedRefSurvivesRebuild(t *testing.T) {
+	const ref = "ghcr.io/x/git@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	base, err := ParseMetadataLabel(`[{"id":"git","version":"1.0","resolvedRef":"` + ref + `"}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base[0].ResolvedRef != ref {
+		t.Fatalf("parsed ResolvedRef = %q, want %q", base[0].ResolvedRef, ref)
+	}
+	raw, err := buildMetadataLabel(BuildPlan{BaseImage: "base", BaseImageMetadata: base,
+		Features: []config.ResolvedFeature{fixtureFeature(t, "node", "20")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rebuilt, err := ParseMetadataLabel(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebuilt[0].ID != "git" || rebuilt[0].ResolvedRef != ref {
+		t.Errorf("carried entry = %+v, want git at %s", rebuilt[0], ref)
+	}
+}
+
 func TestParseMetadataLabel_PreservesFinalEntryFields(t *testing.T) {
 	// Reference behavior: the final no-ID resolved-config entry carries
 	// remoteUser/containerUser. ParseMetadataLabel must round-trip them
