@@ -370,3 +370,36 @@ func writeLocalFeature(t *testing.T, dir, metadata string) {
 		t.Fatal(err)
 	}
 }
+
+// TestDependsOn_BakedFeatureLockedWithItsDependsOn: a baked feature the
+// lockfile does not pin yet is locked from the artifact its label
+// records, and its entry carries its dependsOn like a fetched one's:
+// from the label, or for an older label from its metadata.
+func TestDependsOn_BakedFeatureLockedWithItsDependsOn(t *testing.T) {
+	table := map[string]depEntry{
+		"ghcr.io/x/b": {digestOf('b'), meta("b", map[string]map[string]any{"ghcr.io/x/c:1": {}})},
+		"ghcr.io/x/c": {digestOf('c'), meta("c", nil)},
+	}
+	bakedB := `{"id":"b","version":"1.0.0","resolvedRef":"ghcr.io/x/b@` + digestOf('b') + `"`
+	bakedC := `{"id":"c","version":"1.0.0","resolvedRef":"ghcr.io/x/c@` + digestOf('c') + `","dependsOn":{}}`
+	for _, tc := range []struct{ name, label string }{
+		{"label records dependsOn", `[` + bakedB + `,"dependsOn":{"ghcr.io/x/c:1":{}}},` + bakedC + `]`},
+		{"older label", `[` + bakedB + `},` + bakedC + `]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newDepFixture(t, `{"ghcr.io/x/b:1":{}}`, table)
+			f.rt.imagesByRef["alpine:3.20"] = &runtime.ImageDetails{Labels: map[string]string{feature.MetadataLabel: tc.label}}
+			if _, err := f.layer(LockfileDefault); err != nil {
+				t.Fatal(err)
+			}
+			lf, err := feature.ReadLockfile(filepath.Join(f.ws, ".devcontainer", "devcontainer-lock.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			entry, ok := lf.Entry("ghcr.io/x/b:1")
+			if !ok || entry.Integrity != digestOf('b') || !reflect.DeepEqual(entry.DependsOn, []string{"ghcr.io/x/c:1"}) {
+				t.Errorf("lock entry for b = (%+v, %v), want integrity %s and dependsOn [ghcr.io/x/c:1]", entry, ok, digestOf('b'))
+			}
+		})
+	}
+}
