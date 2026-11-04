@@ -112,20 +112,7 @@ services:
 
 			// dockerd is started in the background by the feature's
 			// entrypoint; wait for it, then run a container.
-			deadline := time.Now().Add(2 * time.Minute)
-			for {
-				res, err := eng.Exec(ctx, wsObj, devcontainer.ExecOptions{
-					Cmd: []string{"docker", "info", "--format", "{{.Driver}}"},
-				})
-				if err == nil && res.ExitCode == 0 {
-					t.Logf("inner dockerd storage driver: %s", strings.TrimSpace(res.Stdout))
-					break
-				}
-				if time.Now().After(deadline) {
-					t.Fatalf("inner dockerd never became ready: err=%v res=%+v", err, res)
-				}
-				time.Sleep(2 * time.Second)
-			}
+			waitInnerDockerd(t, ctx, eng, wsObj)
 
 			res, err := eng.Exec(ctx, wsObj, devcontainer.ExecOptions{
 				Cmd: []string{"docker", "run", "--rm", "hello-world"},
@@ -150,10 +137,18 @@ func waitInnerDockerd(t *testing.T, ctx context.Context, eng *devcontainer.Engin
 			Cmd: []string{"docker", "info", "--format", "{{.Driver}}"},
 		})
 		if err == nil && res.ExitCode == 0 {
+			t.Logf("inner dockerd storage driver: %s", strings.TrimSpace(res.Stdout))
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("inner dockerd never became ready: err=%v res=%+v", err, res)
+			// The feature's docker-init.sh starts dockerd (and
+			// containerd) in the background with their output in /tmp;
+			// without it a failure says only that the socket is absent.
+			diag, _ := eng.Exec(ctx, ws, devcontainer.ExecOptions{Cmd: []string{"sh", "-c",
+				"uname -r; update-alternatives --query iptables | grep '^Value'; " +
+					"echo '--- dockerd.log'; tail -n 40 /tmp/dockerd.log; " +
+					"echo '--- containerd.log'; tail -n 20 /tmp/containerd.log"}})
+			t.Fatalf("inner dockerd never became ready: err=%v res=%+v\n%s%s", err, res, diag.Stdout, diag.Stderr)
 		}
 		time.Sleep(2 * time.Second)
 	}
