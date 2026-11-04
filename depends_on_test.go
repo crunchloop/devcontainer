@@ -403,3 +403,59 @@ func TestDependsOn_BakedFeatureLockedWithItsDependsOn(t *testing.T) {
 		})
 	}
 }
+
+// TestDependsOn_LocalDependencyConfined: a local dependsOn key is
+// followed only from a local feature, only as a relative path, and only
+// when it resolves (symlinks included) inside the directory of
+// devcontainer.json; otherwise feature metadata could make the build
+// copy and run any host directory.
+func TestDependsOn_LocalDependencyConfined(t *testing.T) {
+	t.Run("from a remote feature", func(t *testing.T) {
+		f := newDepFixture(t, `{"ghcr.io/x/a:1":{}}`, map[string]depEntry{
+			"ghcr.io/x/a": {digestOf('a'), meta("a", map[string]map[string]any{"./b": {}})},
+		})
+		writeLocalFeature(t, filepath.Join(f.ws, ".devcontainer", "b"), `{"id":"b","version":"1.0.0"}`)
+		if _, err := f.layer(LockfileDisabled); err == nil || !strings.Contains(err.Error(), "only a local feature") {
+			t.Fatalf("got %v, want a refusal of the local dependency", err)
+		}
+	})
+
+	outside := t.TempDir()
+	writeLocalFeature(t, filepath.Join(outside, "evil"), `{"id":"evil","version":"1.0.0"}`)
+	for _, tc := range []struct {
+		name, key, want string
+		traverse, link  bool
+	}{
+		{name: "absolute path", key: filepath.Join(outside, "evil"), want: "relative path"},
+		{name: "parent traversal", traverse: true, want: "outside"},
+		{name: "symlink out", key: "./link", link: true, want: "outside"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := writeImageDevcontainer(t, `{"image":"alpine:3.20","features":{"./a":{}}}`)
+			dc := filepath.Join(ws, ".devcontainer")
+			key := tc.key
+			if tc.traverse {
+				// Reach the outside directory from .devcontainer with "..".
+				rel, err := filepath.Rel(dc, filepath.Join(outside, "evil"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				key = rel
+			}
+			if tc.link {
+				if err := os.Symlink(filepath.Join(outside, "evil"), filepath.Join(dc, "link")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			writeLocalFeature(t, filepath.Join(dc, "a"), `{"id":"a","version":"1.0.0","dependsOn":{"`+key+`":{}}}`)
+			eng, err := New(EngineOptions{Runtime: newFakeRuntime()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f := &depFixture{t: t, eng: eng, ws: ws}
+			if _, err := f.layer(LockfileDisabled); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("dependsOn %q: got %v, want an error containing %q", key, err, tc.want)
+			}
+		})
+	}
+}

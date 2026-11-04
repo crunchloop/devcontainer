@@ -82,6 +82,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     metadata is fetched at its recorded artifact to find them.
   - A dependency dropped as a duplicate of another reference is still
     locked under its own key.
+  - A local (path) dependency is followed only from a local feature,
+    and only when it is a relative path that resolves, symlinks
+    included, inside the directory of `devcontainer.json`; otherwise
+    `Up`/`Build` fail. A published feature's metadata cannot make the
+    build copy and run a host directory.
   - A local dependency's content is part of the compose inputs hash.
   - See design/features.md §5.1.
 - **features** — OCI feature references are lowercased before they are

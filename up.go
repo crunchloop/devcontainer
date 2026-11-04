@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	composetypes "github.com/compose-spec/compose-go/v2/types"
@@ -455,7 +456,7 @@ func (e *Engine) bakedFeature(f config.ResolvedFeature, baked []config.FeatureMe
 // base image's label satisfies is returned AlreadyInstalled, as
 // markAlreadyInstalled marks a declared feature, and so is not
 // fetched; layerFeatures still follows its own dependencies.
-func (e *Engine) dependencies(features []config.ResolvedFeature, f config.ResolvedFeature, baked []config.FeatureMetadata, lock *featureLock, bus *eventBus) []config.ResolvedFeature {
+func (e *Engine) dependencies(features []config.ResolvedFeature, f config.ResolvedFeature, baked []config.FeatureMetadata, lock *featureLock, configDir string, bus *eventBus) ([]config.ResolvedFeature, error) {
 	keys := make([]string, 0, len(f.Metadata.DependsOn))
 	for key := range f.Metadata.DependsOn {
 		keys = append(keys, key)
@@ -469,6 +470,11 @@ func (e *Engine) dependencies(features []config.ResolvedFeature, f config.Resolv
 			continue
 		}
 		dep := config.ResolvedFeature{Ref: key, Options: opts, SourceKind: config.ClassifyFeatureRef(key)}
+		if dep.SourceKind == config.FeatureSourceLocal {
+			if err := checkLocalDependency(configDir, f, key); err != nil {
+				return nil, err
+			}
+		}
 		if meta, ok := e.bakedFeature(dep, baked, lock); ok {
 			dep.AlreadyInstalled = true
 			dep.Metadata = meta
@@ -477,7 +483,35 @@ func (e *Engine) dependencies(features []config.ResolvedFeature, f config.Resolv
 		}
 		out = append(out, dep)
 	}
-	return out
+	return out, nil
+}
+
+// checkLocalDependency enforces where a local dependsOn key of f may
+// point. Only a local feature may declare one: a published feature
+// cannot know the consumer's files, and following its local key would
+// copy and run whatever host directory its metadata names. The key must
+// also be relative and resolve, symlinks included, inside the
+// directory of devcontainer.json, as the reference CLI requires of
+// local features.
+func checkLocalDependency(configDir string, f config.ResolvedFeature, key string) error {
+	if f.SourceKind != config.FeatureSourceLocal {
+		return fmt.Errorf("feature %s: dependsOn %q: only a local feature may depend on a local path", f.Ref, key)
+	}
+	if filepath.IsAbs(key) {
+		return fmt.Errorf("feature %s: dependsOn %q: a local dependency must be a relative path", f.Ref, key)
+	}
+	root, err := filepath.EvalSymlinks(configDir)
+	if err != nil {
+		return fmt.Errorf("feature %s: dependsOn %q: %w", f.Ref, key, err)
+	}
+	path, err := filepath.EvalSymlinks(feature.ResolveLocalRef(configDir, key))
+	if err != nil {
+		return fmt.Errorf("feature %s: dependsOn %q: %w", f.Ref, key, err)
+	}
+	if rel, err := filepath.Rel(root, path); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("feature %s: dependsOn %q resolves to %s, outside %s", f.Ref, key, path, configDir)
+	}
+	return nil
 }
 
 // bakedDependsOn returns the dependsOn of a feature the base image
@@ -1412,7 +1446,11 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 				}
 				f.Metadata.DependsOn = deps
 			}
-			cfg.Features = append(cfg.Features, e.dependencies(cfg.Features, cfg.Features[i], baseMeta, lock, opts.bus)...)
+			deps, err := e.dependencies(cfg.Features, cfg.Features[i], baseMeta, lock, configDir, opts.bus)
+			if err != nil {
+				return "", nil, err
+			}
+			cfg.Features = append(cfg.Features, deps...)
 			continue
 		}
 		if f.Dir != "" {
@@ -1461,7 +1499,11 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 			i--
 			continue
 		}
-		cfg.Features = append(cfg.Features, e.dependencies(cfg.Features, cfg.Features[i], baseMeta, lock, opts.bus)...)
+		deps, err := e.dependencies(cfg.Features, cfg.Features[i], baseMeta, lock, configDir, opts.bus)
+		if err != nil {
+			return "", nil, err
+		}
+		cfg.Features = append(cfg.Features, deps...)
 	}
 
 	if err := lock.commit(slices.Concat(cfg.Features, aliases)); err != nil {

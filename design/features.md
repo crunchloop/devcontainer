@@ -209,7 +209,22 @@ Decisions:
    well.
 3. **Local `dependsOn` paths resolve against `devcontainer.json`'s
    directory**, as declared local features do and as the CLI does. They
-   are not resolved against the declaring feature's directory.
+   are not resolved against the declaring feature's directory. They are
+   also **confined**, because feature metadata, not the user, chooses
+   them, and the directory they name is copied into the build and its
+   `install.sh` run:
+   - Only a local feature may declare one. A published feature cannot
+     know the consumer's files; a local key from it is refused. This is
+     stricter than the CLI, which follows it if it stays inside
+     `.devcontainer/`.
+   - The key must be relative and resolve, symlinks included, inside
+     the directory of `devcontainer.json`, as the CLI requires of local
+     features (`containerFeaturesConfiguration.ts`: no absolute paths,
+     no escape from `.devcontainer/`).
+
+   Declared local features keep their existing, unconfined resolution:
+   the user wrote those paths, and confining them would break configs
+   that point outside the config directory.
 4. **A dependency the base image's label satisfies is not fetched or
    installed again**, using the same match as declared features
    (`bakedFeature`, which includes the lockfile check of §8.2). **Its
@@ -503,8 +518,10 @@ Decisions:
    `dependsOn` keys and options, and an OCI feature is identified by
    its reference as written. The exception is a *local* dependency's
    own content, which nothing else covers, so it is hashed
-   transitively. Projects without one hash exactly as before, so there
-   is no recreate on upgrade.
+   transitively from the declared local features. That reaches every
+   local dependency, since only a local feature may declare one
+   (§5.1 decision 3). Projects without one hash exactly as before, so
+   there is no recreate on upgrade.
 
 Concurrency: a small lockfile (`extracted/.lock`) per cache entry so
 parallel `Resolve` calls for the same ref don't race.
