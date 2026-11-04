@@ -344,6 +344,66 @@ tag rewrites its record (write to a temporary file, then rename). HTTPS
 features are unchanged: their content hash is only known after the
 download.
 
+### 8.2 Lockfile
+
+The spec's [`devcontainer-lock.json`](https://github.com/devcontainers/spec/blob/main/docs/specs/devcontainer-lockfile.md)
+records, beside `devcontainer.json`, the exact artifact every OCI and
+HTTPS feature resolved to. `UpOptions.Lockfile` / `BuildOptions.Lockfile`
+select the mode. These follow the reference CLI as of 0.87, where the
+lockfile is on by default:
+
+| Mode | Reads pins | Writes | Fails when |
+| --- | --- | --- | --- |
+| `LockfileDefault` | yes | when what resolved differs (created if missing) | a pinned HTTPS download has a different digest |
+| `LockfileFrozen` | yes | never | the lockfile is missing (before any fetch), or what resolved differs from it |
+| `LockfileUpgrade` | no | when what resolved differs | — |
+| `LockfileDisabled` | no | never | — |
+
+`DiskStore` already returns the two values the lockfile records as
+`Fetched.ResolvedRef`: the OCI manifest digest and the HTTPS body
+sha256. So the lockfile needs no store change:
+
+- **OCI pin:** `layerFeatures` fetches `repo@<integrity>` instead of the
+  tag. That is a digest reference, so §8.1 serves it from cache without
+  a registry call: a locked workspace builds offline.
+- **HTTPS pin:** the URL is fetched as before and its digest is compared
+  with `integrity` (`*feature.FeatureIntegrityError` on mismatch).
+- **Write:** after the fetch loop and before the build, as the CLI does.
+  The lockfile is regenerated from scratch, so stale entries drop. It is
+  compared by content, not bytes, and written only when entries changed.
+
+Decisions:
+
+1. **CLI over spec where they differ.** Keys are the feature reference
+   verbatim (the spec says lowercase; the CLI doesn't), and a
+   `.devcontainer.json` gets a `.devcontainer-lock.json`. The output
+   format is byte-identical to the CLI's (2-space indent, sorted keys,
+   trailing newline; checked against the CLI's own generated test
+   fixtures). The one divergence is key order for keys where bytewise
+   order and `localeCompare` disagree. Comparing by content keeps either
+   tool from rewriting the other's file over it.
+2. **Features baked into the base image keep their existing entry.**
+   They are not fetched, so they produce no new entry. Dropping theirs
+   would churn the file on every pre-baked run and always fail frozen
+   mode.
+3. **Compose reattach neither reads nor writes the lockfile, and the
+   lockfile is not part of the compose inputs hash.** Reattach resolves
+   nothing, matching the CLI, which does not re-resolve features when it
+   starts an existing container. Hashing the lockfile looks tidier, but
+   the first `Up` writes it, so the second `Up` would see a new hash and
+   recreate every compose project once.
+4. **`Up` and `Build` fix the config path before resolving.** With
+   `ConfigPath` empty they used to drop the discovered path and assume
+   `.devcontainer/`. That put the lockfile, local features and the
+   compose working directory in the wrong place for a root
+   `.devcontainer.json`.
+
+Known gap: the engine installs only the features declared in
+`devcontainer.json`. It does not pull in features reachable only through
+another feature's `dependsOn`. The CLI does, and locks them too. The
+lockfile here therefore lists declared features only. Transitive
+install is separate work.
+
 Concurrency: a small lockfile (`extracted/.lock`) per cache entry so
 parallel `Resolve` calls for the same ref don't race.
 

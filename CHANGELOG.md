@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **features** — `devcontainer-lock.json` support, following the spec's
+  feature lockfile and the reference CLI. (#26)
+  - By default, `Up` and `Build` pin each OCI and HTTPS feature to its
+    lockfile entry and write the lockfile beside `devcontainer.json`
+    whenever what resolved differs from it. If the file is missing, it
+    is created.
+  - OCI features are fetched by the locked manifest digest, so a locked
+    workspace builds from the feature cache with no registry call. HTTPS
+    downloads are checked against the locked sha256
+    (`*feature.FeatureIntegrityError`).
+  - `UpOptions.Lockfile` / `BuildOptions.Lockfile` select the mode:
+    - `LockfileFrozen` returns `*feature.LockfileMismatchError` when the
+      lockfile is missing or out of date, and never writes.
+    - `LockfileUpgrade` re-resolves every tag and rewrites the lockfile.
+    - `LockfileDisabled` neither reads nor writes it.
+  - `devcontainer up` gains `--frozen-lockfile` and `--no-lockfile`
+    (mutually exclusive), named as in the reference CLI.
+  - The file is byte-compatible with the CLI's, and a `.devcontainer.json`
+    gets a `.devcontainer-lock.json`. Local features are not recorded.
+  - Features baked into the base image keep their existing entry.
+  - Compose reattach does not consult the lockfile.
+  - See design/features.md §8.2.
+
+### Changed
+
+- **features** — the first `Up`/`Build` after upgrading now creates a
+  `devcontainer-lock.json` in the workspace's `.devcontainer/` for any
+  config with OCI or HTTPS features. Embedders that don't want files
+  written into user repositories set `Lockfile: LockfileDisabled`.
+
+### Fixed
+
+- **engine** — `Up` and `Build` called without `ConfigPath` now use the
+  discovered `devcontainer.json`'s directory for local features and the
+  compose working directory. Previously they always assumed
+  `.devcontainer/`, which was wrong for a root `.devcontainer.json`.
+
 ## [0.5.3] - 2026-10-28
 
 ### Fixed

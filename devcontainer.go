@@ -56,16 +56,9 @@ func Resolve(ctx context.Context, opts ResolveOptions) (*ResolvedConfig, error) 
 		return nil, fmt.Errorf("LocalWorkspaceFolder must be absolute: %q", opts.LocalWorkspaceFolder)
 	}
 
-	configPath := opts.ConfigPath
-	if configPath == "" {
-		p, err := lookupConfigPath(opts.LocalWorkspaceFolder)
-		if err != nil {
-			return nil, err
-		}
-		configPath = p
-	}
-	if !filepath.IsAbs(configPath) {
-		configPath = filepath.Join(opts.LocalWorkspaceFolder, configPath)
+	configPath, err := configPathFor(opts.LocalWorkspaceFolder, opts.ConfigPath)
+	if err != nil {
+		return nil, err
 	}
 
 	src, err := os.ReadFile(configPath)
@@ -89,6 +82,19 @@ func Resolve(ctx context.Context, opts ResolveOptions) (*ResolvedConfig, error) 
 		DevcontainerID:       idFn(opts.LocalWorkspaceFolder, configPath),
 		LocalEnv:             localEnv,
 	})
+}
+
+// configPathFor returns the absolute path of the devcontainer.json that
+// Resolve reads for workspaceFolder and configPath: configPath (joined
+// onto workspaceFolder if relative), or the discovered one when empty.
+func configPathFor(workspaceFolder, configPath string) (string, error) {
+	if configPath == "" {
+		return lookupConfigPath(workspaceFolder)
+	}
+	if !filepath.IsAbs(configPath) {
+		return filepath.Join(workspaceFolder, configPath), nil
+	}
+	return configPath, nil
 }
 
 func lookupConfigPath(workspaceFolder string) (string, error) {

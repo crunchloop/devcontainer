@@ -11,6 +11,8 @@ func newUpCmd(rf *rootFlags) *cobra.Command {
 		recreate             bool
 		runInitializeCommand bool
 		runSecretsCommand    bool
+		frozenLockfile       bool
+		noLockfile           bool
 	)
 
 	cmd := &cobra.Command{
@@ -36,12 +38,20 @@ func newUpCmd(rf *rootFlags) *cobra.Command {
 			defer closeEng()
 
 			evCh, stop := startEventPrinter(level)
+			lockfile := devcontainer.LockfileDefault
+			switch {
+			case frozenLockfile:
+				lockfile = devcontainer.LockfileFrozen
+			case noLockfile:
+				lockfile = devcontainer.LockfileDisabled
+			}
 			workspace, upErr := eng.Up(ctx, devcontainer.UpOptions{
 				LocalWorkspaceFolder: ws,
 				ConfigPath:           rf.configPath,
 				Recreate:             recreate,
 				RunInitializeCommand: runInitializeCommand,
 				RunSecretsCommand:    runSecretsCommand,
+				Lockfile:             lockfile,
 				Events:               evCh,
 			})
 			stop()
@@ -62,6 +72,9 @@ func newUpCmd(rf *rootFlags) *cobra.Command {
 	cmd.Flags().BoolVar(&recreate, "recreate", false, "Alias for --remove-existing-container")
 	cmd.Flags().BoolVar(&runInitializeCommand, "run-initialize-command", false, "Run devcontainer.json initializeCommand on the host before container creation")
 	cmd.Flags().BoolVar(&runSecretsCommand, "run-secrets-command", false, "Run devcontainer.json secretsCommand on the host and inject its output as container env")
+	cmd.Flags().BoolVar(&frozenLockfile, "frozen-lockfile", false, "Fail if devcontainer-lock.json is missing or out of date; never write it")
+	cmd.Flags().BoolVar(&noLockfile, "no-lockfile", false, "Neither read nor write devcontainer-lock.json")
+	cmd.MarkFlagsMutuallyExclusive("frozen-lockfile", "no-lockfile")
 
 	return cmd
 }
