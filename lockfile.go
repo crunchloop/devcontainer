@@ -69,12 +69,17 @@ func (l *featureLock) pin(f config.ResolvedFeature) (feature.LockedFeature, bool
 // recorded by the label entry baked, may stand in for fetching f. With
 // the lockfile disabled the label match alone decides. Otherwise the
 // baked artifact must be the one the lockfile pins, or, with no pin,
-// one the label records, so that it can be locked. A baked feature of
-// different or unknown content is fetched and installed instead: the
-// label does not record the artifact when another tool built the image.
+// one the label records, so that it can be locked. Upgrade mode accepts
+// none: it resolves every reference afresh, and locking the baked
+// artifact could replace a newer pin with an older one. A baked feature
+// that is not accepted is fetched and installed like any other; the
+// label records no artifact when another tool built the image.
 func (l *featureLock) acceptsBaked(f config.ResolvedFeature, baked config.FeatureMetadata) bool {
-	if l.mode == LockfileDisabled {
+	switch l.mode {
+	case LockfileDisabled:
 		return true
+	case LockfileUpgrade:
+		return false
 	}
 	if baked.ResolvedRef == "" {
 		return false

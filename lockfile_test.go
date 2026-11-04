@@ -287,6 +287,18 @@ func TestLockfile_BakedFeature(t *testing.T) {
 		{
 			name: "disabled trusts the label", label: `[{"id":"a","version":"1.0.0"}]`, mode: LockfileDisabled,
 		},
+		{
+			// The tag now resolves to lockDigestNew; an older baked
+			// artifact must not be locked in its place.
+			name: "upgrade resolves afresh", label: baked("ghcr.io/x/a@" + lockDigestOld),
+			lock: &feature.Lockfile{Features: map[string]feature.LockedFeature{
+				"ghcr.io/x/a:1": ociEntry("ghcr.io/x/a", lockDigestNew),
+			}},
+			mode: LockfileUpgrade, wantFetched: []string{"ghcr.io/x/a:1"},
+			wantLock: &feature.Lockfile{Features: map[string]feature.LockedFeature{
+				"ghcr.io/x/a:1": ociEntry("ghcr.io/x/a", lockDigestNew),
+			}},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

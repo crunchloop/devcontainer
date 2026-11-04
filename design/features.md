@@ -393,8 +393,10 @@ Decisions:
    its pin and installed over the base image, so frozen mode never
    accepts a base image the lockfile does not describe. An accepted
    feature keeps its pin rather than being re-locked from the label,
-   which does not record `dependsOn`. With the lockfile disabled the
-   label match alone decides, as before.
+   which does not record `dependsOn`. Upgrade mode accepts no baked
+   feature: it resolves every reference afresh, and locking the baked
+   artifact could replace a newer pin with an older one. With the
+   lockfile disabled the label match alone decides, as before.
 
    Labels written by other tools record no artifact. The reference
    CLI's never matched here anyway: their `id` is the full reference,

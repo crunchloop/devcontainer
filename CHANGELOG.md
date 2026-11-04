@@ -31,7 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - A feature baked into the base image is used only if the artifact its
     `devcontainer.metadata` label entry records is the locked one (or,
     with no pin, is recorded at all, and is then locked); otherwise it
-    is fetched at its pin and installed. The label's `resolvedRef` now
+    is fetched at its pin and installed. `LockfileUpgrade` always
+    re-resolves baked features. The label's `resolvedRef` now
     survives parsing and rebuilds on top of the image.
   - Removing the last feature empties the lockfile; frozen mode reports
     the stale entries.
