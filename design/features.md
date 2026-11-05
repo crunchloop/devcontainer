@@ -225,33 +225,29 @@ Decisions:
    Declared local features keep their existing, unconfined resolution:
    the user wrote those paths, and confining them would break configs
    that point outside the config directory.
-4. **A dependency the base image's label satisfies is not fetched or
-   installed again**, using the same match as declared features
-   (`bakedFeature`, which includes the lockfile check of §8.2). **Its
-   own dependencies are still followed**, as are a declared baked
-   feature's, because an image built before this change does not have
-   them. Labels now record each installed feature's `dependsOn` (as
-   `{}` when it has none), so for an image built from now on they come
-   from the label without a fetch. For a label written before that,
-   the baked feature's metadata is fetched at the artifact the label
-   records, a digest reference the feature cache serves locally once
-   seen, to find them. The baked feature itself is never reinstalled.
+4. **A dependency is never taken from the base image**, even when its
+   label lists it: it is fetched and installed like any other feature.
+   The pre-baked match compares id and version only, and a `dependsOn`
+   entry's options are chosen by the feature's author, not the user, so
+   an image built with other options would silently stand in. #154 adds
+   option matching to the pre-baked match; dependencies can reuse the
+   image once it lands. The cost until then: a pre-baked image whose
+   features have dependencies reinstalls those dependencies on every
+   build.
 
-   **Known limitation, accepted here:** the baked match does not
-   compare options. A dependency requested with options other than the
-   ones the image installed it with is still taken from the image, so
-   those options are not applied. This is the pre-baked match's
-   behaviour for declared features since it was introduced (id and
-   version only). Fixing it means recording applied options in the
-   label and comparing them after applying defaults, which the label
-   cannot do today. That is a change to the pre-baked match itself,
-   tracked in #154, not to dependency resolution.
-6. **A dependency dropped as a duplicate is still locked.** When a
+   A declared feature the image carries is still not reinstalled, but
+   its dependencies are installed, so they must be known. Labels now
+   record each installed feature's `dependsOn` (as `{}` when it has
+   none), so for an image built from now on they come from the label
+   without a fetch. For a label written before that, the baked
+   feature's metadata is fetched at the artifact the label records, a
+   digest reference the feature cache serves locally once seen.
+5. **A dependency dropped as a duplicate is still locked.** When a
    `dependsOn` key resolves to the same content and options as a
    feature already in the set, it is not installed twice, but its key
    still gets a lockfile entry for that content, so the reference it was
    requested by stays pinned.
-5. **OCI references are lowercased before parsing**, as the CLI's
+6. **OCI references are lowercased before parsing**, as the CLI's
    `getRef` does. Published `dependsOn` keys such as
    `ghcr.io/codspace/dependson/A` are written by feature authors, not
    the user, and go-containerregistry rejects uppercase repository

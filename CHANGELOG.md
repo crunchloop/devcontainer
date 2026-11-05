@@ -75,9 +75,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     options is installed once per set of options.
   - Declared features that resolve to the same content with the same
     options are now installed once rather than twice.
-  - A dependency the base image already carries (at the artifact the
-    lockfile accepts) is not installed again, but its own dependencies
-    are still followed. Image labels now record each feature's
+  - Dependencies are always installed, even when the base image's label
+    lists them: the pre-baked match does not compare options yet
+    (#154). A pre-baked image whose features have dependencies
+    therefore reinstalls those on every build until then.
+  - A declared feature the base image carries is not reinstalled, but
+    its dependencies are. Image labels now record each feature's
     `dependsOn`; for a label written before that, the baked feature's
     metadata is fetched at its recorded artifact to find them.
   - A dependency dropped as a duplicate of another reference is still

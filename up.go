@@ -452,11 +452,14 @@ func (e *Engine) bakedFeature(f config.ResolvedFeature, baked []config.FeatureMe
 }
 
 // dependencies returns the features f's dependsOn requires that
-// features does not already hold, in key order, unfetched. One the
-// base image's label satisfies is returned AlreadyInstalled, as
-// markAlreadyInstalled marks a declared feature, and so is not
-// fetched; layerFeatures still follows its own dependencies.
-func (e *Engine) dependencies(features []config.ResolvedFeature, f config.ResolvedFeature, baked []config.FeatureMetadata, lock *featureLock, configDir string, bus *eventBus) ([]config.ResolvedFeature, error) {
+// features does not already hold, in key order, unfetched.
+//
+// A dependency is never taken from the base image, even when its label
+// lists it: the pre-baked match compares id and version only, and the
+// options a dependsOn entry asks for are its author's, not the user's,
+// so an image built with other options would silently stand in (#154).
+// It is fetched and installed like any other feature.
+func dependencies(features []config.ResolvedFeature, f config.ResolvedFeature, configDir string) ([]config.ResolvedFeature, error) {
 	keys := make([]string, 0, len(f.Metadata.DependsOn))
 	for key := range f.Metadata.DependsOn {
 		keys = append(keys, key)
@@ -474,12 +477,6 @@ func (e *Engine) dependencies(features []config.ResolvedFeature, f config.Resolv
 			if err := checkLocalDependency(configDir, f, key); err != nil {
 				return nil, err
 			}
-		}
-		if meta, ok := e.bakedFeature(dep, baked, lock); ok {
-			dep.AlreadyInstalled = true
-			dep.Metadata = meta
-			dep.ResolvedRef = meta.ResolvedRef
-			bus.Emit(events.FeatureSkippedEvent{Ref: key, Reason: "base_image_label"})
 		}
 		out = append(out, dep)
 	}
@@ -1435,10 +1432,11 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 	for i := 0; i < len(cfg.Features); i++ {
 		f := &cfg.Features[i]
 		if f.AlreadyInstalled {
-			// The base image installs f, but its dependencies only if the
-			// image was built with them: from a label that records them,
-			// or, for a label written before they were recorded, as f's
-			// own metadata names them. f itself is not installed again.
+			// The base image installs f; its dependencies are installed
+			// regardless (see dependencies), so they must be known: from
+			// a label that records them, or, for a label written before
+			// they were recorded, from f's own metadata. f itself is not
+			// installed again.
 			if f.Metadata.DependsOn == nil {
 				deps, err := e.bakedDependsOn(ctx, *f)
 				if err != nil {
@@ -1446,7 +1444,7 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 				}
 				f.Metadata.DependsOn = deps
 			}
-			deps, err := e.dependencies(cfg.Features, cfg.Features[i], baseMeta, lock, configDir, opts.bus)
+			deps, err := dependencies(cfg.Features, cfg.Features[i], configDir)
 			if err != nil {
 				return "", nil, err
 			}
@@ -1499,7 +1497,7 @@ func (e *Engine) layerFeatures(ctx context.Context, cfg *config.ResolvedConfig, 
 			i--
 			continue
 		}
-		deps, err := e.dependencies(cfg.Features, cfg.Features[i], baseMeta, lock, configDir, opts.bus)
+		deps, err := dependencies(cfg.Features, cfg.Features[i], configDir)
 		if err != nil {
 			return "", nil, err
 		}

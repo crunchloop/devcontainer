@@ -250,12 +250,12 @@ func TestDependsOn_PulledInFeaturesAreLocked(t *testing.T) {
 	}
 }
 
-// TestDependsOn_BakedDependency: a dependency the base image's label
-// carries at a recorded artifact is not fetched or installed again, but
-// its own dependencies are still followed. A label that records them
-// says the image has them; one written before they were recorded does
-// not, so the baked feature's metadata is read at its artifact to find
-// them.
+// TestDependsOn_BakedDependency: a dependency is fetched and installed
+// even when the base image's label lists it, since the label match does
+// not compare the options its dependsOn entry asks for (#154). A
+// declared feature the image carries is not installed again, but its
+// dependencies are: named by a label that records them, or for a label
+// written before that, by its metadata read at its recorded artifact.
 func TestDependsOn_BakedDependency(t *testing.T) {
 	table := map[string]depEntry{
 		"ghcr.io/x/a": {digestOf('a'), meta("a", map[string]map[string]any{"ghcr.io/x/b:1": {}})},
@@ -265,32 +265,33 @@ func TestDependsOn_BakedDependency(t *testing.T) {
 	bakedB := `{"id":"b","version":"1.0.0","resolvedRef":"ghcr.io/x/b@` + digestOf('b') + `"`
 	bakedC := `{"id":"c","version":"1.0.0","resolvedRef":"ghcr.io/x/c@` + digestOf('c') + `","dependsOn":{}}`
 	for _, tc := range []struct {
-		name        string
-		label       string
-		wantFetched []string
-		want        []string
+		name, declared, label string
+		wantFetched, want     []string
 	}{
 		{
-			name:        "label records the dependencies, which the image has",
+			name:        "baked dependency is installed anyway",
+			declared:    `{"ghcr.io/x/a:1":{}}`,
 			label:       `[` + bakedB + `,"dependsOn":{"ghcr.io/x/c:1":{}}},` + bakedC + `]`,
-			wantFetched: []string{"ghcr.io/x/a:1"},
-			want:        []string{"ghcr.io/x/c:1(baked)", "ghcr.io/x/b:1(baked)", "ghcr.io/x/a:1"},
+			wantFetched: []string{"ghcr.io/x/a:1", "ghcr.io/x/b:1", "ghcr.io/x/c:1"},
+			want:        []string{"ghcr.io/x/c:1", "ghcr.io/x/b:1", "ghcr.io/x/a:1"},
 		},
 		{
-			name:        "label records the dependencies, which the image lacks",
-			label:       `[` + bakedB + `,"dependsOn":{"ghcr.io/x/c:1":{}}}]`,
-			wantFetched: []string{"ghcr.io/x/a:1", "ghcr.io/x/c:1"},
-			want:        []string{"ghcr.io/x/c:1", "ghcr.io/x/b:1(baked)", "ghcr.io/x/a:1"},
+			name:        "baked declared feature, label records its dependencies",
+			declared:    `{"ghcr.io/x/b:1":{}}`,
+			label:       `[` + bakedB + `,"dependsOn":{"ghcr.io/x/c:1":{}}},` + bakedC + `]`,
+			wantFetched: []string{"ghcr.io/x/c:1"},
+			want:        []string{"ghcr.io/x/c:1", "ghcr.io/x/b:1(baked)"},
 		},
 		{
-			name:        "label written before dependencies were recorded",
+			name:        "baked declared feature, label written before dependencies were recorded",
+			declared:    `{"ghcr.io/x/b:1":{}}`,
 			label:       `[` + bakedB + `}]`,
-			wantFetched: []string{"ghcr.io/x/a:1", "ghcr.io/x/b@" + digestOf('b'), "ghcr.io/x/c:1"},
-			want:        []string{"ghcr.io/x/c:1", "ghcr.io/x/b:1(baked)", "ghcr.io/x/a:1"},
+			wantFetched: []string{"ghcr.io/x/b@" + digestOf('b'), "ghcr.io/x/c:1"},
+			want:        []string{"ghcr.io/x/c:1", "ghcr.io/x/b:1(baked)"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newDepFixture(t, `{"ghcr.io/x/a:1":{}}`, table)
+			f := newDepFixture(t, tc.declared, table)
 			f.rt.imagesByRef["alpine:3.20"] = &runtime.ImageDetails{Labels: map[string]string{feature.MetadataLabel: tc.label}}
 			cfg, err := f.layer(LockfileDefault)
 			if err != nil {
