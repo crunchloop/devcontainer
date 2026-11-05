@@ -84,7 +84,7 @@ func (s *DiskStore) fetchHTTPS(ctx context.Context, ref string) (Fetched, error)
 
 	if _, err := os.Stat(filepath.Join(extractedDir, metadataFile)); err == nil {
 		// Cache hit on a previous run.
-		meta, err := parseMetadata(extractedDir)
+		meta, err := ParseMetadata(extractedDir)
 		if err == nil {
 			return Fetched{Dir: extractedDir, ResolvedRef: digest, Metadata: meta}, nil
 		}
@@ -114,7 +114,7 @@ func (s *DiskStore) fetchHTTPS(ctx context.Context, ref string) (Fetched, error)
 	if _, err := os.Stat(filepath.Join(extractedDir, installScript)); err != nil {
 		return Fetched{}, fmt.Errorf("HTTPS feature %s: missing %s after extract: %w", ref, installScript, err)
 	}
-	meta, err := parseMetadata(extractedDir)
+	meta, err := ParseMetadata(extractedDir)
 	if err != nil {
 		return Fetched{}, err
 	}

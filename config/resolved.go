@@ -248,7 +248,10 @@ const (
 //
 // ID/Version/Name/Description/DocumentationURL/LicenseURL/Options/
 // InstallsAfter/DependsOn are feature-only — they have no merge semantics
-// and are ignored when the layer originates from a label entry.
+// and are ignored when the layer originates from a label entry. A label
+// entry's DependsOn says which dependencies the image was built with:
+// non-nil (possibly empty) when the label records them, nil when it was
+// written before they were recorded.
 type FeatureMetadata struct {
 	ID               string
 	Version          string

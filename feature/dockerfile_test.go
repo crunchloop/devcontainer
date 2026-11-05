@@ -253,6 +253,49 @@ func TestParseMetadataLabel_ResolvedRefSurvivesRebuild(t *testing.T) {
 	}
 }
 
+// TestMetadataLabel_RecordsDependsOn: a newly installed feature's entry
+// records its dependsOn, as {} when it has none, so a build on top
+// knows the image carries those dependencies; an older label without
+// it parses as unrecorded (nil), and both survive a rebuild as written.
+func TestMetadataLabel_RecordsDependsOn(t *testing.T) {
+	git := fixtureFeature(t, "git", "1.0")
+	node := fixtureFeature(t, "node", "20")
+	node.Metadata.DependsOn = map[string]map[string]any{"ghcr.io/test/git:1": {}}
+	raw, err := buildMetadataLabel(BuildPlan{BaseImage: "base", Features: []config.ResolvedFeature{git, node}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseMetadataLabel(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed[0].DependsOn == nil || len(parsed[0].DependsOn) != 0 {
+		t.Errorf("git dependsOn = %#v, want recorded and empty", parsed[0].DependsOn)
+	}
+	if _, ok := parsed[1].DependsOn["ghcr.io/test/git:1"]; !ok {
+		t.Errorf("node dependsOn = %#v, want ghcr.io/test/git:1", parsed[1].DependsOn)
+	}
+
+	old, err := ParseMetadataLabel(`[{"id":"git","version":"1.0"}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old[0].DependsOn != nil {
+		t.Errorf("older label dependsOn = %#v, want nil (unrecorded)", old[0].DependsOn)
+	}
+	raw, err = buildMetadataLabel(BuildPlan{BaseImage: "base", BaseImageMetadata: append(old, parsed[0])})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rebuilt, err := ParseMetadataLabel(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebuilt[0].DependsOn != nil || rebuilt[1].DependsOn == nil {
+		t.Errorf("rebuilt dependsOn = %#v, %#v; want nil, recorded", rebuilt[0].DependsOn, rebuilt[1].DependsOn)
+	}
+}
+
 func TestParseMetadataLabel_PreservesFinalEntryFields(t *testing.T) {
 	// Reference behavior: the final no-ID resolved-config entry carries
 	// remoteUser/containerUser. ParseMetadataLabel must round-trip them

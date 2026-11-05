@@ -177,6 +177,25 @@ func TestComposeInputsHash_LocalFeatureContent(t *testing.T) {
 	}
 }
 
+// A local feature the declared one pulls in through dependsOn is
+// installed from its own content, which the declaring feature's
+// content does not cover, so it is hashed too.
+func TestComposeInputsHash_LocalDependencyContent(t *testing.T) {
+	dir := t.TempDir()
+	json := replaceOnce(t, hashBaseJSON, `"ghcr.io/devcontainers/features/docker-in-docker:2": { "moby": false }`, `"./local-feature": {}`)
+	writeLocalFeature(t, filepath.Join(dir, ".devcontainer", "local-feature"), `{"id":"local-feature","dependsOn":{"./dep":{}}}`)
+	depDir := filepath.Join(dir, ".devcontainer", "dep")
+	writeLocalFeature(t, depDir, `{"id":"dep"}`)
+	f := newHashFixture(t, dir, json, hashBaseCompose)
+	h1 := f.hash(t, "sha256:base")
+	if err := os.WriteFile(filepath.Join(depDir, "install.sh"), []byte("#!/bin/sh\necho changed\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if h2 := f.hash(t, "sha256:base"); h1 == h2 {
+		t.Fatal("hash unchanged after editing a pulled-in local feature's install.sh")
+	}
+}
+
 // A local feature file that is a symlink is copied into the build
 // context as the content it names, so that content is what the hash
 // covers: editing the link's target outside the feature directory must

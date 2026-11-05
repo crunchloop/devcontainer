@@ -1,7 +1,9 @@
 package feature
 
 import (
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -53,12 +55,14 @@ func topoSort(features []config.ResolvedFeature) ([]config.ResolvedFeature, []co
 		return features, nil, nil
 	}
 
-	// Build a map from a feature's id (ignoring tag) to its index, so
-	// installsAfter / dependsOn entries can be resolved against the
-	// feature set even if their refs differ in tag specificity.
-	idx := make(map[string]int, len(features))
+	// Map a feature's id (ignoring tag) to its indices, so installsAfter
+	// / dependsOn entries resolve against the feature set even if their
+	// refs differ in tag specificity. One id can have several entries:
+	// a feature installed once per distinct set of options.
+	idx := make(map[string][]int, len(features))
 	for i, f := range features {
-		idx[normalizeID(f.Ref)] = i
+		id := normalizeID(f.Ref)
+		idx[id] = append(idx[id], i)
 	}
 
 	// inDegree[i] = number of edges pointing TO features[i] (i.e.
@@ -66,23 +70,23 @@ func topoSort(features []config.ResolvedFeature) ([]config.ResolvedFeature, []co
 	inDegree := make([]int, len(features))
 	// adj[i] = features that depend on i (out-edges).
 	adj := make([][]int, len(features))
+	edge := func(from, to int) {
+		adj[from] = append(adj[from], to)
+		inDegree[to]++
+	}
 
 	for i, f := range features {
+		// installsAfter is satisfied by any entry for the id; unrelated
+		// ids are ignored per spec.
 		for _, dep := range f.Metadata.InstallsAfter {
-			j, ok := idx[normalizeID(dep)]
-			if !ok {
-				continue // unrelated installsAfter — ignored per spec
+			for _, j := range idx[normalizeID(dep)] {
+				edge(j, i)
 			}
-			adj[j] = append(adj[j], i)
-			inDegree[i]++
 		}
-		for dep := range f.Metadata.DependsOn {
-			j, ok := idx[normalizeID(dep)]
-			if !ok {
-				continue
+		for dep, opts := range f.Metadata.DependsOn {
+			for _, j := range dependencyEntries(features, idx[normalizeID(dep)], opts) {
+				edge(j, i)
 			}
-			adj[j] = append(adj[j], i)
-			inDegree[i]++
 		}
 	}
 
@@ -97,7 +101,7 @@ func topoSort(features []config.ResolvedFeature) ([]config.ResolvedFeature, []co
 		}
 	}
 	sort.Slice(ready, func(a, b int) bool {
-		return features[ready[a]].Ref < features[ready[b]].Ref
+		return featureLess(features[ready[a]], features[ready[b]])
 	})
 
 	out := make([]config.ResolvedFeature, 0, len(features))
@@ -117,7 +121,7 @@ func topoSort(features []config.ResolvedFeature) ([]config.ResolvedFeature, []co
 		// Sort children alphabetically before processing for determinism.
 		children := append([]int(nil), adj[i]...)
 		sort.Slice(children, func(a, b int) bool {
-			return features[children[a]].Ref < features[children[b]].Ref
+			return featureLess(features[children[a]], features[children[b]])
 		})
 		for _, j := range children {
 			if depth[i]+1 > depth[j] {
@@ -148,6 +152,50 @@ func topoSort(features []config.ResolvedFeature) ([]config.ResolvedFeature, []co
 	}
 
 	return out, warnings, nil
+}
+
+// dependencyEntries returns the entries among candidates (indices of
+// features sharing a dependsOn key's id) that satisfy the dependency:
+// those installed with the options it asks for once their defaults are
+// applied. If none do, every candidate is returned, so the edge still
+// orders the feature after its dependency's id as before entries were
+// told apart by options.
+func dependencyEntries(features []config.ResolvedFeature, candidates []int, opts map[string]any) []int {
+	var out []int
+	for _, j := range candidates {
+		if SameOptions(features[j], opts) {
+			out = append(out, j)
+		}
+	}
+	if len(out) == 0 {
+		return candidates
+	}
+	return out
+}
+
+// SameOptions reports whether f is installed with the options a
+// request for it with opts resolves to, after f's defaults apply.
+func SameOptions(f config.ResolvedFeature, opts map[string]any) bool {
+	merged, _, err := MergeOptions(f.Metadata, opts)
+	return err == nil && reflect.DeepEqual(merged, mergedOrEmpty(f.Options))
+}
+
+func mergedOrEmpty(opts map[string]any) map[string]any {
+	if opts == nil {
+		return map[string]any{}
+	}
+	return opts
+}
+
+// featureLess orders features by ref, then by options, so entries for
+// one ref installed with different options sort deterministically.
+func featureLess(a, b config.ResolvedFeature) bool {
+	if a.Ref != b.Ref {
+		return a.Ref < b.Ref
+	}
+	ao, _ := json.Marshal(a.Options)
+	bo, _ := json.Marshal(b.Options)
+	return string(ao) < string(bo)
 }
 
 // buildDeepestPath reconstructs a chain to a node at `depth[target]`

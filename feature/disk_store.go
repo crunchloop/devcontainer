@@ -116,7 +116,7 @@ func fetchLocal(absPath string) (Fetched, error) {
 		return Fetched{}, fmt.Errorf("local feature %s: missing %s: %w", absPath, installScript, err)
 	}
 
-	meta, err := parseMetadata(absPath)
+	meta, err := ParseMetadata(absPath)
 	if err != nil {
 		return Fetched{}, err
 	}

@@ -227,7 +227,7 @@ func buildPartialFeatures(rawFeatures map[string]json.RawMessage, overrideOrder 
 			feature: ResolvedFeature{
 				Ref:        ref,
 				Options:    opts,
-				SourceKind: classifyFeatureRef(ref),
+				SourceKind: ClassifyFeatureRef(ref),
 			},
 		})
 	}
@@ -289,12 +289,12 @@ func parseFeatureOptions(raw json.RawMessage, ref, source string) (map[string]an
 	}}
 }
 
-// classifyFeatureRef maps a features-map key to its source kind based
-// on the ref shape. Matches the spec's rules:
+// ClassifyFeatureRef maps a features-map or dependsOn key to its source
+// kind based on the ref shape. Matches the spec's rules:
 //   - "./..." or "../..." or absolute path → Local
 //   - "https://..." → HTTPS
 //   - everything else → OCI (the canonical "ghcr.io/..." form)
-func classifyFeatureRef(ref string) FeatureSourceKind {
+func ClassifyFeatureRef(ref string) FeatureSourceKind {
 	switch {
 	case strings.HasPrefix(ref, "./") || strings.HasPrefix(ref, "../") || strings.HasPrefix(ref, "/"):
 		return FeatureSourceLocal

@@ -162,8 +162,99 @@ Ordered `[]ResolvedFeature` per spec rules:
 2. Remaining features: topo-sorted via leaf-extraction over a graph built
    from `installsAfter` and `dependsOn`.
 
-`dependsOn` is recursive (transitively pulls in unlisted features);
-`installsAfter` is a soft "if both listed, this one waits" hint.
+`dependsOn` is a hard dependency: the engine installs it whether or not
+`devcontainer.json` declares it. `installsAfter` is a soft "if both
+listed, this one waits" hint. See §5.1 for how dependencies are pulled
+in.
+
+### 5.1 Pulling in `dependsOn`
+
+The spec and the reference CLI agree on what counts as one feature. Two
+features are equal when they have the same content (manifest digest for
+OCI, body sha256 for HTTPS) **and** the same options. So one feature
+requested with two sets of options is installed twice. `layerFeatures`
+already fetches each feature in turn. That loop now also appends the
+features a fetched feature's `dependsOn` requires, which the loop then
+fetches like declared ones: pinned through the lockfile, with defaults
+applied and options validated. No new graph structure is needed.
+
+Duplicates are recognised at two points. Both look at the feature list
+built so far:
+
+- **Before fetching**, a dependency already requested with the same
+  key and options is skipped. This is what stops a cycle and avoids
+  refetching a shared dependency.
+- **After fetching**, a feature whose content and merged options match
+  an earlier one is dropped. This covers the same feature reached
+  under a different reference (`:1` and `:1.0` resolving to the same
+  digest).
+
+`topoSort` maps each id to all of its entries. A `dependsOn` edge goes
+to the entries installed with the options the dependency asks for.
+`installsAfter` edges go to every entry for the id. Ties are broken by
+ref, then by options.
+
+Decisions:
+
+1. **Options are compared after defaults are applied.** The spec
+   compares "the options executed against the Feature"; the CLI
+   compares the options as written. Comparing merged options means
+   `{}` and `{"version": "latest"}` (when `latest` is the default) are
+   one install, not two of the same thing. No file format depends on
+   this, so following the spec costs no compatibility.
+2. **Declared features are deduplicated by content too.** If
+   `devcontainer.json` lists two references that resolve to the same
+   digest with the same options, the feature is installed once.
+   Previously it was installed twice. This is the CLI's behaviour as
+   well.
+3. **Local `dependsOn` paths resolve against `devcontainer.json`'s
+   directory**, as declared local features do and as the CLI does. They
+   are not resolved against the declaring feature's directory. They are
+   also **confined**, because feature metadata, not the user, chooses
+   them, and the directory they name is copied into the build and its
+   `install.sh` run:
+   - Only a local feature may declare one. A published feature cannot
+     know the consumer's files; a local key from it is refused. This is
+     stricter than the CLI, which follows it if it stays inside
+     `.devcontainer/`.
+   - The key must be relative and resolve, symlinks included, inside
+     the directory of `devcontainer.json`, as the CLI requires of local
+     features (`containerFeaturesConfiguration.ts`: no absolute paths,
+     no escape from `.devcontainer/`).
+
+   Declared local features keep their existing, unconfined resolution:
+   the user wrote those paths, and confining them would break configs
+   that point outside the config directory.
+4. **A dependency is never taken from the base image**, even when its
+   label lists it: it is fetched and installed like any other feature.
+   The pre-baked match compares id and version only, and a `dependsOn`
+   entry's options are chosen by the feature's author, not the user, so
+   an image built with other options would silently stand in. #154 adds
+   option matching to the pre-baked match; dependencies can reuse the
+   image once it lands. The cost until then: a pre-baked image whose
+   features have dependencies reinstalls those dependencies on every
+   build.
+
+   A declared feature the image carries is still not reinstalled, but
+   its dependencies are installed, so they must be known. Labels now
+   record each installed feature's `dependsOn` (as `{}` when it has
+   none), so for an image built from now on they come from the label
+   without a fetch. For a label written before that, the baked
+   feature's metadata is fetched at the artifact the label records, a
+   digest reference the feature cache serves locally once seen.
+5. **A dependency dropped as a duplicate is still locked.** When a
+   `dependsOn` key resolves to the same content and options as a
+   feature already in the set, it is not installed twice, but its key
+   still gets a lockfile entry for that content, so the reference it was
+   requested by stays pinned.
+6. **OCI references are lowercased before parsing**, as the CLI's
+   `getRef` does. Published `dependsOn` keys such as
+   `ghcr.io/codspace/dependson/A` are written by feature authors, not
+   the user, and go-containerregistry rejects uppercase repository
+   names.
+
+Cycles that run through a pulled-in feature are reported the same way
+as any other cycle, as `*FeatureCycleError`.
 
 Cycle detection at edge insertion: DFS for back-edge before adding.
 Returns a typed `*FeatureCycleError{Path []string}` so callers can show
@@ -413,11 +504,20 @@ Decisions:
    compose working directory in the wrong place for a root
    `.devcontainer.json`.
 
-Known gap: the engine installs only the features declared in
-`devcontainer.json`. It does not pull in features reachable only through
-another feature's `dependsOn`. The CLI does, and locks them too. The
-lockfile here therefore lists declared features only. Transitive
-install is separate work.
+5. **Features pulled in through `dependsOn` (§5.1) are locked and
+   pinned like declared ones.** Their key is the `dependsOn` key as
+   written, as in the CLI. A frozen lockfile that lacks one is out of
+   date. Verified against the CLI's own `lockfile-dependson` fixture.
+6. **The compose inputs hash stays declared-only, with one
+   exception.** A pulled-in feature is implied by the declaring
+   feature's entry: a local feature's hashed content holds its
+   `dependsOn` keys and options, and an OCI feature is identified by
+   its reference as written. The exception is a *local* dependency's
+   own content, which nothing else covers, so it is hashed
+   transitively from the declared local features. That reaches every
+   local dependency, since only a local feature may declare one
+   (§5.1 decision 3). Projects without one hash exactly as before, so
+   there is no recreate on upgrade.
 
 Concurrency: a small lockfile (`extracted/.lock`) per cache entry so
 parallel `Resolve` calls for the same ref don't race.

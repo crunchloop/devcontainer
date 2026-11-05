@@ -250,7 +250,7 @@ func TestLockfile_HTTPSIntegrityMismatchFails(t *testing.T) {
 // one, which is then locked. Anything else is fetched (at the pin).
 func TestLockfile_BakedFeature(t *testing.T) {
 	baked := func(resolvedRef string) string {
-		return `[{"id":"a","version":"1.0.0","resolvedRef":"` + resolvedRef + `"}]`
+		return `[{"id":"a","version":"1.0.0","resolvedRef":"` + resolvedRef + `","dependsOn":{}}]`
 	}
 	pinned := &feature.Lockfile{Features: map[string]feature.LockedFeature{
 		"ghcr.io/x/a:1": ociEntry("ghcr.io/x/a", lockDigestOld),
@@ -273,7 +273,7 @@ func TestLockfile_BakedFeature(t *testing.T) {
 			mode: LockfileFrozen, wantFetched: []string{"ghcr.io/x/a@" + lockDigestOld}, wantLock: pinned,
 		},
 		{
-			name: "unrecorded artifact", label: `[{"id":"a","version":"1.0.0"}]`, lock: pinned,
+			name: "unrecorded artifact", label: `[{"id":"a","version":"1.0.0","dependsOn":{}}]`, lock: pinned,
 			mode: LockfileFrozen, wantFetched: []string{"ghcr.io/x/a@" + lockDigestOld}, wantLock: pinned,
 		},
 		{
@@ -285,7 +285,7 @@ func TestLockfile_BakedFeature(t *testing.T) {
 			lock: &feature.Lockfile{Features: map[string]feature.LockedFeature{}}, mode: LockfileFrozen, wantErr: true,
 		},
 		{
-			name: "disabled trusts the label", label: `[{"id":"a","version":"1.0.0"}]`, mode: LockfileDisabled,
+			name: "disabled trusts the label", label: `[{"id":"a","version":"1.0.0","dependsOn":{}}]`, mode: LockfileDisabled,
 		},
 		{
 			// The tag now resolves to lockDigestNew; an older baked

@@ -18,10 +18,10 @@ const metadataFile = "devcontainer-feature.json"
 // instead of opaque mid-build errors.
 const installScript = "install.sh"
 
-// parseMetadata reads <dir>/devcontainer-feature.json into a
+// ParseMetadata reads <dir>/devcontainer-feature.json into a
 // config.FeatureMetadata. Missing fields are tolerated (zero value);
 // JSON parse errors are returned with the file path included.
-func parseMetadata(dir string) (config.FeatureMetadata, error) {
+func ParseMetadata(dir string) (config.FeatureMetadata, error) {
 	path := filepath.Join(dir, metadataFile)
 	data, err := os.ReadFile(path)
 	if err != nil {
