@@ -1,9 +1,12 @@
 package feature
 
 import (
+	"encoding/json"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/crunchloop/devcontainer/config"
@@ -14,9 +17,15 @@ import (
 //
 // Order of precedence (later wins): defaults → user. Keys not declared
 // in the feature's options are kept (some features accept arbitrary
-// extras) but emit WarnUnknownFeatureOption. Enum-typed options are
+// extras), converted to strings when they can be, and emit
+// WarnUnknownFeatureOption. Enum-typed options are
 // hard-validated; values outside the enum produce an error. Proposals
 // (soft constraints) do not validate.
+//
+// A string-typed (or untyped) option given a non-string value is
+// converted the way the reference CLI converts it (see
+// coerceOptionString) and emits WarnFeatureOptionCoerced; only an
+// object is rejected. Boolean-typed options stay strict.
 //
 // Returns the merged map and any non-fatal warnings. Errors are
 // validation failures (enum mismatch, type mismatch on declared options).
@@ -24,10 +33,18 @@ func MergeOptions(meta config.FeatureMetadata, user map[string]any) (map[string]
 	out := make(map[string]any, len(meta.Options)+len(user))
 	var warnings []config.Warning
 
-	// Start with defaults from the feature's declared options.
+	// Start with defaults from the feature's declared options. A
+	// non-string default of a string option is converted too, so the
+	// env file never carries Go's formatting of it.
 	for name, opt := range meta.Options {
-		if opt.Default != nil {
-			out[name] = opt.Default
+		if opt.Default == nil {
+			continue
+		}
+		out[name] = opt.Default
+		if isStringOption(opt) {
+			if s, ok := coerceOptionString(opt.Default); ok {
+				out[name] = s
+			}
 		}
 	}
 
@@ -35,44 +52,133 @@ func MergeOptions(meta config.FeatureMetadata, user map[string]any) (map[string]
 	for name, val := range user {
 		decl, declared := meta.Options[name]
 		if !declared {
+			// The reference CLI writes undeclared options to the env
+			// file too; convert them the same way when it can.
 			out[name] = val
+			if s, ok := coerceOptionString(val); ok {
+				out[name] = s
+			}
 			warnings = append(warnings, config.Warning{
 				Code:    config.WarnUnknownFeatureOption,
 				Message: fmt.Sprintf("feature %q: option %q is not declared in devcontainer-feature.json", meta.ID, name),
 			})
 			continue
 		}
-		if err := validateOptionValue(name, decl, val); err != nil {
+		v, err := validateOptionValue(name, decl, val)
+		if err != nil {
 			return nil, warnings, fmt.Errorf("feature %q: %w", meta.ID, err)
 		}
-		out[name] = val
+		if _, wasString := val.(string); !wasString && isStringOption(decl) {
+			warnings = append(warnings, config.Warning{
+				Code:    config.WarnFeatureOptionCoerced,
+				Message: fmt.Sprintf("feature %q: option %q expects a string; %T value converted to %q", meta.ID, name, val, v),
+			})
+		}
+		out[name] = v
 	}
 
 	return out, warnings, nil
 }
 
-func validateOptionValue(name string, opt config.FeatureOption, val any) error {
+func isStringOption(opt config.FeatureOption) bool {
+	return opt.Type == "string" || opt.Type == ""
+}
+
+// validateOptionValue checks val against opt and returns the value to
+// install with: val itself, or for a string option its string form.
+func validateOptionValue(name string, opt config.FeatureOption, val any) (any, error) {
+	if isStringOption(opt) {
+		s, ok := coerceOptionString(val)
+		if !ok {
+			return nil, fmt.Errorf("option %q expects string, got %T", name, val)
+		}
+		val = s
+	}
 	if len(opt.Enum) > 0 {
 		for _, allowed := range opt.Enum {
 			if anyEqual(allowed, val) {
-				return nil
+				return val, nil
 			}
 		}
-		return fmt.Errorf("option %q value %v is not in enum %v", name, val, opt.Enum)
+		return nil, fmt.Errorf("option %q value %v is not in enum %v", name, val, opt.Enum)
 	}
-	switch opt.Type {
-	case "boolean":
+	if opt.Type == "boolean" {
 		if _, ok := val.(bool); !ok {
-			return fmt.Errorf("option %q expects boolean, got %T", name, val)
+			return nil, fmt.Errorf("option %q expects boolean, got %T", name, val)
 		}
-	case "string", "":
-		if _, ok := val.(string); !ok {
-			return fmt.Errorf("option %q expects string, got %T", name, val)
-		}
-	default:
-		// Unknown type — accept and let install.sh deal with it.
 	}
-	return nil
+	// Any other type: accept and let install.sh deal with it.
+	return val, nil
+}
+
+// coerceOptionString converts a JSON option value to a string the way
+// the reference CLI (@devcontainers/cli) does: it writes each value
+// into devcontainer-features.env through a JavaScript template
+// literal, i.e. JavaScript's String(). An array joins its elements
+// with "," (null → "", nested arrays flatten), null is "null", and
+// numbers use JavaScript's number formatting. An object (which
+// JavaScript would write as "[object Object]") is not converted: it
+// reports false so the option is rejected.
+func coerceOptionString(v any) (string, bool) {
+	switch x := v.(type) {
+	case nil:
+		return "null", true
+	case string:
+		return x, true
+	case bool:
+		return strconv.FormatBool(x), true
+	case float64:
+		return jsNumberString(x), true
+	case float32:
+		return jsNumberString(float64(x)), true
+	case json.Number:
+		return x.String(), true
+	case int:
+		return strconv.Itoa(x), true
+	case int64:
+		return strconv.FormatInt(x, 10), true
+	case int32:
+		return strconv.FormatInt(int64(x), 10), true
+	case uint:
+		return strconv.FormatUint(uint64(x), 10), true
+	case uint64:
+		return strconv.FormatUint(x, 10), true
+	case uint32:
+		return strconv.FormatUint(uint64(x), 10), true
+	case []any:
+		parts := make([]string, len(x))
+		for i, e := range x {
+			if e == nil {
+				continue // Array.prototype.join writes null as "".
+			}
+			s, ok := coerceOptionString(e)
+			if !ok {
+				return "", false
+			}
+			parts[i] = s
+		}
+		return strings.Join(parts, ","), true
+	default:
+		return "", false
+	}
+}
+
+// jsNumberString formats f as JavaScript's Number.prototype.toString
+// does: shortest round-trip digits, positional notation for
+// 1e-6 <= |f| < 1e21, and otherwise exponent form with no exponent
+// padding ("1e+21", "1.5e-7").
+func jsNumberString(f float64) string {
+	if f == 0 {
+		return "0" // also -0
+	}
+	if a := math.Abs(f); a >= 1e21 || a < 1e-6 {
+		s := strconv.FormatFloat(f, 'e', -1, 64)
+		mant, exp, _ := strings.Cut(s, "e")
+		sign := exp[:1]
+		exp = strings.TrimLeft(exp[1:], "0")
+		return mant + "e" + sign + exp
+	}
+	return strconv.FormatFloat(f, 'f', -1, 64)
 }
 
 func anyEqual(a, b any) bool {
