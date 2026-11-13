@@ -2,6 +2,7 @@ package feature
 
 import (
 	"encoding/json"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -285,5 +286,92 @@ func TestSerializeEnvFile_AfterCoercion(t *testing.T) {
 	}
 	if got := string(SerializeEnvFile(merged)); got != "PACKAGES='jq,tree'\n" {
 		t.Errorf("env file = %q, want %q", got, "PACKAGES='jq,tree'\n")
+	}
+}
+
+// Outputs checked against node 22: `${v}` for each JSON value.
+func TestMergeOptions_MatchesJavaScriptString(t *testing.T) {
+	cases := []struct {
+		in   any
+		want string
+	}{
+		{[]any{[]any{}}, ""},
+		{[]any{[]any{[]any{}}}, ""},
+		{[]any{[]any{nil, nil}}, ","},
+		{[]any{nil, "a", []any{nil}}, ",a,"},
+		{[]any{true, 1.5, nil}, "true,1.5,"},
+		{false, "false"},
+		{1.23e-18, "1.23e-18"},
+		{5e-324, "5e-324"},
+		{1.7976931348623157e308, "1.7976931348623157e+308"},
+		{0.1, "0.1"},
+		{math.Copysign(0, -1), "0"},
+		{float64(123456789012345678), "123456789012345680"},
+		{json.Number("1e6"), "1000000"},
+		{json.Number("1.50"), "1.5"},
+		{json.Number("123456789012345678"), "123456789012345680"},
+	}
+	for _, tc := range cases {
+		if got, _ := coerced(t, config.FeatureOption{Type: "string"}, tc.in); got != tc.want {
+			t.Errorf("%#v → %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestMergeOptions_BooleanAcceptsTrueFalseStrings(t *testing.T) {
+	meta := config.FeatureMetadata{
+		ID:      "common-utils",
+		Options: map[string]config.FeatureOption{"installZsh": {Type: "boolean", Default: true}},
+	}
+	for in, want := range map[string]bool{"true": true, "false": false} {
+		merged, warns, err := MergeOptions(meta, map[string]any{"installZsh": in})
+		if err != nil {
+			t.Fatalf("%q: %v", in, err)
+		}
+		if merged["installZsh"] != want {
+			t.Errorf("%q → %#v, want %v", in, merged["installZsh"], want)
+		}
+		if len(warns) != 1 || warns[0].Code != config.WarnFeatureOptionCoerced {
+			t.Errorf("%q: warnings = %v, want one %s", in, warns, config.WarnFeatureOptionCoerced)
+		}
+	}
+	// The env file is what the reference CLI writes for "true" and true.
+	merged, _, err := MergeOptions(meta, map[string]any{"installZsh": "false"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(SerializeEnvFile(merged)); got != "INSTALLZSH='false'\n" {
+		t.Errorf("env file = %q", got)
+	}
+	for _, bad := range []any{"True", "yes", "", float64(1), nil, []any{"true"}} {
+		if _, _, err := MergeOptions(meta, map[string]any{"installZsh": bad}); err == nil || !strings.Contains(err.Error(), "expects boolean") {
+			t.Errorf("%#v: err = %v, want an expects-boolean error", bad, err)
+		}
+	}
+	if _, warns, err := MergeOptions(meta, map[string]any{"installZsh": true}); err != nil || len(warns) != 0 {
+		t.Errorf("true: warns=%v err=%v, want none", warns, err)
+	}
+}
+
+func TestMergeOptions_CoercionIsIdempotent(t *testing.T) {
+	// SameOptions re-merges already merged options; a second merge must
+	// neither change the value nor warn again.
+	meta := config.FeatureMetadata{
+		ID: "x",
+		Options: map[string]config.FeatureOption{
+			"packages": {Type: "string"},
+			"flag":     {Type: "boolean"},
+		},
+	}
+	first, _, err := MergeOptions(meta, map[string]any{"packages": []any{"jq", float64(2)}, "flag": "true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, warns, err := MergeOptions(meta, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(first, second) || len(warns) != 0 {
+		t.Errorf("second merge = %#v (warns %v), want %#v and no warnings", second, warns, first)
 	}
 }

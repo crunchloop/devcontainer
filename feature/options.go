@@ -25,7 +25,9 @@ import (
 // A string-typed (or untyped) option given a non-string value is
 // converted the way the reference CLI converts it (see
 // coerceOptionString) and emits WarnFeatureOptionCoerced; only an
-// object is rejected. Boolean-typed options stay strict.
+// object is rejected. A boolean-typed option accepts the strings
+// "true" and "false" as the booleans (also with
+// WarnFeatureOptionCoerced) and rejects any other non-boolean.
 //
 // Returns the merged map and any non-fatal warnings. Errors are
 // validation failures (enum mismatch, type mismatch on declared options).
@@ -64,14 +66,18 @@ func MergeOptions(meta config.FeatureMetadata, user map[string]any) (map[string]
 			})
 			continue
 		}
-		v, err := validateOptionValue(name, decl, val)
+		v, converted, err := validateOptionValue(name, decl, val)
 		if err != nil {
 			return nil, warnings, fmt.Errorf("feature %q: %w", meta.ID, err)
 		}
-		if _, wasString := val.(string); !wasString && isStringOption(decl) {
+		if converted {
+			want := decl.Type
+			if want == "" {
+				want = "string"
+			}
 			warnings = append(warnings, config.Warning{
 				Code:    config.WarnFeatureOptionCoerced,
-				Message: fmt.Sprintf("feature %q: option %q expects a string; %T value converted to %q", meta.ID, name, val, v),
+				Message: fmt.Sprintf("feature %q: option %q expects a %s; %T value converted to %#v", meta.ID, name, want, val, v),
 			})
 		}
 		out[name] = v
@@ -85,30 +91,42 @@ func isStringOption(opt config.FeatureOption) bool {
 }
 
 // validateOptionValue checks val against opt and returns the value to
-// install with: val itself, or for a string option its string form.
-func validateOptionValue(name string, opt config.FeatureOption, val any) (any, error) {
-	if isStringOption(opt) {
+// install with: val itself, or for a string option its string form,
+// or for a boolean option given the string "true" or "false" that
+// boolean. converted reports whether the returned value differs in
+// type from val.
+func validateOptionValue(name string, opt config.FeatureOption, val any) (v any, converted bool, err error) {
+	switch {
+	case isStringOption(opt):
 		s, ok := coerceOptionString(val)
 		if !ok {
-			return nil, fmt.Errorf("option %q expects string, got %T", name, val)
+			return nil, false, fmt.Errorf("option %q expects string, got %T", name, val)
 		}
-		val = s
+		_, wasString := val.(string)
+		val, converted = s, !wasString
+	case opt.Type == "boolean":
+		// The reference CLI writes "true" and true identically
+		// (TRUE="true"), so the strings "true" and "false" mean the
+		// boolean. Any other string stays an error.
+		if s, ok := val.(string); ok && (s == "true" || s == "false") {
+			val, converted = s == "true", true
+		}
 	}
 	if len(opt.Enum) > 0 {
 		for _, allowed := range opt.Enum {
 			if anyEqual(allowed, val) {
-				return val, nil
+				return val, converted, nil
 			}
 		}
-		return nil, fmt.Errorf("option %q value %v is not in enum %v", name, val, opt.Enum)
+		return nil, false, fmt.Errorf("option %q value %v is not in enum %v", name, val, opt.Enum)
 	}
 	if opt.Type == "boolean" {
 		if _, ok := val.(bool); !ok {
-			return nil, fmt.Errorf("option %q expects boolean, got %T", name, val)
+			return nil, false, fmt.Errorf("option %q expects boolean, got %T", name, val)
 		}
 	}
 	// Any other type: accept and let install.sh deal with it.
-	return val, nil
+	return val, converted, nil
 }
 
 // coerceOptionString converts a JSON option value to a string the way
@@ -132,6 +150,11 @@ func coerceOptionString(v any) (string, bool) {
 	case float32:
 		return jsNumberString(float64(x)), true
 	case json.Number:
+		// JavaScript parses every JSON number as a double, so
+		// "1e6" is 1000000 and a 19-digit integer loses precision.
+		if f, err := x.Float64(); err == nil {
+			return jsNumberString(f), true
+		}
 		return x.String(), true
 	case int:
 		return strconv.Itoa(x), true
