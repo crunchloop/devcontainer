@@ -48,6 +48,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **features** — a feature option declared as a string (or untyped) that
+  is given a non-string value is converted the way the reference CLI
+  converts it, instead of failing with `option "packages" expects
+  string, got []interface {}`. Arrays join with `,` (`["jq","tree"]` →
+  `jq,tree`), numbers, booleans and `null` take their JavaScript string
+  form, and a `config.WarnFeatureOptionCoerced` warning is reported.
+  Objects are still rejected. A boolean option given the string
+  `"true"` or `"false"` takes that boolean (the reference CLI writes
+  both forms identically) with the same warning; any other non-boolean
+  still errors. Non-string defaults and undeclared options are
+  converted too, so `feature.env` never carries Go formatting such as
+  `[jq tree]`.
 - **engine** — `Up` and `Build` called without `ConfigPath` now use the
   discovered `devcontainer.json`'s directory for local features and the
   compose working directory. Previously they always assumed

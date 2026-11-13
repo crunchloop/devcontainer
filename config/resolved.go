@@ -414,6 +414,7 @@ const (
 	WarnUnknownVariable         WarningCode = "unknown_variable"
 	WarnDeepFeatureChain        WarningCode = "deep_feature_chain"
 	WarnUnknownFeatureOption    WarningCode = "unknown_feature_option"
+	WarnFeatureOptionCoerced    WarningCode = "feature_option_coerced"
 	WarnComposePortsIgnored     WarningCode = "compose_ports_ignored"
 	WarnUIDReconcileSkipped     WarningCode = "uid_reconcile_skipped"
 )
