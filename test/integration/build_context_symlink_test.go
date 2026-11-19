@@ -53,7 +53,7 @@ RUN echo built > /etc/symlink-build-marker
 `)
 
 	mustWrite(t, filepath.Join(dir, ".devcontainer", "devcontainer.json"), `{
-		"build": { "dockerfile": "Dockerfile", "context": ".." }
+		"build": { "dockerfile": "../Dockerfile", "context": ".." }
 	}`)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)

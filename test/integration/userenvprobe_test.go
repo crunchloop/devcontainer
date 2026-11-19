@@ -84,7 +84,7 @@ RUN mkdir -p /opt/mytool/bin /etc/profile.d \
  && printf 'export PATH=/opt/mytool/bin:$PATH\n' > /etc/profile.d/mytool.sh
 `)
 	mustWrite(t, filepath.Join(dir, ".devcontainer", "devcontainer.json"), `{
-		"build": { "dockerfile": "Dockerfile", "context": ".." },
+		"build": { "dockerfile": "../Dockerfile", "context": ".." },
 		"postCreateCommand": "command -v mytool && mytool > /tmp/lifecycle-out"
 	}`)
 	ws := dir

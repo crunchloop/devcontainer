@@ -471,13 +471,15 @@ const (
 // BuildSpec is the input to BuildImage.
 type BuildSpec struct {
 	ContextPath string
-	Dockerfile  string
-	Tag         string
-	Args        map[string]string
-	Target      string
-	CacheFrom   []string
-	NoCache     bool
-	Platform    string
+	// Dockerfile is relative to ContextPath (empty means "Dockerfile")
+	// or an absolute host path, which may lie outside ContextPath.
+	Dockerfile string
+	Tag        string
+	Args       map[string]string
+	Target     string
+	CacheFrom  []string
+	NoCache    bool
+	Platform   string
 }
 
 // TtySize is a pty geometry in character cells. A zero value means

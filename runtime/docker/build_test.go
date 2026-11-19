@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -115,7 +116,7 @@ func TestTarDirectoryNormalizesMetadata(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := tarDirectory(dir, &buf); err != nil {
+	if err := tarDirectory(dir, nil, &buf); err != nil {
 		t.Fatalf("tarDirectory: %v", err)
 	}
 
@@ -172,10 +173,10 @@ func TestTarDirectoryDeterministic(t *testing.T) {
 	b := mkContext(t, time.Unix(1_800_000_000, 0))
 
 	var bufA, bufB bytes.Buffer
-	if err := tarDirectory(a, &bufA); err != nil {
+	if err := tarDirectory(a, nil, &bufA); err != nil {
 		t.Fatalf("tarDirectory a: %v", err)
 	}
-	if err := tarDirectory(b, &bufB); err != nil {
+	if err := tarDirectory(b, nil, &bufB); err != nil {
 		t.Fatalf("tarDirectory b: %v", err)
 	}
 	if !bytes.Equal(bufA.Bytes(), bufB.Bytes()) {
@@ -238,5 +239,95 @@ func TestSyntaxFrontend(t *testing.T) {
 				t.Errorf("syntaxFrontend = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestLocateDockerfile(t *testing.T) {
+	root := t.TempDir()
+	ctxDir := filepath.Join(root, "repo")
+	outside := filepath.Join(root, "elsewhere", "Dockerfile")
+	if err := os.MkdirAll(filepath.Dir(outside), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outside, []byte("FROM alpine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name, dockerfile, wantHost, wantTar string
+	}{
+		{"empty defaults to Dockerfile", "", filepath.Join(ctxDir, "Dockerfile"), "Dockerfile"},
+		{"relative to context", "sub/Dockerfile", filepath.Join(ctxDir, "sub", "Dockerfile"), "sub/Dockerfile"},
+		{"absolute inside context", filepath.Join(ctxDir, ".devcontainer", "Dockerfile"),
+			filepath.Join(ctxDir, ".devcontainer", "Dockerfile"), ".devcontainer/Dockerfile"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			host, name, injected, err := locateDockerfile(ctxDir, tc.dockerfile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if host != tc.wantHost || name != tc.wantTar || injected != nil {
+				t.Errorf("got (%q, %q, %v), want (%q, %q, nil)", host, name, injected, tc.wantHost, tc.wantTar)
+			}
+		})
+	}
+
+	t.Run("absolute outside context is injected", func(t *testing.T) {
+		host, name, injected, err := locateDockerfile(ctxDir, outside)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if host != outside {
+			t.Errorf("host = %q, want %q", host, outside)
+		}
+		if injected == nil || injected.Name != name || string(injected.Body) != "FROM alpine\n" {
+			t.Fatalf("injected = %+v, name %q", injected, name)
+		}
+		if !strings.HasPrefix(name, ".dockerfile.") {
+			t.Errorf("name = %q, want .dockerfile.<hash>", name)
+		}
+		// Deterministic: same content, same name.
+		_, again, _, _ := locateDockerfile(ctxDir, outside)
+		if again != name {
+			t.Errorf("name not stable: %q vs %q", name, again)
+		}
+	})
+
+	t.Run("missing outside dockerfile errors", func(t *testing.T) {
+		if _, _, _, err := locateDockerfile(ctxDir, filepath.Join(root, "nope", "Dockerfile")); err == nil {
+			t.Fatal("want error")
+		}
+	})
+}
+
+func TestTarDirectoryAppendsExtra(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := tarDirectory(dir, &tarFile{Name: ".dockerfile.abc", Body: []byte("FROM alpine\n")}, &buf); err != nil {
+		t.Fatalf("tarDirectory: %v", err)
+	}
+	got := map[string]string{}
+	tr := tar.NewReader(&buf)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("tar.Next: %v", err)
+		}
+		body, _ := io.ReadAll(tr)
+		got[hdr.Name] = string(body)
+		if !hdr.ModTime.Equal(time.Unix(0, 0)) {
+			t.Errorf("%s: ModTime not epoch", hdr.Name)
+		}
+	}
+	want := map[string]string{"file.txt": "hello", ".dockerfile.abc": "FROM alpine\n"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("entries = %v, want %v", got, want)
 	}
 }

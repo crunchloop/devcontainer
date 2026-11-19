@@ -24,15 +24,18 @@ func writeBuildSourceWorkspace(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 
-	// User-provided Dockerfile.
-	mustWrite(t, filepath.Join(dir, "Dockerfile"), `
+	// User-provided Dockerfile beside devcontainer.json, with the repo
+	// root as the build context: the common layout. Per the spec,
+	// dockerfile resolves against the devcontainer.json folder, so this
+	// is .devcontainer/Dockerfile (not <context>/Dockerfile). A root
+	// file proves the context really is the repo root.
+	mustWrite(t, filepath.Join(dir, ".devcontainer", "Dockerfile"), `
 FROM alpine:3.20
+COPY root.txt /etc/root-marker
 RUN echo base-image > /etc/build-source-marker
 `)
+	mustWrite(t, filepath.Join(dir, "root.txt"), "from-repo-root\n")
 
-	// devcontainer.json points to a Dockerfile in the context root, with
-	// context = ".." so it resolves to the workspace dir (which contains
-	// Dockerfile). The Dockerfile path itself is relative to that context.
 	mustWrite(t, filepath.Join(dir, ".devcontainer", "devcontainer.json"), `{
 		"build": { "dockerfile": "Dockerfile", "context": ".." },
 		"features": {
@@ -129,6 +132,50 @@ func TestBuildSource_WithLocalFeature(t *testing.T) {
 	if !strings.Contains(res.Stdout, "yes") {
 		t.Errorf("FEATURE_INSTALLED not applied: stdout=%q", res.Stdout)
 	}
+
+	// COPY read root.txt from the repo-root context.
+	res, err = eng.Exec(ctx, wsObj, devcontainer.ExecOptions{
+		Cmd: []string{"cat", "/etc/root-marker"},
+	})
+	if err != nil {
+		t.Fatalf("Exec root-marker: %v", err)
+	}
+	if !strings.Contains(res.Stdout, "from-repo-root") {
+		t.Errorf("root-marker contents = %q (context not the repo root?)", res.Stdout)
+	}
+}
+
+// TestBuildSource_DockerfileOutsideContext: the Dockerfile sits beside
+// devcontainer.json while the context is a sibling folder that doesn't
+// contain it. Docker can't open a Dockerfile outside the context tar,
+// so the runtime ships it in the tar under a reserved name, as
+// `docker build -f` does for the reference CLI.
+func TestBuildSource_DockerfileOutsideContext(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+
+	eng, rt := newEngine(t)
+	defer rt.Close()
+
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, ".devcontainer", "Dockerfile"),
+		"FROM "+testImage+"\nCOPY app.txt /etc/app-marker\n")
+	mustWrite(t, filepath.Join(dir, "app", "app.txt"), "from-app-context\n")
+	mustWrite(t, filepath.Join(dir, ".devcontainer", "devcontainer.json"),
+		`{"build": {"dockerfile": "Dockerfile", "context": "../app"}}`)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	const tag = "dc-go-build-test-outside-context:v1"
+	if _, err := eng.Build(ctx, devcontainer.BuildOptions{
+		LocalWorkspaceFolder: dir,
+		ImageName:            tag,
+	}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.RemoveImage(context.Background(), tag) })
 }
 
 func TestPrebakedImage_SkipsFeatureRebuild(t *testing.T) {

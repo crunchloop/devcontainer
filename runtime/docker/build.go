@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -44,18 +46,18 @@ func (r *Runtime) BuildImage(ctx context.Context, spec runtime.BuildSpec, events
 		return runtime.ImageRef{}, fmt.Errorf("BuildImage: spec.Tag required")
 	}
 
+	dockerfilePath, dockerfile, injected, err := locateDockerfile(spec.ContextPath, spec.Dockerfile)
+	if err != nil {
+		return runtime.ImageRef{}, err
+	}
+
 	// Stream the context directory as a tar over an io.Pipe so we
 	// don't buffer it all in memory.
 	pr, pw := io.Pipe()
 	go func() {
-		err := tarDirectory(spec.ContextPath, pw)
+		err := tarDirectory(spec.ContextPath, injected, pw)
 		_ = pw.CloseWithError(err)
 	}()
-
-	dockerfile := spec.Dockerfile
-	if dockerfile == "" {
-		dockerfile = "Dockerfile"
-	}
 
 	args := make(map[string]*string, len(spec.Args))
 	for k, v := range spec.Args {
@@ -71,7 +73,7 @@ func (r *Runtime) BuildImage(ctx context.Context, spec runtime.BuildSpec, events
 	// (which is unaffected by the session requirement) seeds the local
 	// store; BuildKit then picks up the cached manifest instead of
 	// reaching for the registry.
-	prePullBaseImages(ctx, r, spec.ContextPath, dockerfile, spec.Args, events)
+	prePullBaseImages(ctx, r, dockerfilePath, spec.Args, events)
 
 	res, err := r.api.ImageBuild(ctx, pr, client.ImageBuildOptions{
 		Dockerfile: dockerfile,
@@ -178,8 +180,50 @@ func streamBuildOutput(ctx context.Context, body io.ReadCloser, events chan<- ru
 // avoids any reader special-casing the year-1 sentinel.
 var tarEpoch = time.Unix(0, 0)
 
+// tarFile is a regular file appended to a build-context tar after the
+// directory walk.
+type tarFile struct {
+	Name string
+	Body []byte
+}
+
+// locateDockerfile maps a BuildSpec.Dockerfile onto the host file to
+// read (hostPath) and the name the daemon should open inside the
+// context tar (tarName). dockerfile is either relative to contextPath
+// (empty means "Dockerfile") or an absolute host path.
+//
+// An absolute path inside the context becomes its context-relative
+// name. One outside the context can't be reached through the tar, so
+// it is read and returned as injected, to be appended under a reserved
+// name, matching `docker build -f <outside> <context>` (which the
+// reference devcontainer CLI runs). The name carries a content hash
+// rather than the docker CLI's random suffix so the tar stays
+// reproducible.
+func locateDockerfile(contextPath, dockerfile string) (hostPath, tarName string, injected *tarFile, err error) {
+	if dockerfile == "" {
+		dockerfile = "Dockerfile"
+	}
+	if !filepath.IsAbs(dockerfile) {
+		return filepath.Join(contextPath, dockerfile), filepath.ToSlash(dockerfile), nil, nil
+	}
+	absCtx, err := filepath.Abs(contextPath)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("BuildImage: context path %s: %w", contextPath, err)
+	}
+	if rel, err := filepath.Rel(absCtx, dockerfile); err == nil && filepath.IsLocal(rel) {
+		return dockerfile, filepath.ToSlash(rel), nil, nil
+	}
+	body, err := os.ReadFile(dockerfile)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("BuildImage: read dockerfile outside context: %w", err)
+	}
+	sum := sha256.Sum256(body)
+	name := ".dockerfile." + hex.EncodeToString(sum[:])[:12]
+	return dockerfile, name, &tarFile{Name: name, Body: body}, nil
+}
+
 // tarDirectory writes the contents of dir (recursively) into w as a
-// non-gzipped tar archive. Symlinks are preserved as tar TypeSymlink
+// non-gzipped tar archive, followed by extra when non-nil. Symlinks are preserved as tar TypeSymlink
 // entries with their original target text; the daemon-side BuildKit
 // frontend handles the resolution.
 //
@@ -188,11 +232,11 @@ var tarEpoch = time.Unix(0, 0)
 // Linkname. Some downstream tar readers reject those as malformed and
 // abort the build mid-stream — common in compose-primary contexts
 // containing node_modules/.bin/* or similar bin-symlinks.
-func tarDirectory(dir string, w io.Writer) error {
+func tarDirectory(dir string, extra *tarFile, w io.Writer) error {
 	tw := tar.NewWriter(w)
 	defer func() { _ = tw.Close() }()
 
-	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -258,9 +302,23 @@ func tarDirectory(dir string, w io.Writer) error {
 		_ = f.Close()
 		return err
 	})
+	if err != nil || extra == nil {
+		return err
+	}
+	if err := tw.WriteHeader(&tar.Header{
+		Typeflag: tar.TypeReg,
+		Name:     extra.Name,
+		Mode:     0o644,
+		Size:     int64(len(extra.Body)),
+		ModTime:  tarEpoch,
+	}); err != nil {
+		return err
+	}
+	_, err = tw.Write(extra.Body)
+	return err
 }
 
-// prePullBaseImages reads the Dockerfile at contextPath/dockerfile,
+// prePullBaseImages reads the Dockerfile at dockerfilePath,
 // extracts its frontend image (a `# syntax=` directive or the
 // BUILDKIT_SYNTAX build arg) and FROM image references (resolving
 // simple $ARG substitutions against ARG defaults in the file and the
@@ -277,8 +335,8 @@ func tarDirectory(dir string, w io.Writer) error {
 // anonymous registry access when no session is attached, so this only
 // changes the outcome on older engines; there it is what makes public
 // images resolvable at all.
-func prePullBaseImages(ctx context.Context, r *Runtime, contextPath, dockerfile string, buildArgs map[string]string, events chan<- runtime.BuildEvent) {
-	df, err := os.ReadFile(filepath.Join(contextPath, dockerfile))
+func prePullBaseImages(ctx context.Context, r *Runtime, dockerfilePath string, buildArgs map[string]string, events chan<- runtime.BuildEvent) {
+	df, err := os.ReadFile(dockerfilePath)
 	if err != nil {
 		return
 	}

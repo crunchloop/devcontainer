@@ -123,7 +123,7 @@ type ImageSource struct {
 }
 
 type BuildSource struct {
-    Dockerfile string             // path relative to context
+    Dockerfile string             // absolute, host-side (spec: relative to devcontainer.json's folder)
     Context    string             // absolute, host-side
     Args       map[string]string
     Target     string

@@ -48,6 +48,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **config** — `build.dockerfile` is resolved against the folder that
+  holds `devcontainer.json`, as the spec and the reference CLI do, not
+  against `build.context`. `{"dockerfile": "Dockerfile", "context": ".."}`
+  now builds `.devcontainer/Dockerfile` with the repo root as context,
+  instead of failing with `open Dockerfile: no such file or directory`.
+  `BuildSource.Dockerfile` is now an absolute host path. A config that
+  relied on the old behaviour (a `Dockerfile` in the context root
+  referenced as `"Dockerfile"` with `"context": ".."`) must use
+  `"../Dockerfile"`, as it already must for the reference CLI. Both
+  paths are now resolved after variable substitution, so
+  `"context": "${localWorkspaceFolder}"` is no longer joined onto the
+  config folder. `runtime.BuildSpec.Dockerfile` accepts an absolute path; one outside
+  the context is sent in the context tar under a reserved
+  `.dockerfile.<hash>` name, as `docker build -f` does.
+
 - **features** — a feature option declared as a string (or untyped) that
   is given a non-string value is converted the way the reference CLI
   converts it, instead of failing with `option "packages" expects

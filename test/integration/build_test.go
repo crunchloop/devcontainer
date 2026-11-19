@@ -130,7 +130,7 @@ func TestEngineBuild_BuildSource_NoFeatures(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "Dockerfile"), "FROM "+testImage+"\nRUN echo build-no-features > /etc/marker\n")
 	mustWrite(t, filepath.Join(dir, ".devcontainer", "devcontainer.json"),
-		`{"build": {"dockerfile": "Dockerfile", "context": ".."}}`)
+		`{"build": {"dockerfile": "../Dockerfile", "context": ".."}}`)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -169,7 +169,7 @@ func TestEngineBuild_BuildSource_SyntaxDirective(t *testing.T) {
 		"RUN --mount=type=tmpfs,target=/scratch hello > /etc/marker\n")
 	mustWrite(t, filepath.Join(dir, "hello.sh"), "#!/bin/sh\necho syntax-directive\n")
 	mustWrite(t, filepath.Join(dir, ".devcontainer", "devcontainer.json"),
-		`{"build": {"dockerfile": "Dockerfile", "context": ".."}}`)
+		`{"build": {"dockerfile": "../Dockerfile", "context": ".."}}`)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()

@@ -356,9 +356,9 @@ func determineSource(raw *rawConfig, configDir string) (Source, []Warning, error
 		if ctxPath == "" {
 			ctxPath = "."
 		}
-		if !filepath.IsAbs(ctxPath) {
-			ctxPath = filepath.Join(configDir, ctxPath)
-		}
+		// Dockerfile and Context stay as written here; substituteAll
+		// resolves them against the devcontainer.json folder after
+		// substitution, so ${localWorkspaceFolder}/… stays absolute.
 		return &BuildSource{
 			Dockerfile: raw.Build.Dockerfile,
 			Context:    ctxPath,
@@ -534,8 +534,16 @@ func substituteAll(out *ResolvedConfig, ctx SubstitutionContext, source string) 
 	case *ImageSource:
 		s.Image = subStr(s.Image, "/image")
 	case *BuildSource:
-		s.Dockerfile = subStr(s.Dockerfile, "/build/dockerfile")
-		s.Context = subStr(s.Context, "/build/context")
+		// The spec resolves both dockerfile and context against the
+		// devcontainer.json folder (dockerfile is NOT relative to
+		// context), after substitution, as the reference CLI does. The
+		// runtime re-expresses Dockerfile relative to the context it
+		// tars up.
+		configDir := filepath.Dir(source)
+		if df := subStr(s.Dockerfile, "/build/dockerfile"); df != "" {
+			s.Dockerfile = resolveAgainst(configDir, df)
+		}
+		s.Context = resolveAgainst(configDir, subStr(s.Context, "/build/context"))
 		s.Target = subStr(s.Target, "/build/target")
 		subMap(s.Args, "/build/args")
 		s.CacheFrom = subSlice(s.CacheFrom, "/build/cacheFrom")
@@ -544,6 +552,14 @@ func substituteAll(out *ResolvedConfig, ctx SubstitutionContext, source string) 
 		s.Service = subStr(s.Service, "/service")
 		s.RunServices = subSlice(s.RunServices, "/runServices")
 	}
+}
+
+// resolveAgainst returns p unchanged when absolute, else joined to dir.
+func resolveAgainst(dir, p string) string {
+	if filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(dir, p)
 }
 
 func substituteLifecycle(lc *LifecycleCommands, sub func(s, path string) string) {
