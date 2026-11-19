@@ -473,13 +473,22 @@ type BuildSpec struct {
 	ContextPath string
 	// Dockerfile is relative to ContextPath (empty means "Dockerfile")
 	// or an absolute host path, which may lie outside ContextPath.
+	// After symlinks are resolved it must lie inside ContextPath or
+	// WorkspaceRoot; otherwise BuildImage returns a
+	// *DockerfileRefusedError without reading it.
 	Dockerfile string
-	Tag        string
-	Args       map[string]string
-	Target     string
-	CacheFrom  []string
-	NoCache    bool
-	Platform   string
+	// WorkspaceRoot bounds a Dockerfile outside ContextPath: such a
+	// file is read from the host and sent to the daemon only if it
+	// resolves to a regular file inside this folder (the project the
+	// config was discovered in). Empty allows no Dockerfile outside
+	// ContextPath.
+	WorkspaceRoot string
+	Tag           string
+	Args          map[string]string
+	Target        string
+	CacheFrom     []string
+	NoCache       bool
+	Platform      string
 }
 
 // TtySize is a pty geometry in character cells. A zero value means

@@ -2,6 +2,8 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -113,10 +115,18 @@ func TestResolveBytes_BuildSourceDockerfilePath(t *testing.T) {
 			wantContext:    "/home/u/proj",
 		},
 		{
-			name:           "absolute dockerfile",
-			build:          `{"dockerfile": "/srv/images/Dockerfile", "context": ".."}`,
-			wantDockerfile: "/srv/images/Dockerfile",
+			name:           "absolute dockerfile in the workspace",
+			build:          `{"dockerfile": "/home/u/proj/docker/Dockerfile", "context": ".."}`,
+			wantDockerfile: "/home/u/proj/docker/Dockerfile",
 			wantContext:    "/home/u/proj",
+		},
+		{
+			// Outside the workspace but inside the context: the daemon
+			// reads it from the context tar, as before.
+			name:           "absolute dockerfile in an outside context",
+			build:          `{"dockerfile": "/srv/images/Dockerfile", "context": "/srv/images"}`,
+			wantDockerfile: "/srv/images/Dockerfile",
+			wantContext:    "/srv/images",
 		},
 		{
 			// Substitution runs before resolution, so a variable that
@@ -139,6 +149,43 @@ func TestResolveBytes_BuildSourceDockerfilePath(t *testing.T) {
 			}
 			if bs.Context != tc.wantContext {
 				t.Errorf("Context = %q, want %q", bs.Context, tc.wantContext)
+			}
+		})
+	}
+}
+
+// A build.dockerfile outside both the workspace and the context would be
+// read from the host and shown to the daemon, which echoes its first
+// line, so resolution refuses it before anything touches the disk.
+func TestResolveBytes_BuildSourceDockerfileOutsideWorkspace(t *testing.T) {
+	cases := []struct{ name, dockerfile, context string }{
+		{"absolute system file", "/etc/hostname", ".."},
+		{"absolute file beside the workspace", "/home/u/other/secret", ".."},
+		{"traversal out of the workspace", "../../../../etc/hostname", ".."},
+		{"traversal just past the root", "../../proj-secrets/Dockerfile", ".."},
+		{"localEnv outside the workspace", "${localEnv:HOME}/x", ".."},
+		{"absolute outside, context outside elsewhere", "/etc/hostname", "/srv/images"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			const configPath = "/home/u/proj/.devcontainer/devcontainer.json"
+			src := fmt.Sprintf(`{"build": {"dockerfile": %q, "context": %q}}`, tc.dockerfile, tc.context)
+			_, err := ResolveBytes([]byte(src), ResolveInput{
+				LocalWorkspaceFolder: "/home/u/proj",
+				ConfigPath:           configPath,
+				DevcontainerID:       fakeID,
+				LocalEnv:             map[string]string{"HOME": "/home/u"},
+			})
+			var invalid *ConfigInvalidError
+			if !errors.As(err, &invalid) {
+				t.Fatalf("err = %v, want *ConfigInvalidError", err)
+			}
+			if invalid.Path != configPath {
+				t.Errorf("Path = %q, want %q", invalid.Path, configPath)
+			}
+			// Names the path as configured.
+			if !strings.Contains(err.Error(), fmt.Sprintf("%q", tc.dockerfile)) {
+				t.Errorf("error %q does not name %q", err, tc.dockerfile)
 			}
 		})
 	}

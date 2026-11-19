@@ -188,6 +188,9 @@ func resolveFromRaw(raw *rawConfig, input ResolveInput) (*ResolvedConfig, error)
 	out.ContainerWorkspaceFolder = resolvedFolder
 
 	substituteAll(out, subCtx, input.ConfigPath)
+	if err := checkDockerfileBound(out.Source, raw, input); err != nil {
+		return nil, err
+	}
 
 	if len(raw.Features) > 0 {
 		feats, fwarns := buildPartialFeatures(raw.Features, raw.OverrideFeatureInstallOrder, input.ConfigPath)
@@ -598,5 +601,34 @@ func substituteCommand(cmd *LifecycleCommand, path string, sub func(s, p string)
 			c.Exec[i] = sub(c.Exec[i], fmt.Sprintf("%s/%s/%d", path, name, i))
 		}
 		cmd.Parallel[name] = c
+	}
+}
+
+// checkDockerfileBound rejects a build.dockerfile that resolves,
+// lexically, outside both the build context and the workspace
+// (LocalWorkspaceFolder, or only the context when that is unset). The
+// runtime reads a Dockerfile outside the context from the host to send
+// it to the daemon, and the daemon echoes a bad Dockerfile's first
+// line, so an untrusted config must not name an arbitrary host file
+// by an absolute path, ../ traversal or a substituted variable. This
+// is the early, filesystem-free half of the bound; the runtime
+// enforces it again after resolving symlinks, before it reads the
+// file. The error names the path as configured.
+func checkDockerfileBound(src Source, raw *rawConfig, input ResolveInput) error {
+	bs, ok := src.(*BuildSource)
+	if !ok || bs.Dockerfile == "" {
+		return nil
+	}
+	for _, root := range []string{bs.Context, input.LocalWorkspaceFolder} {
+		if root == "" {
+			continue
+		}
+		if rel, err := filepath.Rel(root, bs.Dockerfile); err == nil && filepath.IsLocal(rel) {
+			return nil
+		}
+	}
+	return &ConfigInvalidError{
+		Path:    input.ConfigPath,
+		Message: fmt.Sprintf("build.dockerfile %q resolves outside the workspace folder and the build context", raw.Build.Dockerfile),
 	}
 }

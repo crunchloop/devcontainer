@@ -80,3 +80,20 @@ func (e *DaemonUnavailableError) Error() string {
 }
 
 func (e *DaemonUnavailableError) Unwrap() error { return e.Err }
+
+// DockerfileRefusedError indicates BuildImage refused to read a
+// BuildSpec.Dockerfile from the host: it resolves (after symlinks)
+// outside both ContextPath and WorkspaceRoot, or it is not a regular
+// file, or it is too large to inject. The build fails before any
+// daemon call. The message names the configured path and never
+// includes the file's contents, which are not read.
+type DockerfileRefusedError struct {
+	// Path is the Dockerfile path as given in the BuildSpec.
+	Path string
+	// Reason says why the path was refused.
+	Reason string
+}
+
+func (e *DockerfileRefusedError) Error() string {
+	return fmt.Sprintf("dockerfile %s refused: %s", e.Path, e.Reason)
+}

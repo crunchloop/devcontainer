@@ -1164,11 +1164,12 @@ func (e *Engine) buildComposeSidecarImages(
 		}
 		opts.bus.Emit(events.BuildStartEvent{Source: events.BuildSourceDockerfile, Ref: tag})
 		if _, err := e.runtime.BuildImage(ctx, runtime.BuildSpec{
-			ContextPath: ctxPath,
-			Dockerfile:  svc.Build.Dockerfile,
-			Tag:         tag,
-			Args:        flattenStringMap(svc.Build.Args),
-			Target:      svc.Build.Target,
+			ContextPath:   ctxPath,
+			Dockerfile:    svc.Build.Dockerfile,
+			WorkspaceRoot: opts.LocalWorkspaceFolder,
+			Tag:           tag,
+			Args:          flattenStringMap(svc.Build.Args),
+			Target:        svc.Build.Target,
 		}, opts.bus.BuildChan(events.BuildSourceDockerfile)); err != nil {
 			return fmt.Errorf("build compose service %q image: %w", name, err)
 		}
@@ -1203,11 +1204,12 @@ func (e *Engine) prepareComposeServiceImage(ctx context.Context, cfg *config.Res
 		}
 		opts.bus.Emit(events.BuildStartEvent{Source: events.BuildSourceDockerfile, Ref: tag})
 		_, err := e.runtime.BuildImage(ctx, runtime.BuildSpec{
-			ContextPath: ctxPath,
-			Dockerfile:  svc.Build.Dockerfile,
-			Tag:         tag,
-			Args:        flattenStringMap(svc.Build.Args),
-			Target:      svc.Build.Target,
+			ContextPath:   ctxPath,
+			Dockerfile:    svc.Build.Dockerfile,
+			WorkspaceRoot: cfg.LocalWorkspaceFolder,
+			Tag:           tag,
+			Args:          flattenStringMap(svc.Build.Args),
+			Target:        svc.Build.Target,
 		}, opts.bus.BuildChan(events.BuildSourceDockerfile))
 		if err != nil {
 			return "", fmt.Errorf("build compose primary service image: %w", err)
@@ -1352,14 +1354,15 @@ func (e *Engine) prepareBaseImage(ctx context.Context, cfg *config.ResolvedConfi
 		}
 		opts.bus.Emit(events.BuildStartEvent{Source: events.BuildSourceDockerfile, Ref: tag})
 		_, err := e.runtime.BuildImage(ctx, runtime.BuildSpec{
-			ContextPath: s.Context,
-			Dockerfile:  s.Dockerfile,
-			Tag:         tag,
-			Args:        s.Args,
-			Target:      s.Target,
-			CacheFrom:   cacheFrom,
-			NoCache:     noCache,
-			Platform:    platform,
+			ContextPath:   s.Context,
+			Dockerfile:    s.Dockerfile,
+			WorkspaceRoot: cfg.LocalWorkspaceFolder,
+			Tag:           tag,
+			Args:          s.Args,
+			Target:        s.Target,
+			CacheFrom:     cacheFrom,
+			NoCache:       noCache,
+			Platform:      platform,
 		}, opts.bus.BuildChan(events.BuildSourceDockerfile))
 		if err != nil {
 			return "", fmt.Errorf("build base image from %s: %w", s.Context, err)
