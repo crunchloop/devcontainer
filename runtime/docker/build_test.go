@@ -451,6 +451,38 @@ func TestReadDockerfileRefusesAncestorSwap(t *testing.T) {
 	}
 }
 
+// A context inside the workspace is a folder the repository controls,
+// so an in-context Dockerfile is confined to the workspace root, not
+// to the context: swapping the context for a symlink to outside after
+// the check must not carry the read with it.
+func TestReadDockerfileRefusesContextSwap(t *testing.T) {
+	f := newDockerfileFixture(t)
+	writeFile(t, filepath.Join(f.app, "Dockerfile"), "FROM alpine\n")
+	writeFile(t, filepath.Join(filepath.Dir(f.secret), "Dockerfile"), fixtureSecret+"\n")
+	at, err := resolveWithin("Dockerfile", filepath.Join(f.app, "Dockerfile"), f.ws, f.app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if realWS, _ := filepath.EvalSymlinks(f.ws); at.Root != realWS {
+		t.Fatalf("Root = %q, want the workspace %q", at.Root, realWS)
+	}
+	if err := os.RemoveAll(f.app); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Dir(f.secret), f.app); err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := readDockerfile("Dockerfile", at)
+	var refused *runtime.DockerfileRefusedError
+	if !errors.As(err, &refused) {
+		t.Fatalf("err = %v, body %q; want *runtime.DockerfileRefusedError", err, body)
+	}
+	if body != nil || strings.Contains(err.Error(), fixtureSecret) {
+		t.Errorf("read through the swapped context: body %q, err %q", body, err)
+	}
+}
+
 // A refused Dockerfile fails BuildImage before any daemon call: the
 // Runtime here has no client, so reaching the daemon would panic.
 func TestBuildImageRefusesBeforeDaemon(t *testing.T) {

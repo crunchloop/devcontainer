@@ -162,7 +162,9 @@ process can read into the build output. The bound:
   path and never the file's contents.
 - The runtime reads the file through an `os.Root` on the resolved root,
   so a directory swapped for a symlink after the check can't carry the
-  read outside it.
+  read outside it. That root is the workspace whenever the file is in
+  it, not a context inside the workspace, whose own path the repository
+  could swap.
 
 Why interface over `Kind`+pointer-fields struct:
 - Type switches read more naturally: `switch s := cfg.Source.(type) { case *ImageSource: ... }`.

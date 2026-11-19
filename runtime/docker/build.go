@@ -236,7 +236,10 @@ func locateDockerfile(contextPath, dockerfile, workspaceRoot string) (tarName st
 		// The daemon opens it from the tar. The host copy is only
 		// read for pre-pulling, and a failure to read it is left for
 		// the daemon to report, as before; escaping the bound is not.
-		at, err := resolveWithin(dockerfile, hostPath, absCtx, workspaceRoot)
+		// Workspace first: a context inside the workspace is a folder
+		// the repository controls, so it must not be the root the read
+		// is confined to (see resolveWithin).
+		at, err := resolveWithin(dockerfile, hostPath, workspaceRoot, absCtx)
 		var refused *runtime.DockerfileRefusedError
 		if errors.As(err, &refused) {
 			return "", nil, nil, err
@@ -277,13 +280,17 @@ type confinedPath struct {
 }
 
 // resolveWithin resolves hostPath's symlinks and returns where it lies
-// inside one of roots (each also resolved; empty roots are skipped).
-// Otherwise it returns a *runtime.DockerfileRefusedError naming
-// configured. A path that can't be resolved is refused too unless it
+// inside the first of roots that holds it (each also resolved; empty
+// roots are skipped). Otherwise it returns a
+// *runtime.DockerfileRefusedError naming configured. A path that can't be resolved is refused too unless it
 // lies lexically inside a root, so a missing file outside the bound
 // can't be told apart from an existing one. The result only picks the
 // root: readDockerfile opens through it, which is what confines the
-// read if the tree changes after this check.
+// read if the tree changes after this check. os.OpenRoot opens the
+// root itself by path, so list the outermost root first: the
+// workspace root's path lies outside what the repository controls,
+// while a context inside the workspace could be swapped for a symlink
+// between this check and the open.
 func resolveWithin(configured, hostPath string, roots ...string) (confinedPath, error) {
 	var bounds []string
 	for _, root := range roots {
