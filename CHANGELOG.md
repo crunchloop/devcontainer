@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-11-19
+
 ### Security
 
 - **build** — a `build.dockerfile` outside the build context is read
@@ -33,6 +35,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `runtime.BuildSpec` gains `WorkspaceRoot`. When it is empty, no
     Dockerfile outside `ContextPath` is read. Compose service builds
     are bounded the same way.
+
+## [0.5.5] - 2026-11-19
+
+Don't use this release: it reads a `build.dockerfile` outside the build
+context from anywhere on the host. Use 0.5.6, which bounds it (see its
+Security entry).
+
+### Fixed
+
+- **config** — `build.dockerfile` is resolved against the folder that
+  holds `devcontainer.json`, as the spec and the reference CLI do, not
+  against `build.context`. `{"dockerfile": "Dockerfile", "context": ".."}`
+  now builds `.devcontainer/Dockerfile` with the repo root as context,
+  instead of failing with `open Dockerfile: no such file or directory`.
+  `BuildSource.Dockerfile` is now an absolute host path. A config that
+  relied on the old behaviour (a `Dockerfile` in the context root
+  referenced as `"Dockerfile"` with `"context": ".."`) must use
+  `"../Dockerfile"`, as it already must for the reference CLI. Both
+  paths are now resolved after variable substitution, so
+  `"context": "${localWorkspaceFolder}"` is no longer joined onto the
+  config folder. `runtime.BuildSpec.Dockerfile` accepts an absolute path; one outside
+  the context is sent in the context tar under a reserved
+  `.dockerfile.<hash>` name, as `docker build -f` does.
+
+## [0.5.4] - 2026-11-15
 
 ### Added
 
@@ -75,21 +102,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **config** — `build.dockerfile` is resolved against the folder that
-  holds `devcontainer.json`, as the spec and the reference CLI do, not
-  against `build.context`. `{"dockerfile": "Dockerfile", "context": ".."}`
-  now builds `.devcontainer/Dockerfile` with the repo root as context,
-  instead of failing with `open Dockerfile: no such file or directory`.
-  `BuildSource.Dockerfile` is now an absolute host path. A config that
-  relied on the old behaviour (a `Dockerfile` in the context root
-  referenced as `"Dockerfile"` with `"context": ".."`) must use
-  `"../Dockerfile"`, as it already must for the reference CLI. Both
-  paths are now resolved after variable substitution, so
-  `"context": "${localWorkspaceFolder}"` is no longer joined onto the
-  config folder. `runtime.BuildSpec.Dockerfile` accepts an absolute path; one outside
-  the context is sent in the context tar under a reserved
-  `.dockerfile.<hash>` name, as `docker build -f` does.
-
 - **features** — a feature option declared as a string (or untyped) that
   is given a non-string value is converted the way the reference CLI
   converts it, instead of failing with `option "packages" expects
@@ -102,10 +114,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still errors. Non-string defaults and undeclared options are
   converted too, so `feature.env` never carries Go formatting such as
   `[jq tree]`.
+
 - **engine** — `Up` and `Build` called without `ConfigPath` now use the
   discovered `devcontainer.json`'s directory for local features and the
   compose working directory. Previously they always assumed
   `.devcontainer/`, which was wrong for a root `.devcontainer.json`.
+
 - **runtime/docker** — a user Dockerfile that names a frontend with
   `# syntax=` (or the `BUILDKIT_SYNTAX` build arg) no longer fails with
   `failed to resolve source metadata for docker.io/docker/dockerfile:1:
@@ -114,6 +128,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   access without one. The frontend image is now pre-pulled through the
   classic pull API, as `FROM` images already were. The directive is read
   the way BuildKit's parser reads it. (#148)
+
 - **features** — features that another feature's `dependsOn` requires
   are now installed even when `devcontainer.json` does not declare them,
   as the spec requires. (#147)
@@ -146,6 +161,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     build copy and run a host directory.
   - A local dependency's content is part of the compose inputs hash.
   - See design/features.md §5.1.
+
 - **features** — OCI feature references are lowercased before they are
   parsed, as the reference CLI does. References with uppercase
   characters, such as `ghcr.io/codspace/dependson/A:2`, failed to parse.
@@ -824,7 +840,10 @@ shelling out to `@devcontainers/cli`.
 - `events` is doc-tagged **experimental** until v1.0.0 — type shapes may evolve
   without a SemVer-major bump.
 
-[Unreleased]: https://github.com/crunchloop/devcontainer/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/crunchloop/devcontainer/compare/v0.5.6...HEAD
+[0.5.6]: https://github.com/crunchloop/devcontainer/compare/v0.5.5...v0.5.6
+[0.5.5]: https://github.com/crunchloop/devcontainer/compare/v0.5.4...v0.5.5
+[0.5.4]: https://github.com/crunchloop/devcontainer/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/crunchloop/devcontainer/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/crunchloop/devcontainer/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/crunchloop/devcontainer/compare/v0.5.0...v0.5.1
