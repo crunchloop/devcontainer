@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 
@@ -46,7 +48,10 @@ func (r *Runtime) BuildImage(ctx context.Context, spec runtime.BuildSpec, events
 		return runtime.ImageRef{}, fmt.Errorf("BuildImage: spec.Tag required")
 	}
 
-	dockerfilePath, dockerfile, injected, err := locateDockerfile(spec.ContextPath, spec.Dockerfile)
+	// Bound and read the Dockerfile before anything else: a refused
+	// path fails here, before the context is tarred or the daemon is
+	// called, and nothing below reads it from the host again.
+	dockerfile, dockerfileBody, injected, err := locateDockerfile(spec.ContextPath, spec.Dockerfile, spec.WorkspaceRoot)
 	if err != nil {
 		return runtime.ImageRef{}, err
 	}
@@ -73,7 +78,7 @@ func (r *Runtime) BuildImage(ctx context.Context, spec runtime.BuildSpec, events
 	// (which is unaffected by the session requirement) seeds the local
 	// store; BuildKit then picks up the cached manifest instead of
 	// reaching for the registry.
-	prePullBaseImages(ctx, r, dockerfilePath, spec.Args, events)
+	prePullBaseImages(ctx, r, dockerfileBody, spec.Args, events)
 
 	res, err := r.api.ImageBuild(ctx, pr, client.ImageBuildOptions{
 		Dockerfile: dockerfile,
@@ -187,39 +192,194 @@ type tarFile struct {
 	Body []byte
 }
 
-// locateDockerfile maps a BuildSpec.Dockerfile onto the host file to
-// read (hostPath) and the name the daemon should open inside the
-// context tar (tarName). dockerfile is either relative to contextPath
-// (empty means "Dockerfile") or an absolute host path.
+// maxInjectedDockerfileSize caps a Dockerfile read from the host,
+// which bounds what can be appended to the context tar from outside
+// the context. Real Dockerfiles are a few KiB.
+const maxInjectedDockerfileSize = 1 << 20
+
+// locateDockerfile maps a BuildSpec.Dockerfile onto the name the
+// daemon should open inside the context tar (tarName) and the host
+// copy's contents (body, for pre-pulling base images; nil when the
+// host copy of an in-context Dockerfile can't be read, leaving the
+// daemon to report it). dockerfile is relative to contextPath (empty
+// means "Dockerfile") or an absolute host path.
 //
-// An absolute path inside the context becomes its context-relative
-// name. One outside the context can't be reached through the tar, so
-// it is read and returned as injected, to be appended under a reserved
+// A path inside the context becomes its context-relative name, as
+// before. One outside the context can't be reached through the tar,
+// so it is returned as injected, to be appended under a reserved
 // name, matching `docker build -f <outside> <context>` (which the
 // reference devcontainer CLI runs). The name carries a content hash
 // rather than the docker CLI's random suffix so the tar stays
 // reproducible.
-func locateDockerfile(contextPath, dockerfile string) (hostPath, tarName string, injected *tarFile, err error) {
+//
+// The path comes from an untrusted devcontainer.json, and the daemon
+// echoes a bad Dockerfile's first line in its parse error, so every
+// host read is bounded first: the file must resolve, after symlinks,
+// inside the context or workspaceRoot, and one outside the context
+// only inside workspaceRoot. It must also be a regular file of at
+// most maxInjectedDockerfileSize. A refused path yields a
+// *runtime.DockerfileRefusedError and nothing is read.
+func locateDockerfile(contextPath, dockerfile, workspaceRoot string) (tarName string, body []byte, injected *tarFile, err error) {
 	if dockerfile == "" {
 		dockerfile = "Dockerfile"
 	}
-	if !filepath.IsAbs(dockerfile) {
-		return filepath.Join(contextPath, dockerfile), filepath.ToSlash(dockerfile), nil, nil
-	}
 	absCtx, err := filepath.Abs(contextPath)
 	if err != nil {
-		return "", "", nil, fmt.Errorf("BuildImage: context path %s: %w", contextPath, err)
+		return "", nil, nil, fmt.Errorf("BuildImage: context path %s: %w", contextPath, err)
 	}
-	if rel, err := filepath.Rel(absCtx, dockerfile); err == nil && filepath.IsLocal(rel) {
-		return dockerfile, filepath.ToSlash(rel), nil, nil
+	hostPath := dockerfile
+	if !filepath.IsAbs(hostPath) {
+		hostPath = filepath.Join(absCtx, hostPath)
 	}
-	body, err := os.ReadFile(dockerfile)
+
+	if rel, ok := lexicallyWithin(absCtx, hostPath); ok {
+		// The daemon opens it from the tar. The host copy is only
+		// read for pre-pulling, and a failure to read it is left for
+		// the daemon to report, as before; escaping the bound is not.
+		// Workspace first: a context inside the workspace is a folder
+		// the repository controls, so it must not be the root the read
+		// is confined to (see resolveWithin).
+		at, err := resolveWithin(dockerfile, hostPath, workspaceRoot, absCtx)
+		var refused *runtime.DockerfileRefusedError
+		if errors.As(err, &refused) {
+			return "", nil, nil, err
+		}
+		if err == nil {
+			body, _ = readDockerfile(dockerfile, at)
+		}
+		return filepath.ToSlash(rel), body, nil, nil
+	}
+
+	at, err := resolveWithin(dockerfile, hostPath, workspaceRoot)
 	if err != nil {
-		return "", "", nil, fmt.Errorf("BuildImage: read dockerfile outside context: %w", err)
+		return "", nil, nil, err
+	}
+	body, err = readDockerfile(dockerfile, at)
+	if err != nil {
+		return "", nil, nil, err
 	}
 	sum := sha256.Sum256(body)
 	name := ".dockerfile." + hex.EncodeToString(sum[:])[:12]
-	return dockerfile, name, &tarFile{Name: name, Body: body}, nil
+	return name, body, &tarFile{Name: name, Body: body}, nil
+}
+
+// lexicallyWithin reports whether path is root or below it, without
+// touching the filesystem, and returns path relative to root.
+func lexicallyWithin(root, path string) (string, bool) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", false
+	}
+	return rel, true
+}
+
+// confinedPath is a Dockerfile located inside a bound: Rel, relative
+// to the real (symlink-free) Root.
+type confinedPath struct {
+	Root, Rel string
+}
+
+// resolveWithin resolves hostPath's symlinks and returns where it lies
+// inside the first of roots that holds it (each also resolved; empty
+// roots are skipped). Otherwise it returns a
+// *runtime.DockerfileRefusedError naming configured. A path that can't be resolved is refused too unless it
+// lies lexically inside a root, so a missing file outside the bound
+// can't be told apart from an existing one. The result only picks the
+// root: readDockerfile opens through it, which is what confines the
+// read if the tree changes after this check. os.OpenRoot opens the
+// root itself by path, so list the outermost root first: the
+// workspace root's path lies outside what the repository controls,
+// while a context inside the workspace could be swapped for a symlink
+// between this check and the open.
+func resolveWithin(configured, hostPath string, roots ...string) (confinedPath, error) {
+	var bounds []string
+	for _, root := range roots {
+		if root == "" {
+			continue
+		}
+		bounds = append(bounds, root)
+	}
+	if len(bounds) == 0 {
+		return confinedPath{}, &runtime.DockerfileRefusedError{Path: configured, Reason: "outside the build context, and no workspace root is set"}
+	}
+	outside := &runtime.DockerfileRefusedError{Path: configured, Reason: "resolves outside " + strings.Join(bounds, " and ")}
+
+	real, err := filepath.EvalSymlinks(hostPath)
+	if err != nil {
+		for _, root := range bounds {
+			if absRoot, aerr := filepath.Abs(root); aerr == nil {
+				if _, ok := lexicallyWithin(absRoot, hostPath); ok {
+					return confinedPath{}, fmt.Errorf("BuildImage: dockerfile %s: %w", configured, err)
+				}
+			}
+		}
+		return confinedPath{}, outside
+	}
+	for _, root := range bounds {
+		realRoot, err := filepath.EvalSymlinks(root)
+		if err != nil {
+			continue
+		}
+		if rel, ok := lexicallyWithin(realRoot, real); ok {
+			return confinedPath{Root: realRoot, Rel: rel}, nil
+		}
+	}
+	return confinedPath{}, outside
+}
+
+// readDockerfile reads at as a regular file of at most
+// maxInjectedDockerfileSize. It opens the file through an os.Root on
+// at.Root, so no symlink or ".." can carry the open outside the root,
+// even if a directory on the way is swapped for a symlink after
+// resolveWithin checked the path. The file is opened non-blocking and
+// re-checked through its descriptor, so a FIFO or device can't stall
+// the build and a file swapped after the stat isn't read.
+func readDockerfile(configured string, at confinedPath) ([]byte, error) {
+	notRegular := &runtime.DockerfileRefusedError{Path: configured, Reason: "not a regular file"}
+	tooLarge := &runtime.DockerfileRefusedError{Path: configured, Reason: fmt.Sprintf("larger than %d bytes", maxInjectedDockerfileSize)}
+	// resolveWithin just found the file inside at.Root, so failing to
+	// open it there means the tree changed, possibly to point outside
+	// (os.Root refuses that with a plain path error): refuse it.
+	wrap := func(err error) error {
+		return &runtime.DockerfileRefusedError{Path: configured, Reason: "cannot be read inside " + at.Root + ": " + err.Error()}
+	}
+
+	root, err := os.OpenRoot(at.Root)
+	if err != nil {
+		return nil, wrap(err)
+	}
+	defer func() { _ = root.Close() }()
+
+	fi, err := root.Stat(at.Rel)
+	if err != nil {
+		return nil, wrap(err)
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, notRegular
+	}
+	if fi.Size() > maxInjectedDockerfileSize {
+		return nil, tooLarge
+	}
+	f, err := root.OpenFile(at.Rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, wrap(err)
+	}
+	defer func() { _ = f.Close() }()
+	ofi, err := f.Stat()
+	if err != nil {
+		return nil, wrap(err)
+	}
+	if !ofi.Mode().IsRegular() || !os.SameFile(fi, ofi) {
+		return nil, &runtime.DockerfileRefusedError{Path: configured, Reason: "changed while being checked"}
+	}
+	body, err := io.ReadAll(io.LimitReader(f, maxInjectedDockerfileSize+1))
+	if err != nil {
+		return nil, wrap(err)
+	}
+	if len(body) > maxInjectedDockerfileSize {
+		return nil, tooLarge
+	}
+	return body, nil
 }
 
 // tarDirectory writes the contents of dir (recursively) into w as a
@@ -318,7 +478,7 @@ func tarDirectory(dir string, extra *tarFile, w io.Writer) error {
 	return err
 }
 
-// prePullBaseImages reads the Dockerfile at dockerfilePath,
+// prePullBaseImages takes the Dockerfile contents locateDockerfile read,
 // extracts its frontend image (a `# syntax=` directive or the
 // BUILDKIT_SYNTAX build arg) and FROM image references (resolving
 // simple $ARG substitutions against ARG defaults in the file and the
@@ -335,9 +495,8 @@ func tarDirectory(dir string, extra *tarFile, w io.Writer) error {
 // anonymous registry access when no session is attached, so this only
 // changes the outcome on older engines; there it is what makes public
 // images resolvable at all.
-func prePullBaseImages(ctx context.Context, r *Runtime, dockerfilePath string, buildArgs map[string]string, events chan<- runtime.BuildEvent) {
-	df, err := os.ReadFile(dockerfilePath)
-	if err != nil {
+func prePullBaseImages(ctx context.Context, r *Runtime, df []byte, buildArgs map[string]string, events chan<- runtime.BuildEvent) {
+	if df == nil {
 		return
 	}
 	refs := extractBaseImages(string(df), buildArgs)

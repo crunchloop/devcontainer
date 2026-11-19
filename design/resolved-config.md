@@ -123,7 +123,7 @@ type ImageSource struct {
 }
 
 type BuildSource struct {
-    Dockerfile string             // absolute, host-side (spec: relative to devcontainer.json's folder)
+    Dockerfile string             // absolute, host-side (spec: relative to devcontainer.json's folder); bounded, see below
     Context    string             // absolute, host-side
     Args       map[string]string
     Target     string
@@ -137,6 +137,34 @@ type ComposeSource struct {
     RunServices []string  // services to start (default: all)
 }
 ```
+
+**`BuildSource.Dockerfile` is bounded to the workspace.** It is an
+absolute host path taken from an untrusted `devcontainer.json`. When it
+lies outside `Context`, the runtime reads it from the host and appends
+it to the context tar. The daemon echoes a bad Dockerfile's first line
+in its parse error, so an unbounded path would print any host file the
+process can read into the build output. The bound:
+
+- Inside `Context`, it is sent as part of the context, as any context
+  file is. Its host copy, read only to pre-pull base images, must
+  resolve (after symlinks) inside `Context` or the workspace.
+- Outside `Context`, it is read only if it resolves, after
+  `filepath.EvalSymlinks` on both sides, to a regular file of at most
+  1 MiB inside the workspace root: `LocalWorkspaceFolder`, the folder
+  the config was discovered in. The runtime gets this root as
+  `runtime.BuildSpec.WorkspaceRoot`; when it is empty, nothing outside
+  `Context` is read.
+- `Resolve` applies the bound lexically and returns
+  `*ConfigInvalidError` for a path outside both the workspace and
+  `Context`. The runtime applies it again after resolving symlinks,
+  before any read and before any daemon call, and returns
+  `*runtime.DockerfileRefusedError`. Both errors name the configured
+  path and never the file's contents.
+- The runtime reads the file through an `os.Root` on the resolved root,
+  so a directory swapped for a symlink after the check can't carry the
+  read outside it. That root is the workspace whenever the file is in
+  it, not a context inside the workspace, whose own path the repository
+  could swap.
 
 Why interface over `Kind`+pointer-fields struct:
 - Type switches read more naturally: `switch s := cfg.Source.(type) { case *ImageSource: ... }`.

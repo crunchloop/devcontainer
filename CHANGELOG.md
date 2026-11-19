@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **build** — a `build.dockerfile` outside the build context is read
+  from the host only if it resolves, after symlinks, to a regular file
+  of at most 1 MiB inside the workspace (`LocalWorkspaceFolder`). Since
+  v0.5.5, whose `build.dockerfile` fix below (#156) added
+  outside-context Dockerfiles, an untrusted `devcontainer.json` could
+  name any file the process can read (by absolute path, `../`
+  traversal, `${localEnv:…}` or a symlink) and have it sent to the
+  daemon as the Dockerfile, whose parse error (`unknown instruction:
+  …`) echoes the file's first line into the build output.
+  - Such a path now fails before any daemon call. `Resolve` returns
+    `*config.ConfigInvalidError` when the path lies outside both the
+    workspace and the context. `BuildImage` returns
+    `*runtime.DockerfileRefusedError` when, after symlinks, the path
+    lies outside the workspace (or, for one inside the context, outside
+    both), or when an outside-context file is not a regular file or is
+    too large. Both errors name the configured path, never the file's
+    contents.
+  - The base-image pre-pull reads the Dockerfile through the same check.
+  - A Dockerfile inside the context builds as before, unless it is a
+    symlink resolving outside both the context and the workspace; that
+    now fails early instead of being left to the daemon.
+  - `runtime.BuildSpec` gains `WorkspaceRoot`. When it is empty, no
+    Dockerfile outside `ContextPath` is read. Compose service builds
+    are bounded the same way.
+
 ### Added
 
 - **features** — `devcontainer-lock.json` support, following the spec's
