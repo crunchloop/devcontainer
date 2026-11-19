@@ -424,6 +424,33 @@ func TestLocateDockerfileRefuses(t *testing.T) {
 	}
 }
 
+// A directory on the checked path swapped for a symlink to outside the
+// workspace after resolveWithin ran must not be followed by the read:
+// this is the state the swap leaves, read through the checked result.
+func TestReadDockerfileRefusesAncestorSwap(t *testing.T) {
+	f := newDockerfileFixture(t)
+	writeFile(t, filepath.Join(f.ws, "sub", "secret"), "FROM alpine\n")
+	at, err := resolveWithin("sub/secret", filepath.Join(f.ws, "sub", "secret"), f.ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(f.ws, "sub")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Dir(f.secret), filepath.Join(f.ws, "sub")); err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := readDockerfile("sub/secret", at)
+	var refused *runtime.DockerfileRefusedError
+	if !errors.As(err, &refused) {
+		t.Fatalf("err = %v, body %q; want *runtime.DockerfileRefusedError", err, body)
+	}
+	if body != nil || strings.Contains(err.Error(), fixtureSecret) {
+		t.Errorf("read through the swapped directory: body %q, err %q", body, err)
+	}
+}
+
 // A refused Dockerfile fails BuildImage before any daemon call: the
 // Runtime here has no client, so reaching the daemon would panic.
 func TestBuildImageRefusesBeforeDaemon(t *testing.T) {

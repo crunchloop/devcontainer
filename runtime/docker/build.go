@@ -236,22 +236,22 @@ func locateDockerfile(contextPath, dockerfile, workspaceRoot string) (tarName st
 		// The daemon opens it from the tar. The host copy is only
 		// read for pre-pulling, and a failure to read it is left for
 		// the daemon to report, as before; escaping the bound is not.
-		real, err := resolveWithin(dockerfile, hostPath, absCtx, workspaceRoot)
+		at, err := resolveWithin(dockerfile, hostPath, absCtx, workspaceRoot)
 		var refused *runtime.DockerfileRefusedError
 		if errors.As(err, &refused) {
 			return "", nil, nil, err
 		}
 		if err == nil {
-			body, _ = readDockerfile(dockerfile, real)
+			body, _ = readDockerfile(dockerfile, at)
 		}
 		return filepath.ToSlash(rel), body, nil, nil
 	}
 
-	real, err := resolveWithin(dockerfile, hostPath, workspaceRoot)
+	at, err := resolveWithin(dockerfile, hostPath, workspaceRoot)
 	if err != nil {
 		return "", nil, nil, err
 	}
-	body, err = readDockerfile(dockerfile, real)
+	body, err = readDockerfile(dockerfile, at)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -270,14 +270,21 @@ func lexicallyWithin(root, path string) (string, bool) {
 	return rel, true
 }
 
-// resolveWithin resolves hostPath's symlinks and returns the real
-// path if it lies inside one of roots (each also resolved; empty
-// roots are skipped). Otherwise it returns a
-// *runtime.DockerfileRefusedError naming configured. A path that
-// can't be resolved is refused too unless it lies lexically inside a
-// root, so a missing file outside the bound can't be told apart from
-// an existing one.
-func resolveWithin(configured, hostPath string, roots ...string) (string, error) {
+// confinedPath is a Dockerfile located inside a bound: Rel, relative
+// to the real (symlink-free) Root.
+type confinedPath struct {
+	Root, Rel string
+}
+
+// resolveWithin resolves hostPath's symlinks and returns where it lies
+// inside one of roots (each also resolved; empty roots are skipped).
+// Otherwise it returns a *runtime.DockerfileRefusedError naming
+// configured. A path that can't be resolved is refused too unless it
+// lies lexically inside a root, so a missing file outside the bound
+// can't be told apart from an existing one. The result only picks the
+// root: readDockerfile opens through it, which is what confines the
+// read if the tree changes after this check.
+func resolveWithin(configured, hostPath string, roots ...string) (confinedPath, error) {
 	var bounds []string
 	for _, root := range roots {
 		if root == "" {
@@ -286,7 +293,7 @@ func resolveWithin(configured, hostPath string, roots ...string) (string, error)
 		bounds = append(bounds, root)
 	}
 	if len(bounds) == 0 {
-		return "", &runtime.DockerfileRefusedError{Path: configured, Reason: "outside the build context, and no workspace root is set"}
+		return confinedPath{}, &runtime.DockerfileRefusedError{Path: configured, Reason: "outside the build context, and no workspace root is set"}
 	}
 	outside := &runtime.DockerfileRefusedError{Path: configured, Reason: "resolves outside " + strings.Join(bounds, " and ")}
 
@@ -295,36 +302,50 @@ func resolveWithin(configured, hostPath string, roots ...string) (string, error)
 		for _, root := range bounds {
 			if absRoot, aerr := filepath.Abs(root); aerr == nil {
 				if _, ok := lexicallyWithin(absRoot, hostPath); ok {
-					return "", fmt.Errorf("BuildImage: dockerfile %s: %w", configured, err)
+					return confinedPath{}, fmt.Errorf("BuildImage: dockerfile %s: %w", configured, err)
 				}
 			}
 		}
-		return "", outside
+		return confinedPath{}, outside
 	}
 	for _, root := range bounds {
 		realRoot, err := filepath.EvalSymlinks(root)
 		if err != nil {
 			continue
 		}
-		if _, ok := lexicallyWithin(realRoot, real); ok {
-			return real, nil
+		if rel, ok := lexicallyWithin(realRoot, real); ok {
+			return confinedPath{Root: realRoot, Rel: rel}, nil
 		}
 	}
-	return "", outside
+	return confinedPath{}, outside
 }
 
-// readDockerfile reads real, a path resolveWithin returned, as a
-// regular file of at most maxInjectedDockerfileSize. The file is
-// opened non-blocking and re-checked through its descriptor, so a
-// FIFO or device can't stall the build and a file swapped after the
-// check isn't read.
-func readDockerfile(configured, real string) ([]byte, error) {
+// readDockerfile reads at as a regular file of at most
+// maxInjectedDockerfileSize. It opens the file through an os.Root on
+// at.Root, so no symlink or ".." can carry the open outside the root,
+// even if a directory on the way is swapped for a symlink after
+// resolveWithin checked the path. The file is opened non-blocking and
+// re-checked through its descriptor, so a FIFO or device can't stall
+// the build and a file swapped after the stat isn't read.
+func readDockerfile(configured string, at confinedPath) ([]byte, error) {
 	notRegular := &runtime.DockerfileRefusedError{Path: configured, Reason: "not a regular file"}
 	tooLarge := &runtime.DockerfileRefusedError{Path: configured, Reason: fmt.Sprintf("larger than %d bytes", maxInjectedDockerfileSize)}
+	// resolveWithin just found the file inside at.Root, so failing to
+	// open it there means the tree changed, possibly to point outside
+	// (os.Root refuses that with a plain path error): refuse it.
+	wrap := func(err error) error {
+		return &runtime.DockerfileRefusedError{Path: configured, Reason: "cannot be read inside " + at.Root + ": " + err.Error()}
+	}
 
-	fi, err := os.Stat(real)
+	root, err := os.OpenRoot(at.Root)
 	if err != nil {
-		return nil, fmt.Errorf("BuildImage: dockerfile %s: %w", configured, err)
+		return nil, wrap(err)
+	}
+	defer func() { _ = root.Close() }()
+
+	fi, err := root.Stat(at.Rel)
+	if err != nil {
+		return nil, wrap(err)
 	}
 	if !fi.Mode().IsRegular() {
 		return nil, notRegular
@@ -332,21 +353,21 @@ func readDockerfile(configured, real string) ([]byte, error) {
 	if fi.Size() > maxInjectedDockerfileSize {
 		return nil, tooLarge
 	}
-	f, err := os.OpenFile(real, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	f, err := root.OpenFile(at.Rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, fmt.Errorf("BuildImage: dockerfile %s: %w", configured, err)
+		return nil, wrap(err)
 	}
 	defer func() { _ = f.Close() }()
 	ofi, err := f.Stat()
 	if err != nil {
-		return nil, fmt.Errorf("BuildImage: dockerfile %s: %w", configured, err)
+		return nil, wrap(err)
 	}
 	if !ofi.Mode().IsRegular() || !os.SameFile(fi, ofi) {
 		return nil, &runtime.DockerfileRefusedError{Path: configured, Reason: "changed while being checked"}
 	}
 	body, err := io.ReadAll(io.LimitReader(f, maxInjectedDockerfileSize+1))
 	if err != nil {
-		return nil, fmt.Errorf("BuildImage: dockerfile %s: %w", configured, err)
+		return nil, wrap(err)
 	}
 	if len(body) > maxInjectedDockerfileSize {
 		return nil, tooLarge

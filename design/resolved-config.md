@@ -160,6 +160,9 @@ process can read into the build output. The bound:
   before any read and before any daemon call, and returns
   `*runtime.DockerfileRefusedError`. Both errors name the configured
   path and never the file's contents.
+- The runtime reads the file through an `os.Root` on the resolved root,
+  so a directory swapped for a symlink after the check can't carry the
+  read outside it.
 
 Why interface over `Kind`+pointer-fields struct:
 - Type switches read more naturally: `switch s := cfg.Source.(type) { case *ImageSource: ... }`.
