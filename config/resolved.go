@@ -133,6 +133,9 @@ func (*ImageSource) isSource()        {}
 func (*ImageSource) Kind() SourceKind { return SourceImage }
 
 type BuildSource struct {
+	// Dockerfile is an absolute host path: the spec resolves
+	// build.dockerfile against the devcontainer.json folder, not
+	// against Context. Empty when the config leaves it unset.
 	Dockerfile string
 	Context    string
 	Args       map[string]string

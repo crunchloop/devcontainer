@@ -74,8 +74,9 @@ func TestResolveBytes_BuildSource(t *testing.T) {
 	if !ok {
 		t.Fatalf("Source = %+v", cfg.Source)
 	}
-	if bs.Dockerfile != "Dockerfile" {
-		t.Errorf("Dockerfile = %q", bs.Dockerfile)
+	// dockerfile resolves against configDir, not against context.
+	if bs.Dockerfile != "/home/u/proj/.devcontainer/Dockerfile" {
+		t.Errorf("Dockerfile = %q, want /home/u/proj/.devcontainer/Dockerfile", bs.Dockerfile)
 	}
 	// context "..", configDir "/home/u/proj/.devcontainer" → "/home/u/proj"
 	if bs.Context != "/home/u/proj" {
@@ -86,6 +87,60 @@ func TestResolveBytes_BuildSource(t *testing.T) {
 	}
 	if !reflect.DeepEqual(bs.CacheFrom, []string{"registry.example.com/cache"}) {
 		t.Errorf("CacheFrom = %+v", bs.CacheFrom)
+	}
+}
+
+func TestResolveBytes_BuildSourceDockerfilePath(t *testing.T) {
+	cases := []struct {
+		name, build, wantDockerfile, wantContext string
+	}{
+		{
+			name:           "default context",
+			build:          `{"dockerfile": "Dockerfile"}`,
+			wantDockerfile: "/home/u/proj/.devcontainer/Dockerfile",
+			wantContext:    "/home/u/proj/.devcontainer",
+		},
+		{
+			name:           "parent context, dockerfile beside config",
+			build:          `{"dockerfile": "Dockerfile", "context": ".."}`,
+			wantDockerfile: "/home/u/proj/.devcontainer/Dockerfile",
+			wantContext:    "/home/u/proj",
+		},
+		{
+			name:           "parent context, dockerfile in parent",
+			build:          `{"dockerfile": "../build/Dockerfile", "context": ".."}`,
+			wantDockerfile: "/home/u/proj/build/Dockerfile",
+			wantContext:    "/home/u/proj",
+		},
+		{
+			name:           "absolute dockerfile",
+			build:          `{"dockerfile": "/srv/images/Dockerfile", "context": ".."}`,
+			wantDockerfile: "/srv/images/Dockerfile",
+			wantContext:    "/home/u/proj",
+		},
+		{
+			// Substitution runs before resolution, so a variable that
+			// expands to an absolute path is not joined to configDir.
+			name:           "substituted absolute paths",
+			build:          `{"dockerfile": "${localWorkspaceFolder}/docker/Dockerfile", "context": "${localWorkspaceFolder}"}`,
+			wantDockerfile: "/home/u/proj/docker/Dockerfile",
+			wantContext:    "/home/u/proj",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := resolveJSON(t, `{"build": `+tc.build+`}`, ResolveInput{})
+			bs, ok := cfg.Source.(*BuildSource)
+			if !ok {
+				t.Fatalf("Source = %+v", cfg.Source)
+			}
+			if bs.Dockerfile != tc.wantDockerfile {
+				t.Errorf("Dockerfile = %q, want %q", bs.Dockerfile, tc.wantDockerfile)
+			}
+			if bs.Context != tc.wantContext {
+				t.Errorf("Context = %q, want %q", bs.Context, tc.wantContext)
+			}
+		})
 	}
 }
 

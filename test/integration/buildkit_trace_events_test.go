@@ -43,7 +43,7 @@ FROM alpine:3.20
 RUN echo %s
 `, marker))
 	mustWrite(t, filepath.Join(dir, ".devcontainer", "devcontainer.json"), `{
-		"build": { "dockerfile": "Dockerfile", "context": ".." }
+		"build": { "dockerfile": "../Dockerfile", "context": ".." }
 	}`)
 
 	evCh := make(chan events.Event, 1024)
